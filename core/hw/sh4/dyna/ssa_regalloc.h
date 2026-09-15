@@ -260,7 +260,7 @@ public:
 	virtual void Preload_FPU(u32 reg, nregf_t nreg) = 0;
 	virtual void Writeback_FPU(u32 reg, nregf_t nreg) = 0;
 
-private:
+protected:
 	struct reg_alloc {
 		u32 host_reg;
 		u16 version;

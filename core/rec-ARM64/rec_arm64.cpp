@@ -1477,12 +1477,14 @@ private:
 	template <typename R, typename... P>
 	void GenCallRuntime(R (*function)(P...))
 	{
+		regalloc.PushCallerSaved();
 		ptrdiff_t offset = reinterpret_cast<uintptr_t>(function) - reinterpret_cast<uintptr_t>(CC_RW2RX(GetBuffer()->GetStartAddress<void*>()));
 		verify(offset >= -128 * 1024 * 1024 && offset <= 128 * 1024 * 1024);
 		verify((offset & 3) == 0);
 		Label function_label;
 		BindToOffset(&function_label, offset);
 		Bl(&function_label);
+		regalloc.PopCallerSaved();
 	}
 
 	template <typename R, typename... P>
@@ -2258,6 +2260,38 @@ void Arm64RegAlloc::Preload_FPU(u32 reg, eFReg nreg)
 void Arm64RegAlloc::Writeback_FPU(u32 reg, eFReg nreg)
 {
 	assembler->Str(VRegister(nreg, 32), assembler->sh4_context_mem_operand(GetRegPtr(reg)));
+}
+
+void Arm64RegAlloc::PushCallerSaved()
+{
+	CPURegList vlist(CPURegister::kVRegister, 64, 0);
+	for (auto const& it : reg_alloced)
+	{
+		if (IsFloat(it.first))
+		{
+			eFReg hreg = (eFReg)it.second.host_reg;
+			if (hreg >= S16 && hreg <= S31)
+				vlist.Combine(VRegister::GetDRegFromCode(hreg));
+		}
+	}
+	if ((vlist.GetCount() % 2) != 0) vlist.Combine(d7);
+	if (!vlist.IsEmpty()) assembler->PushCPURegList(vlist);
+}
+
+void Arm64RegAlloc::PopCallerSaved()
+{
+	CPURegList vlist(CPURegister::kVRegister, 64, 0);
+	for (auto const& it : reg_alloced)
+	{
+		if (IsFloat(it.first))
+		{
+			eFReg hreg = (eFReg)it.second.host_reg;
+			if (hreg >= S16 && hreg <= S31)
+				vlist.Combine(VRegister::GetDRegFromCode(hreg));
+		}
+	}
+	if ((vlist.GetCount() % 2) != 0) vlist.Combine(d7);
+	if (!vlist.IsEmpty()) assembler->PopCPURegList(vlist);
 }
 
 
