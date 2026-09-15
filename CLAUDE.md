@@ -1,0 +1,81 @@
+# CLAUDE.md
+
+Este arquivo orienta o Claude Code neste repositório especificamente. Este NÃO é o
+código atual do flycast (`flyinghead/flycast`) — é o fork `metallic77/flycast`,
+commit `603814c9f73b773c455d9a497f389d2f93a257fd`, checado out na branch
+`flycast2021-metallic77-base` como um `git worktree` separado (o `.git` real é o do
+repositório `flyinghead/flycast`). Esse fork diverge do `flyinghead/flycast` em
+**2015** — são ~10 anos de evolução paralela, não uma versão "congelada em 2021"
+como o nome popular ("flycast2021") sugere.
+
+## Por que este repositório existe
+
+É o alvo de um projeto de otimização de performance rodando num handheld retro R36
+(RK3326, Cortex-A53 quad-core @ 1.5GHz, Mali-G31, OpenGL ES 3.2, sem Vulkan
+utilizável). Esse fork/build é o que roda bem no device hoje (estável, sem crash);
+o `flyinghead/flycast` atual tem um bug de crash conhecido no dynarec ARM64 nesse
+hardware (ver `docs/history.md`) e **não é o foco deste projeto** — não persiga
+consertar o master a menos que explicitamente pedido.
+
+## Documentação do projeto (leia nesta ordem)
+
+1. **`docs/profiling_plan.md`** — auditoria estática completa do código apontando
+   onde e por que instrumentar (arquivo:linha, motivo, como medir), ranqueada por
+   impacto.
+2. **`docs/tech_debits.md`** — tabela de status de cada achado do plano de
+   profiling (`não investigado` / `instrumentado` / `confirmado` / `descartado` /
+   `corrigido`). Atualizar sempre que um achado for investigado.
+3. **`docs/current_plan.md`** — o que está sendo trabalhado agora, com status
+   (`pendente` / `in progress` / `done` / `bloqueado`).
+4. **`docs/history.md`** — log cronológico com timestamp de tudo que foi feito.
+   Adicionar uma entrada por sessão/marco relevante.
+
+## Regras de ouro
+
+- **Meça antes de otimizar, sempre.** Toda hipótese levantada só de olhar código
+  (mesmo as "óbvias") precisa ser validada com medição real no device antes de
+  virar uma mudança de código. Neste projeto, hipóteses razoáveis já cairam por
+  terra na medição mais de uma vez (clock de GPU não mudou o tempo de "core";
+  algoritmo de sort é idêntico entre versões).
+- **Toda comparação de performance precisa medir a mesma cena/conteúdo.** Um teste
+  A/B só é válido se as duas rodadas passarem pelo mesmo trecho de jogo. Já
+  aconteceu de uma comparação de governor de CPU virar inválida porque uma rodada
+  pegou a intro e a outra pegou "New Game" + cutscene de neve (cena bem mais
+  pesada) — sempre confirme o que cada rodada realmente mediu antes de comparar
+  números.
+- **Testes de performance precisam de pelo menos ~90-100s de warmup** antes de
+  começar a medir, pra passar do boot/BIOS/logos e chegar em conteúdo 3D real do
+  jogo. Não tire conclusão de rodadas curtas (<30s) a menos que o objetivo seja
+  especificamente isolar a tela de boot.
+- **Build cross-compile (aarch64) tem bugs conhecidos no Makefile deste fork —
+  não confie em `CXX ?=`/`CC_AS ?=` do Makefile.** Sempre passe explicitamente na
+  linha de comando:
+  ```
+  make platform=arm64 CC_PREFIX=aarch64-linux-gnu- \
+       CXX=aarch64-linux-gnu-g++ CC=aarch64-linux-gnu-gcc \
+       CC_AS=aarch64-linux-gnu-g++ HAVE_OPENMP=0 -j2
+  ```
+  (`CXX ?= g++` na linha 922 do Makefile sobrescreve o cross-compiler pra alguns
+  arquivos silenciosamente — um `.o` compilado errado não dá erro até o link ou,
+  pior, até rodar. Depois de qualquer mudança nessas variáveis, rode `make clean`
+  antes do rebuild pra não deixar objetos da arquitetura errada parados.) Falta
+  `-lGLESv2` pro linker aarch64 local — copiar `libGLESv2.so` do device pra dentro
+  deste diretório e passar `LDFLAGS="-L."`.
+- **Não use `-j$(nproc)` nesta máquina.** É compartilhada com várias outras sessões
+  de Claude Code + Docker + Grafana/Tempo rodando ao mesmo tempo; builds grandes
+  são derrubados por um watchdog de baixa-memória do sistema (não é o build en si
+  que estoura memória). Use `-j1` ou `-j2` e simplesmente retome o `make`
+  (incremental) se for interrompido.
+- **Este fork não tem a infraestrutura de profiling do `flyinghead/flycast` atual**
+  (`core/profiler/fc_profiler.*`, `ui/`, etc. não existem aqui). Instrumentação
+  precisa ser feita com `chrono`/contadores simples direto no código, ou portando
+  um subconjunto mínimo — decisão ainda em aberto, ver `docs/current_plan.md`.
+- **Acesso ao device de teste:** SSH em `192.168.0.14` (usuário `ark`, senha
+  `ark`, via `sshpass`). Frontend de teste é o `retrorun3`
+  (`/usr/local/bin/retrorun3`), que tem um modo `--benchmark N --benchmark-warmup
+  M --benchmark-json arquivo.json` que já dá `core_average`/`video_average` por
+  frame sem precisar de instrumentação nenhuma no próprio flycast — é o primeiro
+  lugar pra olhar antes de instrumentar código.
+- **Registre todo achado novo em `docs/tech_debits.md`** com status, e toda
+  sessão de trabalho relevante em `docs/history.md` com timestamp — não deixe
+  conhecimento só na conversa.

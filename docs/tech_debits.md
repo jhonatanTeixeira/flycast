@@ -1,0 +1,92 @@
+# Débitos Técnicos — flycast2021 (fork metallic77 @ 603814c9f)
+
+> Rastreamento de status de cada achado da auditoria de performance
+> (`docs/profiling_plan.md`, 2026-09-13). Atualizar o status conforme cada item for
+> instrumentado/investigado/corrigido. Ver `docs/current_plan.md` para o que está
+> sendo trabalhado agora e `docs/history.md` para o histórico de ações.
+
+Status possíveis: `não investigado` · `instrumentado` · `confirmado` · `descartado`
+· `corrigido`
+
+| # | Item | Arquivo:linha | Severidade | Status | Observações |
+|---|------|---------------|------------|--------|-------------|
+| 1.1 | Verificação inline anti-SMC (`CheckBlock`) em todo bloco JIT executado | `core/rec-ARM64/rec_arm64.cpp:1961-2020` | ALTO→**descartado** | descartado | Teste A/B em 2026-09-13 (`block_check=false` incondicional em `driver.cpp:234`): `emuThread` e `core_average` idênticos ao baseline (26,186ms vs ~26ms) — sem efeito mensurável. Código revertido. |
+| 1.2 | `UpdateSystem()` chamado ~7.400×/frame pelo JIT | `core/rec-ARM64/rec_arm64.cpp:1339-1442` | MÉDIO | não investigado | |
+| 1.3 | `sh4_sched_ffts()` — busca linear O(n) a cada reagendamento | `core/hw/sh4/sh4_sched.cpp:42-65` | MÉDIO→**descartado** | descartado | Instrumentado e medido em 2026-09-14: `sch_list.size()≈10-11`, custo/chamada ~0-0,5us (abaixo da resolução do timer), ~3000 chamadas/s ⇒ total ~1,3ms/s de CPU — desprezível frente aos 33ms/frame. |
+| 1.4 | `bm_GetStaleBlock` — busca linear reversa em `del_blocks` | `core/hw/sh4/dyna/blockmanager.cpp:150-165` | BAIXO | não investigado | Só relevante sob SMC pesado |
+| 1.5 | MMU completo (`mmu_full_lookup`) — O(64) por acesso | `core/hw/sh4/modules/mmu.cpp:338-379` | BAIXO | não investigado | Condicional a `FullMMU` ligado |
+| 1.6 | Compilação de bloco / `recSh4_ClearCache` | `core/hw/sh4/dyna/driver.cpp:206-276` | BAIXO | **confirmado, impacto pequeno** | Instrumentado em 2026-09-14: soma total ~1,95s de compilação em ~159s de teste (~1,2% do tempo, concentrado em rajadas ao descobrir código novo, não distribuído uniformemente). `clearCacheCount` ficou em 2 durante todo o teste — sem thrashing de code cache. Contribuição real mas não dominante. |
+| — | **NOVO: throughput real do SH4 (`SH4_SPEED_RATIO`)** | `core/hw/sh4/sh4_sched.cpp` (`sh4_sched_ffts`, medição piggyback) | — | **confirmado — achado central** | Medido em 2026-09-14: ratio fica em ~0,98-1,0 em trechos calmos (SH4 rodando em tempo real quase perfeito) mas **cai pra 0,69-0,74 em trechos pesados** — ou seja, nos momentos de mais partículas/IA, o jogo genuinamente precisa executar mais instruções SH4 por segundo real do que o Cortex-A53 consegue simular. **Não é um bug pontual — é limite de throughput bruto do host durante picos de carga do próprio jogo.** Ver seção de conclusão no topo deste arquivo. |
+| 2.1 | Varredura incondicional de 64 canais AICA | `core/hw/aica/sgc_if.cpp:1356-1374` | MÉDIO→BAIXO | descartado (por composição) | Coberto pelo agregado medido em 2.3 (~1ms total AICA+ARM7/s) — não vale investigar detalhe interno sem indício de custo maior |
+| 2.2 | Fallback de interpretador ARM7 por instrução (LDM/STM) | `core/hw/arm7/arm7.cpp:1933-1967` | MÉDIO→BAIXO | descartado (por composição) | Idem — coberto pelo agregado de 2.3 |
+| 2.3 | `arm_mainloop` não separável de `libAICA_TimeStep` | `core/hw/arm7/arm7.cpp:1535-1543` | MÉDIO→**descartado** | descartado | Instrumentado e medido em 2026-09-13: `arm_mainloop=0-1us`, `libAICA_TimeStep=0us` por chamada (~44.100 chamadas/s ⇒ ~1ms total de ARM7+AICA por segundo real, distribuído entre ~30 frames). Seção 2 inteira (AICA/ARM7) descartada como causa do gargalo de ~33ms/frame da `emu_thread`. |
+| 2.4 | I/O de CD-DA dentro do loop de mixagem de áudio | `core/hw/aica/sgc_if.cpp:1385-1470` | BAIXO | não investigado | Só relevante com faixas CD-DA tocando |
+| 2.5 | DSP da AICA (efeitos) | `core/hw/aica/dsp_arm64.cpp:244-460` | BAIXO | não investigado | Off por padrão |
+| 2.6 | `FlushCache()` ARM7 — O(2M) por reset | `core/hw/arm7/arm7.cpp:2014-2019` | BAIXO | não investigado | Raro/pontual |
+| 2.7 | Fronteira `WriteSample`/`audio_batch_cb` | `core/libretro/audiostream.cpp:10-23` | BAIXO | não investigado | |
+| 3.1 | `ta_parse_vdrc()` — parsing completo da display list | `core/hw/pvr/ta_vtx.cpp:1545-1639` | ALTO | não investigado | |
+| 3.2 | `make_index()` — custo por vértice, lista `tr` domina | `core/hw/pvr/ta_vtx.cpp:1417-1495` | ALTO | não investigado | |
+| 3.3 | `fix_texture_bleeding()` recomputado do zero toda cena | `core/hw/pvr/ta_vtx.cpp:1497-1541` | MÉDIO | não investigado | Condicional a `screen_height > 480` |
+| 3.4 | `CaclulateSpritePlane()` — 2 divisões float por sprite | `core/hw/pvr/ta_vtx.cpp:1220-1267` | MÉDIO | não investigado | Escala com nº de partículas |
+| 3.5 | `GetTexture()` disparado por polígono/sprite | `core/hw/pvr/ta_vtx.cpp:712,780,1174` | MÉDIO | não investigado | Contadores hit/miss já existem, só falta logar |
+| 3.6 | Pool exhaustion de `TA_context` → aloc. ~15MB sob backlog | `core/hw/pvr/ta_ctx.cpp:209-244` | ALTO→**descartado** | descartado | Instrumentado e medido em 2026-09-13/14: só 2 alocações `new` nas primeiras 60 chamadas (aquecimento), depois **zero** novas alocações em toda a janela de 90s medida (100% servido pelo pool de 2). Pool nunca esgota nesta cena — sem loop de retroalimentação negativa aqui. |
+| 3.7 | Sincronização emu↔render (`rs.Wait`/`re.Wait`) | `core/hw/pvr/Renderer_if.cpp:181-233,304` | BAIXO | confirmado | Medido em 2026-09-13: `rsWait` domina o "core time" externo em trechos calmos (~24-28ms de ~26-30ms), mas é só espera pela `emu_thread`, não trabalho — ver achado arquitetural no topo deste arquivo |
+| 3.8 | Buscas lineares em `ctx_list`/`spg_line_sched` | `core/hw/pvr/ta_ctx.cpp:246-283`, `core/hw/pvr/spg.cpp:64-170` | BAIXO | não investigado | Custo fixo, não escala com geometria |
+| 4.1 | `GenSorted()` — sort por triângulo + alocação oculta no `stable_sort` | `core/rend/sorter.cpp:205-366` | ALTO→N/A | **não aplicável neste device** | Instrumentado em 2026-09-13, mas **nunca disparou** — `config::PerStripSorting`/`AlphaSortMode` está configurado pra per-strip (`SortPParams`, item 4.2), não per-triângulo (`GenSorted`/`DrawSorted`). Item permanece válido apenas se alguém mudar a config de sorting; sem ação necessária agora. |
+| 4.2 | Overhead de `glDrawElements` × contagem de draw calls (não `SetGPState` em si) | `core/rend/gles/gldraw.cpp:281-297` (`DrawList`), path real é `SortPParams`+`DrawList<Translucent,true>` (per-strip), **não** `GenSorted`/`DrawSorted` (per-triângulo, nunca ativo neste device) | ALTO | **corrigido (batching implementado e validado visualmente)** | Medição de 2026-09-13 no pico (`render=25587us`): `SortPParams`≈0,33ms (622 PolyParams/chamada, irrelevante), `SetGPState`≈2us/chamada×622≈1,2ms (irrelevante), **`glDrawElements`≈24us/chamada×622≈15ms — domina, ~60% do `render` total**. Causa raiz é overhead de submissão por draw call no driver Mali r13p0, multiplicado por ~500-600 strips/frame, não lógica de CPU. **Candidato nº1 de otimização real: reduzir contagem de draw calls (batching), não mexer em `SetGPState`.** **⚠️ RISCO CONHECIDO (relatado pelo usuário 2026-09-14):** o Gemini já mexeu em código próximo a `glDrawElements`/submissão de draw calls numa tentativa anterior — ganhou velocidade, mas **quebrou a renderização dos personagens no Shenmue** (regressão visual, não só de performance). Qualquer tentativa de batching aqui precisa ser validada visualmente (personagens renderizando corretamente), não só por benchmark de FPS — fácil de otimizar a métrica errada e entregar um jogo mais rápido e visualmente quebrado. (Nota: há também um caso relacionado já revertido em `docs/history.md` 2026-09-14 sobre cache de estado em `gles.h`/`gles.cpp`/`glcache.h` que quebrou personagens e foi revertido — pode ou não ser o mesmo episódio.) **2026-09-14, CORRIGIDO:** implementado batching via GLES3 primitive restart em `DrawList` (agrupa strips consecutivas com mesmo estado de GPU num só `glDrawElements`, gate `gl.is_gles && gl.gl_major>=3`). **Validado visualmente pelo usuário assistindo o Shenmue rodar ao vivo no device: ganho real de performance, sem quebra de renderização** (o risco acima não se repetiu). Benchmark oficial (90s warmup+90s, boot real) vs. baseline original: `core_average` 26,10→24,27ms (-7,0%), `video_average` 11,11→10,445ms (-6,0%), fps 26,87→28,79 (+7,1%). Contribuição isolada do batching (separada do regalloc, item 4.9) não está 100% isolada por não-determinismo do boot real (sem savestate do Shenmue) — ver `docs/history.md` pra tabela e ressalvas completas. |
+| 4.3 | `std::map` (árvore) em `TexParameteri` | `core/rend/gles/glcache.h:186-215` | MÉDIO | não investigado | Amplificado pelo item 4.2. Uma tentativa de converter pra state cache quebrou a renderização de personagens e foi revertida. |
+| 4.4 | Refresh de uniforms de todos os shaders da sessão, todo frame | `core/rend/gles/gles.cpp:868-879` | MÉDIO→**descartado** | descartado | Instrumentado e medido em 2026-09-14: custo cresce de 11us (2 shaders) até 50-60us (9 shaders) ao longo da sessão — mesmo no pico, irrisório frente aos 25ms de `render` em cena pesada. |
+| 4.5 | `vidx_sort` não-`static` — malloc/free por frame | `core/rend/gles/gldraw.cpp` (`SortTriangles`) | MÉDIO | não investigado | Teste A/B simples: tornar `static` |
+| 4.6 | `TexCache::CollectCleanup` varre o cache inteiro todo frame | `core/rend/TexCache.h:787-807` | MÉDIO→**descartado** | descartado | Instrumentado e medido em 2026-09-14: custo cresce de 1us (cache com 5 texturas) até 20us (cache com 41) ao longo da sessão — mesmo no pico, irrisório frente aos 33ms/frame. |
+| 4.7 | Conversão de textura por-texel / `PrintTextureName` | `core/rend/TexCache.cpp:527-730,381-402` | BAIXO | não investigado | Conversão é esperada; log é desperdício menor |
+| 4.8 | Upload de VBO/IBO completo todo frame (orphaning) | `core/rend/gles/gles.cpp:941-956` | BAIXO | não investigado | Design esperado, custo cresce com vértices |
+| 4.9 | JIT arm64 regalloc só usa 8 int e 8 float físicos (spill pesado) | `core/rec-ARM64/arm64_regalloc.h`, `rec_arm64.cpp` | ALTO→**regressão em 2D confirmada por A/B real** | confirmado | Descoberto em 2026-09-14: O JIT só mapeava 8 registradores FPU (`S8-S15`). Alterado para mapear os "caller-saved" (`S16-S31`) com stack explícita (`PushCPURegList`/`PopCPURegList` em `PushCallerSaved`/`PopCallerSaved`, chamado de dentro de `GenCallRuntime`) no runtime call, subindo de 8 para 24. A tentativa com registradores inteiros (`W9-W15`) causou crash por serem usados hardcoded como *scratch* pelo próprio emulador no `rec_arm64.cpp` — só os inteiros foram revertidos, os 16 floats extras (`S16-S31`) seguem ativos. **Benchmark em Shenmue (3D, `retrorun3 --benchmark`): +5,5% FPS (28,35 vs 26,87), core_average 25,47ms vs 26,10ms, video_average 9,78ms vs 11,11ms — ganho real e medido.** **2026-09-14 (sessão seguinte), relato do usuário jogando MBAA (2D, interativo, SEM benchmark formal ainda): jogos 2D ficaram *mais lentos* com essa mudança; 3D só "um pouco melhor".** **2026-09-14, confirmado por A/B real** (mesmo savestate/duração, trocando só o `.so`, `flycast2021_libretro.so` puro no device — que sobrou intocado — vs. o `flycast_libretro.so` do Gemini, em `kofnw`/KOF Neowave como proxy de 2D já que MBAA não tinha savestate pronto): 1ª medição (binário do Gemini ainda com a instrumentação `chrono` desta sessão presente, ver achado abaixo) deu `core_average` 11,730ms (puro) → 12,674ms (Gemini), +8,0%; `core_frames` 1512 → 1437, -5,0%. **Corrigido em seguida** (removida a instrumentação `chrono`/`perfinstr_*` dos 8 arquivos que a continham — só ruído de medição, nenhuma delas é o regalloc — e refeito o rebuild+deploy+teste do zero, `make clean` incluído por causa de um `.o` de `TexCache.h` que ficou desatualizado num rebuild incremental): **número real, limpo, sem confound: `core_average` 11,730ms → 12,106ms (+3,2%); `core_frames` 1512 → 1475 (-2,4%); `video_average` 8,108 → 8,217ms (~ruído)**. Ou seja, quase metade da regressão aparente era a própria instrumentação de profiling que a sessão vinha deixando no código — a regressão real do regalloc em 2D existe mas é menor do que parecia (~3% de `core_average`, não ~8%). Ver `docs/history.md` pras duas tabelas completas (antes/depois da limpeza). **Hipótese arquitetural confirmada como causa provável (ainda não isolada por instrumentação direta de `GenCallRuntime`, mas consistente com o padrão medido):** `PushCallerSaved`/`PopCallerSaved` rodam em TODO `GenCallRuntime`, inclusive `UpdateSystem` (`rec_arm64.cpp:1431`, já medido como ~7.400 chamadas/frame no item 1.2) e os slow-paths de `ReadMem*`/`WriteMem*` (linhas 1100-1166) — ou seja, o custo de push/pop de pares de D-regs é pago em TODO bloco SH4 executado, não só nos que se beneficiam de mais registradores. Jogos 2D como MBAA tendem a ter blocos SH4 menores/mais numerosos (mais branches de lógica de jogo, menos aritmética de transformação 3D por bloco) e mais tráfego de I/O mapeado em memória (paleta, VRAM, registradores do PVR por sprite) — ou seja, pagam a taxa de push/pop com a mesma frequência (ou mais) que o 3D, mas sem o benefício de menos spill (blocos curtos raramente precisavam de mais de 8 regs mesmo antes). Precisa de instrumentação (contagem de `GenCallRuntime`/frame e nº médio de regs empurrados) pra confirmar antes de agir. |
+| — | Descartado: hash de textura por frame | `core/rend/TexCache.cpp` (`ComputeHash`) | — | descartado | Só roda com `DumpTextures`/`CustomTextures` ativos |
+| — | Descartado: `glCheck()`/`glGetError` no hot path | `core/rend/gles/gles.h:38` | — | descartado | Macro vazia em release |
+| — | Descartado: post-processing | `core/rend/gles/postprocess.cpp` | — | descartado | Desabilitado neste fork |
+
+## Achado arquitetural — RESOLVIDO em 2026-09-13
+
+**Qual thread satura o core a 100%: `emu_thread` (SH4/AICA/ARM7) ou a thread que
+chama `retro_run()` (TA parsing + sort + submissão GL)?**
+
+Resposta medida (instrumentação em `core/hw/pvr/Renderer_if.cpp`, ver
+`docs/current_plan.md` item 1 e `docs/history.md`): **a `emu_thread` domina**. Em
+trechos calmos, `emuThread≈33ms/frame` vs. `process+render<1ms/frame` — a
+simulação de CPU sozinha já consome quase todo o orçamento de 30fps. Em trechos
+pesados (partículas), `render` cresce 10-25x (confirma a cascata do item 4.2) mas
+`emuThread` continua sendo a maior fatia em termos absolutos.
+
+**Impacto na priorização:** os itens ALTO da seção 1 (§1.1 `CheckBlock` anti-SMC) e
+os itens da seção 2 (AICA/ARM7) sobem de prioridade — são os candidatos mais
+diretos pra explicar por que a `emu_thread` já está no limite mesmo em cenas
+calmas. Os itens da seção 3-4 continuam relevantes como explicação do
+**agravamento** em cenas pesadas, mas não são mais o suspeito nº1 do baseline.
+
+## Conclusão final da investigação candidato-a-candidato (2026-09-14)
+
+Depois de testar TODOS os 8 itens da fila (`docs/current_plan.md`) e mais um
+achado novo (throughput real do SH4), o quadro completo é:
+
+1. **CheckBlock anti-SMC, AICA/ARM7, TA_context pool, sh4_sched_ffts, TexCache
+   cleanup, shader uniform loop, GenSorted** — todos descartados por medição
+   direta. Nenhum contribui de forma relevante.
+2. **Compilação de bloco JIT** — contribui ~1,2% do tempo total, real mas não
+   dominante.
+3. **`glDrawElements` × contagem de draw calls** (item 4.2) — confirmado e
+   quantificado: ~15ms dos ~25ms de `render` em cena pesada. **Único vilão de
+   código/arquitetura confirmado.**
+4. **Throughput real do SH4 (`SH4_SPEED_RATIO`)** — em trechos calmos fica em
+   ~1,0 (tempo real, correto); em trechos pesados **cai pra 0,69-0,74**. Isso
+   não é um bug — é o jogo genuinamente precisando de mais instruções SH4 por
+   segundo do que o Cortex-A53 consegue simular quando a cena fica complexa
+   (mais partículas, mais IA, mais física).
+
+**Conclusão prática:** a lenteza em cena pesada tem DUAS causas reais e
+independentes, ambas confirmadas por medição — não uma "bala de prata" única:
+- **Lado de renderização:** overhead de `glDrawElements` por causa de contagem
+  alta de draw calls (~500-600/frame) → **fixável via batching**.
+- **Lado de CPU:** o próprio SH4 (via JIT) não consegue simular a lógica do
+  jogo em tempo real quando a cena fica pesada → só melhora com **qualidade do
+  código gerado pelo JIT** (menos instruções ARM64 por opcode SH4 traduzido),
+  não há "bug" pontual pra caçar aqui.
