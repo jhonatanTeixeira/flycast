@@ -1157,3 +1157,70 @@ decidir atacar.
   muitos sprites (Metal Slug 6 é 2D denso, muitos personagens/tiros na
   tela) — não memória. Ver item 1.7 em `tech_debits.md` pra números
   completos e item 1 em `current_plan.md` pro resumo de status.
+
+## 2026-09-15 (sessão seguinte) — Metal Slug 6 pós-fix: a função mais cara não é memória nem renderização, é o trampolim de interrupção/ciclo
+
+- Usuário deu contexto importante: Metal Slug (1-6) também roda mal no MAME
+  nesse device (MAME é emulação 100% CPU, e só peca nesses jogos raros que
+  têm "algo a mais que sprites 2D" — a cena do savestate é justamente um
+  "monstro gigante mecânico feito de muitas partículas diferenciadas");
+  já os mesmos jogos rodam bem no FBNeo. Pediu pra usar o savestate do MS6
+  pra medir qual é a função mais cara AGORA, tendo fé que a Store Queue
+  (item 1.7) foi superada.
+- **Descoberta de metodologia (efeito colateral útil):** um teste isolado
+  logo após uma sequência de ~10 rodadas de benchmark consecutivas sem
+  pausa mediu `core_average` quase 2x pior (39,7ms vs ~21ms de baseline) —
+  levantou hipótese de throttling térmico. Um recheck após ~90s de idle
+  voltou exatamente pro número normal (21,376ms), confirmando que é preciso
+  dar um respiro entre rodadas pesadas consecutivas ou o número de uma
+  única rodada isolada pode enganar — reforça a regra de ouro "repetir
+  antes de confiar" já em uso nesta sessão, agora aplicada também ao
+  espaçamento entre rodadas, não só à repetição em si.
+- **Profiling:** `perf record -g --call-graph dwarf -F 999` anexado a uma
+  instância rodando o savestate (protocolo já validado: warmup 15s +
+  benchmark 60s, que mantém a cena pesada do início ao fim — um teste
+  exploratório com warmup 10s/benchmark 90s diluiu demais, pegando o fim
+  da luta que aparentemente acaba por volta de t≈70s pós-load, o que por
+  si só é uma lição de design de protocolo: durações mais longas não são
+  "mais corretas", podem só diluir a cena que se quer medir). 2 capturas
+  independentes (~24k e ~37k amostras) concordaram: uma única instrução
+  domina ~10-20% de TODAS as amostras.
+- **Achado técnico sobre a própria ferramenta:** o endereço de amostra
+  relatado por `perf script`/`perf report` para essa região JIT veio
+  consistentemente com os 2 bits baixos errados (`endereço % 4 == 3`,
+  impossível pra um PC real de ARM64). Sem perceber isso, uma primeira
+  tentativa de desmontar o endereço "cru" via gdb gerou uma cadeia de
+  `.inst ... undefined` e um `bl` aparentemente apontando pra dentro da
+  reserva gigante `PROT_NONE` de 4GB do nvmem — pareceria um achado grave
+  (chamando memória não mapeada) mas era só artefato de desalinhamento.
+  Corrigido subtraindo 3 do endereço reportado antes de desmontar; a partir
+  daí toda desmontagem bateu limpa, sem instrução inválida nenhuma.
+- **Achado real, confirmado via gdb ao vivo** (endereço resolvido, `bl`
+  mostrando o símbolo real): a instrução mais quente é `bl SH4_TCB+3072` —
+  uma chamada embutida no final de blocos SH4 compilados (quando o
+  contador de ciclos local do bloco, `w27`, estoura) pro trampolim
+  `intc_sched` (`core/rec-ARM64/rec_arm64.cpp:1417-1449`, dentro de
+  `generate_mainloop()`, código já existente, não escrito nesta sessão) —
+  que chama `UpdateSystem()` e condicionalmente `rdv_DoInterrupts()`.
+- **Isso CONFIRMA, com medição de profiling real, a hipótese arquitetural
+  que o item 4.9 já tinha levantado mas não conseguido isolar:**
+  `PushCallerSaved`/`PopCallerSaved` (hoje varrendo até 24 registradores
+  FPU, não mais 8, por causa da extensão de regalloc do item 4.9) rodam em
+  TODA chamada a `UpdateSystem`, e essa chamada acontece a cada vez que o
+  orçamento de 448 ciclos SH4 (`SH4_TIMESLICE`, compartilhado entre TODOS
+  os backends — x86/ARM32/ARM64 — não é algo desta sessão) de QUALQUER
+  bloco se esgota. Numa cena com muitos objetos/partículas cada um com seu
+  próprio código curto rodando em sequência, esse checkpoint é atravessado
+  com muito mais frequência que numa cena calma.
+- **Não é memória (item 1.7, já corrigido) nem renderização/draw-calls**
+  (hipótese do post anterior, não confirmada por este profiling — a
+  suposição de que a cauda pesada seria dominada por draw calls não se
+  sustentou; o profiling aponta claramente pra despacho/agendamento de
+  bloco).
+- **Não corrigido ainda.** `SH4_TIMESLICE` não é candidato de baixo risco
+  (mexer nele troca overhead por precisão de timing de interrupção pra
+  TODOS os jogos). O candidato natural e já catalogado é o item 2 do
+  `docs/arm64jit_improvement_plan.md` — reduzir o custo por chamada de
+  `PushCallerSaved`/`PopCallerSaved` em vez de reduzir a frequência de
+  chamada — mas não implementado ainda, aguardando decisão do usuário.
+  Ver item 4.10 em `docs/tech_debits.md` pro registro completo.
