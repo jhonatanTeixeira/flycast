@@ -214,6 +214,7 @@ static void context_segfault(host_context_t* reictx, void* segfault_ctx, bool to
 #elif HOST_CPU == CPU_ARM64
 	bicopy(reictx->pc, MCTX(.pc), to_segfault);
 	bicopy(reictx->x2, MCTX(.regs[2]), to_segfault);
+	bicopy(reictx->x0, MCTX(.regs[0]), to_segfault);
 #elif HOST_CPU == CPU_X86
 #ifdef __linux__
    bicopy(reictx->pc, MCTX(.gregs[REG_EIP]), to_segfault);
@@ -346,7 +347,7 @@ static void signal_handler(int sn, siginfo_t * si, void *segfault_ctx)
 		context_to_segfault(&ctx, segfault_ctx);
 	}
 #elif HOST_CPU == CPU_ARM64
-	else if (dyna_cde && ngen_Rewrite(ctx.pc, 0, 0))
+	else if (dyna_cde && ngen_Rewrite(ctx.pc, 0, ctx.x0))
 	{
 		context_to_segfault(&ctx, segfault_ctx);
 	}

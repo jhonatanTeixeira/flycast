@@ -67,6 +67,12 @@ static u32 cycle_counter;
 static void (*mainloop)(void *context);
 static int (*arm64_intc_sched)();
 static void (*arm64_no_update)();
+// Shared, generated-once stub used by ngen_Rewrite() to special-case SH4
+// Store Queue writes (addr>>26==0x38) without adding any check to the common
+// fastmem path -- see docs/arm64jit_improvement_plan.md item 1 and
+// docs/tech_debits.md item 1.7. Same lifecycle as `mainloop`: regenerated
+// alongside it (generate_mainloop()), reset to null in ngen_ResetBlocks().
+static void *sq_write_stub;
 
 static bool restarting;
 
@@ -91,6 +97,7 @@ void ngen_init()
 void ngen_ResetBlocks()
 {
 	mainloop = NULL;
+	sq_write_stub = nullptr;
 	if (mmu_enabled())
 		ngen_FailedToFindBlock = &ngen_FailedToFindBlock_mmu;
 	else
@@ -1469,6 +1476,75 @@ public:
 			GetBuffer()->GetStartAddress<void*>(), GetBuffer()->GetEndAddress<void*>());
 	}
 
+	// Shared, generated-once stub(s) for special-casing memory accesses that
+	// ngen_Rewrite() only discovers are "not RAM" at runtime (fastmem fault).
+	// See docs/arm64jit_improvement_plan.md item 1: unlike inlining a check at
+	// every write site (tried and reverted, docs/tech_debits.md item 1.7 --
+	// regressed ~6% because it taxed every 32-bit write, not just the rare
+	// hot ones), ngen_Rewrite() only ever looks at a call site AFTER it has
+	// actually faulted, so redirecting that one site to a specialized stub
+	// costs nothing for the ~all other writes that never fault.
+	void GenMemStubs()
+	{
+		// Store Queue direct-write stub (32-bit only -- real hardware only
+		// supports 32-bit SQ stores, see core/hw/sh4/sh4_mmr.cpp comment).
+		// Called with the guest address in w0 and the data in w1, exactly the
+		// registers GenWriteMemoryFast() already receives them in -- no extra
+		// argument marshaling needed at the call site.
+		sq_write_stub = CC_RW2RX(GetCursorAddress<uintptr_t>());
+
+		Label not_sq;
+		Lsr(w9, w0, 26);
+		Cmp(w9, 0x38);
+		B(&not_sq, ne);
+		And(w9, w0, 0x3f);
+		Sub(x10, x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, sq_buffer));
+		Str(w1, MemOperand(x10, x9));
+		Ret();
+
+		Bind(&not_sq);
+		// Mismatch -- expected to be rare to never (would need the exact same
+		// compiled call site to compute a Store Queue address on one execution
+		// and a different, non-SQ address on another), but re-verified rather
+		// than assumed: silently trusting the caller here would risk corrupting
+		// memory if it ever happened. This stub isn't compiled as part of any
+		// block, so it has no per-call-site liveness info to do a targeted
+		// PushCallerSaved() with -- conservatively save every caller-saved
+		// float register instead (this path is not the hot one; the SQ match
+		// above is).
+		CPURegList allCallerSaved(CPURegister::kVRegister, 64, 16, 31);
+		PushCPURegList(allCallerSaved);
+		GenCallRuntime(WriteMem32);
+		PopCPURegList(allCallerSaved);
+		Ret();
+
+		FinalizeCode();
+		emit_Skip(GetBuffer()->GetSizeInBytes());
+
+		vmem_platform_flush_cache(
+			CC_RW2RX(GetBuffer()->GetStartAddress<void*>()), CC_RW2RX(GetBuffer()->GetEndAddress<void*>()),
+			GetBuffer()->GetStartAddress<void*>(), GetBuffer()->GetEndAddress<void*>());
+	}
+
+	// Like GenCallRuntime(), but for a raw code address (e.g. a generated stub,
+	// not a typed C++ function pointer) and without PushCallerSaved()/
+	// PopCallerSaved() -- used by ngen_Rewrite() to redirect a specific
+	// write call-site to sq_write_stub. Public: called from the free function
+	// ngen_Rewrite(), not just from within this class. Pads with Nop() out to
+	// write_memory_rewrite_size itself (same fixed-size reserved slot
+	// GenWriteMemorySlow() pads to), since EnsureCodeSize() is private.
+	void GenCallStubAddr(void *target)
+	{
+		Instruction *start_instruction = GetCursorAddress<Instruction *>();
+		ptrdiff_t offset = reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(CC_RW2RX(GetBuffer()->GetStartAddress<void*>()));
+		verify(offset >= -128 * 1024 * 1024 && offset <= 128 * 1024 * 1024);
+		verify((offset & 3) == 0);
+		Label function_label;
+		BindToOffset(&function_label, offset);
+		Bl(&function_label);
+		EnsureCodeSize(start_instruction, write_memory_rewrite_size);
+	}
+
 
 private:
 	// Runtime branches/calls need to be adjusted if rx space is different to rw space.
@@ -2175,7 +2251,7 @@ static const u32 op_sizes[] = {
 		4,
 		8,
 };
-bool ngen_Rewrite(unat& host_pc, unat, unat)
+bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 {
 	//LOGI("ngen_Rewrite pc %zx\n", host_pc);
 	u32 *code_ptr = (u32 *)CC_RX2RW(host_pc);
@@ -2199,7 +2275,17 @@ bool ngen_Rewrite(unat& host_pc, unat, unat)
 	// Skip the preceding ops (add, ubfx)
 	u32 *code_rewrite = code_ptr - 1 - (!_nvmem_4gb_space() ? 1 : 0);
 	Arm64Assembler *assembler = new Arm64Assembler(code_rewrite);
-	if (is_read)
+	// Store Queue fast path (docs/arm64jit_improvement_plan.md item 1,
+	// docs/tech_debits.md item 1.7): this call site's fastmem attempt just
+	// faulted -- if the address it faulted on is a Store Queue address
+	// (0xE0000000-0xE3FFFFFF, addr>>26==0x38), redirect THIS ONE call site to
+	// the shared sq_write_stub instead of the generic slow path. No other
+	// 32-bit write anywhere else in the game is touched by this check: it
+	// only ever runs here, once, after an actual fault -- not on every write
+	// like the earlier (reverted) attempt at this same optimization.
+	if (!is_read && size == 4 && sq_write_stub != nullptr && ((u32)acc >> 26) == 0x38)
+		assembler->GenCallStubAddr(sq_write_stub);
+	else if (is_read)
 		assembler->GenReadMemorySlow(size);
 	else
 		assembler->GenWriteMemorySlow(size);
@@ -2217,6 +2303,16 @@ static void generate_mainloop()
 	compiler = new Arm64Assembler();
 
 	compiler->GenMainloop();
+
+	delete compiler;
+	compiler = nullptr;
+
+	// Separate assembler instance/Finalize cycle on purpose -- GenMainloop()
+	// already did its own FinalizeCode()+emit_Skip() pass; reusing the same
+	// instance here would double-count the cursor advance.
+	compiler = new Arm64Assembler();
+
+	compiler->GenMemStubs();
 
 	delete compiler;
 	compiler = nullptr;

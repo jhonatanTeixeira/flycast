@@ -205,7 +205,7 @@ são confiáveis. Ver `docs/history.md` pra tabela comparativa completa.
 continua dominando (~40-51% self-time) mesmo em combate ativo, não só idle —
 ver item 1 abaixo, que foi REORDENADO pra topo da fila por causa disso.
 
-### 1. `SH4_TCB` dominante — DIAGNOSTICADO (não é idle-loop), fix tentado e REVERTIDO
+### 1. `SH4_TCB` dominante — DIAGNOSTICADO, fix v1 REVERTIDO, fix v2 CORRIGIDO (ganho pequeno)
 **Concluído (2026-09-14):** não é busy-wait/idle. Via `perf`+gdb ao vivo
 (dump de `/proc/pid/mem` + desmontagem + breakpoint lendo endereço/dado
 reais), confirmado que o que domina é enchimento de Store Queue —
@@ -215,16 +215,29 @@ o equivalente a um store num buffer fixo. Confirmado com `cycles` vs
 `instructions` sampling que é trabalho real (fica MAIS dominante em
 instructions, não menos — não é stall). Ver item 1.7 em `tech_debits.md`.
 
-**Fix tentado:** checagem inline em `GenWriteMemoryFast` (detecta endereço
-de SQ, grava direto, pula a chamada). **Resultado: piorou ~6%
-(`core_average` 12,07→12,76-12,84ms), revertido.** A checagem roda em todo
-write de 32 bits (não só SQ), e o volume de writes comuns supera o
-benefício nos poucos-mas-quentes writes de SQ. Uma abordagem via
-`ngen_Rewrite` (só afeta call sites que já precisaram de rewrite, sem
-custo no caminho comum) é mais promissora mas exige mexer em signal
-handler/code-patching — mais arriscado, não tentado ainda. **Item fechado
-por ora** — sem uma correção segura em mãos, não vale reabrir sem tempo
-dedicado.
+**Fix v1 (2026-09-14, revertido):** checagem inline em `GenWriteMemoryFast`
+(detecta endereço de SQ, grava direto, pula a chamada). Piorou ~6%
+(`core_average` 12,07→12,76-12,84ms) porque a checagem roda em todo write
+de 32 bits, não só SQ — revertido.
+
+**Fix v2 (2026-09-15, aplicado):** inspirado no backend x86 (stubs
+compartilhados gerados uma vez + patch só do call target, ver
+`docs/x86jit.md`/`docs/arm64jit_improvement_plan.md` item 1). Só mexe em
+`ngen_Rewrite` (roda uma vez por call site, só após fault real) — detecta
+fault de SQ pelo endereço real (`host_context_t::x0`/`ctx.x0`, novo) e
+redireciona aquele call site pra um stub compartilhado (`sq_write_stub`,
+`GenMemStubs()`). `GenWriteMemoryFast` fica intocado — zero custo no
+caminho comum. **Medido (`retrorun3 --benchmark 60 --benchmark-warmup 15`,
+2 rodadas/lado, mesmo savestate, só trocando `.so`):** kofnw `core_average`
+-2,0% (11,40→11,17ms), Metal Slug 6 `core_average` -1,4% (21,30→21,00ms),
+`core_frames`/60s +0,8~1,0% nos dois. Ganho real e reprodutível (mesma
+direção nas 2 rodadas), sem crash, sem regressão. **Mas pequeno, e
+concentrado no p50 — a cauda pesada (p95/p99) não melhora
+proporcionalmente**, então isso NÃO explica o gap grande que o usuário
+reportou em Metal Slug 6 vs PPSSPP na mesma cena (10-15fps vs liso).
+Deployado no device como binário ativo. Ver item 1.7 em `tech_debits.md`
+pra números completos. **Próximo suspeito pra explicar a cauda pesada:
+renderização/draw calls em cenas com muitos sprites, não memória.**
 
 ### 2. Batching de draw calls (item 4.2, tech_debits.md) — maior impacto confirmado do lado de render
 `glDrawElements` custa ~15ms dos ~25ms de `render` em cena pesada do Shenmue

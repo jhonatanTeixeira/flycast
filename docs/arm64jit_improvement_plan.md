@@ -23,7 +23,7 @@
 
 | # | Item | Endereça achado | Esforço | Risco | Prioridade |
 |---|------|------------------|---------|-------|------------|
-| 1 | Stubs de memória compartilhados + rewrite por ponteiro de chamada | Item 1.7 (Store Queue, achado central da sessão) + item 4.9 (custo de `GenCallRuntime`) | Alto | Médio (mitigado por padrão já comprovado no x86) | **Máxima** |
+| 1 | Stubs de memória compartilhados + rewrite por ponteiro de chamada | Item 1.7 (Store Queue, achado central da sessão) + item 4.9 (custo de `GenCallRuntime`) | Alto | Médio (mitigado por padrão já comprovado no x86) | **✅ Feito (2026-09-15, escopo reduzido) — ganho real mas pequeno, ver nota no item abaixo** |
 | 2 | `PushCallerSaved`/`PopCallerSaved` sem varrer `reg_alloced` inteiro | Item 4.9 (custo pago em ~7.400 chamadas/frame mesmo quando não há nada a salvar) | Baixo | Baixo | Alta |
 | 3 | Cache inline de 1 entrada pra saltos dinâmicos, antes do lookup em `fpcb` | Nenhum item específico — hipótese nova baseada em técnica comprovada no x86 | Médio | Médio (depende de característica do Cortex-A53 não medida ainda) | Média |
 | 4 | Compilação em duas camadas ("staging") | Item 1.6 (compilação de bloco, já **descartado como dominante**, ~1,2% do tempo) | Alto | Baixo retorno esperado | Baixa — não recomendado priorizar |
@@ -32,6 +32,27 @@
 ---
 
 ## Item 1 — Stubs de memória compartilhados (a técnica que resolveria o item 1.7 de verdade)
+
+> **Status (2026-09-15): implementado e medido — ver `docs/tech_debits.md`
+> item 1.7 e `docs/history.md` 2026-09-15 pros números completos.**
+> A versão que foi de fato implementada é **mais estreita** do que a proposta
+> original abaixo (passos 1-4): em vez de trocar o corpo de
+> `GenWriteMemoryFast`/`GenReadMemoryFast` pra chamar um stub `mem_stub_fast`
+> (o que teria custo — 1 `Bl` a mais — em TODO acesso de memória, inclusive o
+> caso comum), só `ngen_Rewrite` foi alterado: continua regenerando
+> `GenWriteMemorySlow` in-place no caso genérico (como já fazia), mas quando o
+> fault é de Store Queue (`acc>>26==0x38`) chama um novo `GenCallStubAddr()`
+> que aponta pro stub compartilhado `sq_write_stub` (gerado uma vez em
+> `GenMemStubs()`). O caminho comum (`GenWriteMemoryFast` inline) fica 100%
+> intocado — nem o "1 instrução a mais" do plano original foi pago. Isso evita
+> de vez o trade-off não-medido da seção "Trade-off a medir" abaixo (o custo
+> do stub genérico no caso comum), ao preço de resolver só o caso de Store
+> Queue especificamente, não o caso genérico read/write — que continua
+> reescrito in-place como sempre foi. **Resultado medido: ganho real e
+> reprodutível (~1-3% em `core_average`, até ~6-8% em `core_p50`/frame
+> típico) em kofnw e Metal Slug 6, sem regressão — mas pequeno, e não explica
+> o gap grande relatado pelo usuário em Metal Slug 6 (cauda pesada/p95-p99
+> quase não muda — suspeita agora é renderização, não memória).**
 
 ### O problema medido (recapitulando item 1.7)
 

@@ -1060,3 +1060,100 @@ decidir atacar.
   fazendo o cross-compile do master com debug symbols (aceitando o custo)
   seja continuando a leitura manual de diff nos arquivos-chave
   (`rec_arm64.cpp`, `driver.cpp` — ainda não lidos).
+
+## 2026-09-14 (sessão seguinte) — Documentação completa dos backends JIT x86 e ARM64 + plano de melhoria
+
+- Usuário perguntou se o JIT x86 (`core/rec-x64/rec_x64.cpp`, também usado
+  como referência via `core/rec-x86/`) é arquiteturalmente diferente do
+  ARM64, e o que dá pra aproveitar dele. Disparados 2 subagentes em
+  paralelo, cada um lendo e documentando um backend inteiro sem viés do
+  outro.
+- **`docs/x86jit.md`** (997 linhas): referência completa de `core/rec-x86/`.
+  Achado central: stubs de acesso a memória compartilhados
+  (`mem_code[3][2][5]`, gerados uma única vez em `ngen_init()`/`gen_hande()`)
+  — `ngen_Rewrite` do x86 só troca o **alvo de um `call rel32`** (4 bytes) em
+  vez de regenerar lógica inline a cada rewrite.
+- **`docs/arm64jit.md`** (960 linhas): referência completa de
+  `core/rec-ARM64/`, incluindo os itens 1.7 e 4.9 já trabalhados nesta
+  sessão.
+- **`docs/arm64jit_improvement_plan.md`**: síntese acionável dos dois.
+  Item 1 (prioridade máxima): levar a arquitetura de stub compartilhado do
+  x86 pro ARM64 — é exatamente o que faltava pro item 1.7 (Store Queue) dar
+  certo sem o custo do fast-path inline que regrediu. Item 2 (baixo risco):
+  contador incremental de registradores vivos pro `PushCallerSaved`. Item 3
+  (hipótese não confirmada): cache inline de salto dinâmico. Item 4 (não
+  recomendado): compilação em camadas. Nota: o `CheckBlock` do ARM64 já é
+  melhor que o do x86.
+
+## 2026-09-15 — Item 1 (stub compartilhado de Store Queue) implementado e medido: ganho real mas pequeno
+
+- Usuário pediu pra começar pelo item 1 do plano de melhoria, usando Metal
+  Slug 6 como caso de teste principal: deixou um savestate na cena mais
+  pesada do jogo (`/roms2/naomi/mslug6.fc2021-rrstate.auto`), reportando
+  10fps antes das mudanças desta sessão, 15fps agora (jogo roda a 30fps no
+  máximo) — e destacou que o mesmo trecho roda liso no PPSSPP com gráfico
+  idêntico, então não acredita que seja limite de hardware.
+- **Implementação (fix v2 do item 1.7):** em vez de tocar em
+  `GenWriteMemoryFast` (caminho comum, já tinha regredido na tentativa 1),
+  só `ngen_Rewrite` foi ensinado a reconhecer um fault de Store Queue e
+  redirecionar aquele call site pra um stub compartilhado. Peças novas:
+  - `core/oslib/host_context.h`: campo `x0` novo em `host_context_t` (ARM64)
+    pra carregar o endereço real que causou o fault.
+  - `core/libretro/common.cpp`: `context_segfault()` agora copia
+    `regs[0]`↔`x0`; `signal_handler()` passa `ctx.x0` como 3º argumento de
+    `ngen_Rewrite` (antes era sempre `0`).
+  - `core/rec-ARM64/rec_arm64.cpp`: `sq_write_stub` (global, resetado em
+    `ngen_ResetBlocks()`), gerado uma vez em `GenMemStubs()` (chamado de
+    `generate_mainloop()` com um segundo `Arm64Assembler`); `GenCallStubAddr()`
+    novo, espelha o cálculo de offset de `GenCallRuntime()` mas sem
+    push/pop de caller-saved (não precisa, é um `Bl` cru pro endereço do
+    stub); `ngen_Rewrite` ganhou um branch: se o write faltoso for de 32
+    bits e o endereço faltoso (`acc>>26`) for `0x38` (range de SQ,
+    0xE0000000-0xE3FFFFFF), chama `GenCallStubAddr(sq_write_stub)` em vez
+    do `GenWriteMemorySlow` genérico.
+  - **Bug pego e corrigido antes de compilar:** `GenCallStubAddr` emitia só
+    1 instrução (`Bl`, 4 bytes) dentro do slot fixo de 3 instruções (12
+    bytes, `write_memory_rewrite_size`) que `ngen_Rewrite` já reserva —
+    sem preencher o resto com NOP, sobrariam bytes de lixo executados como
+    instrução logo depois do `Bl`. Corrigido replicando o padrão interno já
+    usado por `GenWriteMemorySlow`/`GenReadMemorySlow`
+    (`EnsureCodeSize(start_instruction, write_memory_rewrite_size)` no fim
+    da função — `EnsureCodeSize` é privado, mas como membro da mesma
+    classe pode ser chamado de dentro).
+- **Build:** `host_context.h` mudou (header compartilhado) → `make clean`
+  obrigatório por causa do bug conhecido de dependência incremental deste
+  fork. Cross-compile completo (comando exato do `CLAUDE.md`, `-j2`), sem
+  erro de compilação; único aviso no link foi o de sempre sobre o
+  `libGLESv2.so` stub local (`.dynsym` — inofensivo, já visto antes).
+- **Deploy e sanity check:** backup do binário anterior
+  (`flycast_libretro.so.pre-sq-stub-rewrite.bak`, era o baseline pós-reversão
+  do fix v1, confirmado por md5sum). Rodadas curtas em kofnw e Metal Slug 6
+  (savestate do usuário) sem crash, savestate confirmado carregando de
+  verdade (`retrorun_auto_load = true`, log em DEBUG mostrou "File
+  '.../mslug6.fc2021-rrstate.auto': loaded correctly!").
+- **Medição oficial** (`retrorun3 --benchmark 60 --benchmark-warmup 15`, 2
+  rodadas por lado, trocando só o `.so`, mesmo savestate em cada jogo):
+
+  | Jogo | Métrica | Baseline (méd. 2 rodadas) | Fix v2 (méd. 2 rodadas) | Delta |
+  |---|---|---|---|---|
+  | kofnw | `core_average` | 11,40ms | 11,17ms | -2,0% |
+  | kofnw | `core_frames`/60s | ~3070 | ~3101 | +1,0% |
+  | kofnw | `core_p50` | 9,95ms | 9,65ms | -3,0% |
+  | kofnw | `core_p95` | 20,15ms | 19,71ms | -2,2% |
+  | Metal Slug 6 | `core_average` | 21,30ms | 21,00ms | -1,4% |
+  | Metal Slug 6 | `core_frames`/60s | 1917 | 1932 | +0,8% |
+  | Metal Slug 6 | `active_frame_p50` | 27,41ms | 25,61ms | -6,6% |
+  | Metal Slug 6 | `active_frame_p95` | 71,08ms | 69,31ms | -2,5% |
+
+  Direção consistente nas 2 rodadas de cada jogo em cada jogo (não é
+  ruído) — ganho real, sem regressão, sem crash. Deployado como binário
+  ativo no device.
+- **Mas o ganho é pequeno e não explica o relato do usuário.** A cauda
+  pesada (p95/p99, frames 3-4x mais caros que o p50 em Metal Slug 6) quase
+  não melhora — ou seja, o que domina os PICOS de custo em Metal Slug 6
+  não é a Store Queue. **Conclusão honesta:** o fix é correto, seguro e vale
+  manter, mas não é a causa principal do gap Metal Slug 6 vs PPSSPP.
+  **Próxima suspeita a investigar:** renderização/draw calls em cenas com
+  muitos sprites (Metal Slug 6 é 2D denso, muitos personagens/tiros na
+  tela) — não memória. Ver item 1.7 em `tech_debits.md` pra números
+  completos e item 1 em `current_plan.md` pro resumo de status.
