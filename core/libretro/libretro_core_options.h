@@ -291,6 +291,22 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "disabled",
    },
    {
+      CORE_OPTION_NAME "_sh4_timeslice",
+      "SH4 Interrupt Check Interval (Restart Required)",
+      NULL,
+      "How often the emulated SH4 pauses to check for pending interrupts/timers, in emulated SH4 cycles. Higher values check less often, which can improve speed in CPU-heavy scenes (many on-screen objects/particles) at the cost of coarser interrupt/timer precision -- may cause audio or timing glitches in some games. '1x' matches stock accuracy; leave it there unless a specific game/scene needs the speed.",
+      NULL,
+      "hacks",
+      {
+         { "1x", "1x (default, most accurate)" },
+         { "2x", "2x" },
+         { "4x", "4x" },
+         { "8x", "8x (fastest, least accurate)" },
+         { NULL, NULL },
+      },
+      "1x",
+   },
+   {
       CORE_OPTION_NAME "_widescreen_hack",
       "Widescreen Hack (Restart Required)",
       NULL,

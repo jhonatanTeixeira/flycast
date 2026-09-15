@@ -18,6 +18,9 @@
 sh4_icache icache;
 sh4_ocache ocache;
 
+// See sh4_interpreter.h -- default keeps current behavior exactly.
+u32 sh4_sched_timeslice = SH4_TIMESLICE;
+
 static s32 l;
 
 static void ExecuteOpcode(u16 op)
@@ -41,7 +44,7 @@ void Sh4_int_Run()
    sh4_int_bCpuRun = true;
 	RestoreHostRoundingMode();
 
-	l = SH4_TIMESLICE;
+	l = sh4_sched_timeslice;
 
    do
    {
@@ -54,7 +57,7 @@ void Sh4_int_Run()
 
             ExecuteOpcode(op);
          } while (l > 0);
-         l += SH4_TIMESLICE;
+         l += sh4_sched_timeslice;
          UpdateSystem_INTC();
 #if !defined(NO_MMU)
       }
@@ -170,9 +173,9 @@ void ExecuteDelayslot_RTE()
 // every SH4_TIMESLICE cycles
 int UpdateSystem()
 {
-	Sh4cntx.sh4_sched_next -= SH4_TIMESLICE;
+	Sh4cntx.sh4_sched_next -= sh4_sched_timeslice;
 	if (Sh4cntx.sh4_sched_next<0)
-		sh4_sched_tick(SH4_TIMESLICE);
+		sh4_sched_tick(sh4_sched_timeslice);
 
 	return Sh4cntx.interrupt_pend;
 }

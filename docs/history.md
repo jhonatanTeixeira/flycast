@@ -1292,3 +1292,47 @@ decidir atacar.
   explicitamente adiada pelo usuário pra depois "caso o ganho ainda não
   deixe os games em boa velocidade". Ver item 4.10 em `tech_debits.md`
   (atualizado com a correção e o achado completo).
+
+## 2026-09-15 (sessão seguinte) — SH4_TIMESLICE como speedhack opt-in: implementado, testado, sem ganho
+
+- Usuário: "o timeslice, como podemos deixar ele como uma opção de
+  speedhack se agente mexer?" — pediu pra transformar a alavanca adiada
+  no achado 4.10 numa opção de core do libretro, não numa mudança direta
+  da constante.
+- Implementado: `SH4_TIMESLICE` (macro, 448) continua intocada; nova
+  variável `sh4_sched_timeslice` (default = `SH4_TIMESLICE`) passa a ser
+  o que de fato decide a frequência da checagem de interrupção/timer, em
+  todo lugar que isso importa: os 4 sites em `generate_mainloop()`
+  (`rec_arm64.cpp`, JIT ARM64 — lida em tempo de geração de código,
+  cravada como imediato, igual o resto do mainloop já fazia) e os 2 sites
+  equivalentes no interpretador (`Sh4_int_Run`/`UpdateSystem()`, pra
+  manter os dois caminhos de execução consistentes entre si). Nova opção
+  de core `reicast_sh4_timeslice` (categoria "hacks", "Restart Required",
+  valores 1x/2x/4x/8x, default 1x) em `libretro_core_options.h`, lida em
+  `update_variables()` em `libretro.cpp`.
+- **Build limpo** (`make clean` obrigatório — `sh4_interpreter.h` mudou),
+  deploy com backup do binário anterior
+  (`flycast_libretro.so.pre-timeslice-option.bak`).
+- **Validação de que a opção realmente funciona:** rodando com
+  `reicast_sh4_timeslice = 4x` num `.cfg` de teste, lida a variável ao
+  vivo via gdb (`print *(unsigned int*)&sh4_sched_timeslice`) → `1792`
+  (`=448×4`), confirmando que o valor passado pelo `.cfg` chega
+  corretamente até o código gerado pelo JIT. Sem crash. `1x` (default)
+  mede igual ao binário anterior (~21,8-22,0ms em Metal Slug 6, dentro do
+  ruído já visto o dia todo) — confirma que a mudança não afeta ninguém
+  que não opte explicitamente pela opção.
+- **Medição do ganho:** 1ª rodada em `4x` = 22,3ms (nenhuma melhora sobre
+  ~21,8-22,0ms do `1x`). 2ª rodada em `4x` = 39,2ms, mas essa rodou colada
+  em 3 benchmarks anteriores sem pausa nenhuma — reconheci a
+  contaminação térmica/recursos na hora (mesmo padrão documentado mais
+  cedo hoje) e comecei a preparar uma repetição limpa com pausa de
+  cooldown. Usuário interrompeu ("cara, pode parar") antes da repetição
+  limpa terminar, e confirmou diretamente: **"não teve ganho"**.
+- **Decisão:** parar de medir (pedido explícito do usuário). Código da
+  opção MANTIDO e commitado — é seguro (default inalterado, testado sem
+  crash) e fica disponível como ferramenta pra experimentação futura,
+  mas documentado como **não resolvendo** o achado 4.10 nesta
+  cena/jogo. Ver item 4.11 em `tech_debits.md` pro registro completo,
+  incluindo uma hipótese não testada pra por que não ajudou (o overhead
+  visto no profile pode não estar no caminho crítico do tempo de frame
+  nessa cena específica).

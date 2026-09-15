@@ -1398,7 +1398,7 @@ public:
 			Ldr(x1, reinterpret_cast<uintptr_t>(&cycle_counter));
 			// Push context, cycle_counter address
 			Stp(x0, x1, MemOperand(sp, -16, PreIndex));
-			Mov(w0, SH4_TIMESLICE);
+			Mov(w0, sh4_sched_timeslice);
 			Str(w0, MemOperand(x1));
 
 			Ldr(x0, reinterpret_cast<uintptr_t>(jmp_env));
@@ -1412,7 +1412,7 @@ public:
 			// Use x28 as sh4 context pointer
 			Mov(x28, x0);
 			// Use x27 as cycle_counter
-			Mov(w27, SH4_TIMESLICE);
+			Mov(w27, sh4_sched_timeslice);
 		}
 		Label do_interrupts;
 
@@ -1425,13 +1425,13 @@ public:
 		// Add timeslice to cycle counter
 		if (!mmu_enabled())
 		{
-			Add(w27, w27, SH4_TIMESLICE);
+			Add(w27, w27, sh4_sched_timeslice);
 		}
 		else
 		{
 			Ldr(x1, MemOperand(sp, 8));	// &cycle_counter
 			Ldr(w0, MemOperand(x1));	// cycle_counter
-			Add(w0, w0, SH4_TIMESLICE);
+			Add(w0, w0, sh4_sched_timeslice);
 			Str(w0, MemOperand(x1));
 		}
 		Mov(x29, lr);				// Trashing pc here but it will be reset at the end of the block or in DoInterrupts

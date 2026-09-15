@@ -41,6 +41,7 @@ char* strdup(const char *str)
 #include "../rend/rend.h"
 #include "../hw/sh4/sh4_mem.h"
 #include "../hw/sh4/sh4_sched.h"
+#include "../hw/sh4/sh4_interpreter.h"
 #include "../hw/sh4/dyna/blockmanager.h"
 #include "keyboard_map.h"
 #include "hw/maple/maple_cfg.h"
@@ -528,6 +529,27 @@ static void update_variables(bool first_startup)
    	// and the VMUs haven't been created anyway
    	maple_ReconnectDevices();
    }
+
+   var.key = CORE_OPTION_NAME "_sh4_timeslice";
+
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      unsigned multiplier = 1;
+      if (!strcmp(var.value, "2x"))
+         multiplier = 2;
+      else if (!strcmp(var.value, "4x"))
+         multiplier = 4;
+      else if (!strcmp(var.value, "8x"))
+         multiplier = 8;
+      // Applied once here (read before any SH4 block/mainloop has been
+      // generated on first startup) -- the ARM64 JIT bakes this value in as
+      // an immediate when it generates its dispatcher, so changing this
+      // option requires a restart to take effect, same as the other
+      // "(Restart Required)" options above. See sh4_interpreter.h.
+      sh4_sched_timeslice = SH4_TIMESLICE * multiplier;
+   }
+   else
+      sh4_sched_timeslice = SH4_TIMESLICE;
 
    var.key = CORE_OPTION_NAME "_widescreen_hack";
 

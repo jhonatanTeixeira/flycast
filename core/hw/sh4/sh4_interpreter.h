@@ -56,6 +56,19 @@ void ExecuteDelayslot_RTE(void);
 
 #define SH4_TIMESLICE (448)
 
+// Runtime-tunable copy of SH4_TIMESLICE, used everywhere the *frequency* of
+// the interrupt/scheduler check (UpdateSystem(), intc_sched in the ARM64
+// JIT) is decided -- SH4_TIMESLICE itself stays a compile-time constant
+// (used elsewhere, e.g. decode-ahead bounds, GD-ROM timing, and by the
+// other backends' assembly files, none of which this speedhack touches).
+// Defaults to SH4_TIMESLICE (i.e. no behavior change) and is only ever
+// meant to be raised via the "sh4_timeslice" core option, applied once at
+// startup/content load (see docs/tech_debits.md item 4.10) -- raising it
+// checks for pending interrupts/timers less often, trading a small amount
+// of interrupt-timing precision for less dynarec dispatch overhead in
+// scenes with many short, hot SH4 blocks.
+extern u32 sh4_sched_timeslice;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
