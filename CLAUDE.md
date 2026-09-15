@@ -12,10 +12,20 @@ como o nome popular ("flycast2021") sugere.
 
 É o alvo de um projeto de otimização de performance rodando num handheld retro R36
 (RK3326, Cortex-A53 quad-core @ 1.5GHz, Mali-G31, OpenGL ES 3.2, sem Vulkan
-utilizável). Esse fork/build é o que roda bem no device hoje (estável, sem crash);
-o `flyinghead/flycast` atual tem um bug de crash conhecido no dynarec ARM64 nesse
-hardware (ver `docs/history.md`) e **não é o foco deste projeto** — não persiga
-consertar o master a menos que explicitamente pedido.
+utilizável). Esse fork/build é o que roda bem no device hoje (estável, boa
+performance); o `flyinghead/flycast` atual é **muito mais lento nesse hardware —
+o usuário relata ~10x** (não é "só" um bug de crash isolado). A investigação de
+2026-09-13 (ver `docs/history.md`) confirma isso: rodando a mesma cena, o master
+mostrou frames **escalando de ~26ms pra ~100ms antes de eventualmente também
+travar** (SIGSEGV no block-dispatch table do dynarec ARM64) — ou seja, a
+lentidão e o crash são provavelmente a MESMA causa raiz (dispatch de bloco
+degradando), não dois problemas separados. **Não é o foco deste projeto
+consertar/rodar o master** (o fork é o que roda bem no device), mas **entender
+o QUE no master ficou mais lento/degrada é uma pista válida** para otimizar
+este fork — pode revelar uma técnica que o master abandonou (e este fork ainda
+tem) ou um problema de arquitetura a evitar. Não persiga rodar o master no
+device a menos que explicitamente pedido, mas comparação de código entre os
+dois é uma ferramenta de investigação legítima.
 
 ## Documentação do projeto (leia nesta ordem)
 

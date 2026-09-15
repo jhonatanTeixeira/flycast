@@ -1010,3 +1010,53 @@ decidir atacar.
   adiciona custo ao caminho comum) pra ter chance de dar certo, e isso é
   bem mais arriscado/complexo, como já havia sido avaliado antes de
   implementar.
+
+## 2026-09-14 (sessão seguinte, correção de premissa + investigação nova) — master não é "só crash", é ~10x mais lento
+
+- **Correção importante do usuário:** o `CLAUDE.md` (escrito por uma sessão
+  anterior do Claude) caracterizou o `flyinghead/flycast` atual como "tem bug
+  de crash conhecido, não é o foco" — mas o usuário esclareceu que o motivo
+  real de interesse no master é que ele é **~10x mais lento** nesse hardware,
+  não só um crash isolado. Reexaminando os próprios números já registrados
+  (`docs/history.md`, 2026-09-13): o master mostrou frames **escalando de
+  ~26ms pra ~100ms ANTES do crash** — ou seja, lentidão e crash são
+  provavelmente a MESMA causa raiz (degradação do dispatch de bloco), não
+  dois problemas independentes. `CLAUDE.md` corrigido pra refletir isso e
+  deixar claro que comparar código com o master É uma ferramenta de
+  investigação válida (só não é objetivo rodar/consertar o master no device).
+- **Tentativa de investigação nova:** ao ler manualmente o diff de
+  `blockmanager.cpp` (fork vs. master, 458 linhas) não achou nada óbvio —
+  é majoritariamente modernização estrutural (renomeações, abstração de
+  espaço de memória via `addrspace::`/`virtmem::`), sem regressão óbvia de
+  performance visível ali.
+- **Usuário revelou que o device já tem um build standalone do master
+  pronto** (`/opt/flycastsa/flycast`, v2.6-9-g21eb24f86, já visto antes em
+  `docs/history.md` 2026-09-13) — não precisa cross-compile. Usuário abriu
+  o kofnw nele manualmente pela UI e confirmou ao vivo: **"o jogo é
+  basicamente quadro a quadro nessa versão"** — bate com o "~10x mais
+  lento" relatado.
+- Capturado `perf` (20s, `--call-graph dwarf`) no processo rodando. **Binário
+  stripped** (sem símbolo nenhum) — só endereços hex, sem nome de função.
+  Padrão estrutural encontrado: uma cadeia de chamada **funda e estreita**
+  (37%→36%→28%→23%→19%→19%→18%→16%→14%, ~10 níveis aninhados, cada um
+  retendo 80-99% do tempo do pai, quase sem ramificação) — padrão
+  estruturalmente parecido com despacho de interpretador (instrução por
+  instrução), bem diferente do hot spot largo-e-plano que vimos no nosso
+  fork (dentro de código já compilado pelo JIT).
+- **Checado `~/.config/flycast/emu.cfg`: `Dynarec.Enabled = yes`,
+  `Dynarec.idleskip = yes`** — contradiz a teoria de "roda tudo
+  interpretado". Sem override específico pro kofnw
+  (`find ~/.config/flycast -iname '*kof*'` vazio).
+- **Hipótese revisada, NÃO CONFIRMADA:** o master pode estar caindo com
+  muito mais frequência no mecanismo de `shop_ifb`/"Interpreter fallback"
+  (existe no código, é uma válvula de escape legítima pra instruções
+  individuais que o JIT não traduz — não é bug em si) especificamente pro
+  código do Naomi/kofnw, o que bateria tanto com "Dynarec habilitado" quanto
+  com o padrão de cadeia funda. **Não confirmado** — precisaria de símbolo
+  no binário (= build) pra confirmar, que é justamente o custo que essa
+  investigação estava tentando evitar.
+- **Decisão: parar aqui por ora.** Fica registrado como pista clara e
+  parcialmente caracterizada pra retomar com mais tempo dedicado — seja
+  fazendo o cross-compile do master com debug symbols (aceitando o custo)
+  seja continuando a leitura manual de diff nos arquivos-chave
+  (`rec_arm64.cpp`, `driver.cpp` — ainda não lidos).
