@@ -898,3 +898,115 @@ decidir atacar.
   calls que já funcionou no item 4.2, agora aplicada ao lado de
   memória/CPU** — não confirmado se é viável aqui, precisa entender o que
   `pvr_write_area4` realmente faz antes de tentar).
+
+## 2026-09-14 (sessão seguinte) — CORREÇÃO: não é VRAM, é Store Queue do SH4 (gdb ao vivo)
+
+- Antes de implementar qualquer coisa, fui checar o handler `pvr_write_area4`
+  (hipótese: escrita de VRAM) e descobri que **VRAM (Area 1, 0x04000000+) já
+  está mapeada no fastmem estático desde o início** (`core/hw/mem/_vmem.cpp`,
+  tabela de `_vmem_map_block`) — contradizendo a hipótese de que VRAM
+  precisava de um toggle de mapeamento. Isso não batia com a teoria anterior.
+- **Instalado `gdb` no device (`apt install gdb`, mesma disponibilidade do
+  `linux-perf`)** e anexado ao processo do MBAA (savestate) com um
+  breakpoint em `_vmem_WriteMem32` logando `$w0`/`$w1` (endereço/dado reais)
+  a cada chamada, por alguns segundos, depois destacado.
+- **Resultado real (não mais hipótese):** o padrão dominante é **16 escritas
+  sequenciais de endereço `0xE01C0460`...`0xE01C049C` (passo de 4 bytes),
+  todas com `data=0x0`**, seguidas de **uma escrita em `0x8C1C03F4` com
+  `data=0x60000000`**, repetindo em loop. `0xE0000000-0xE3FFFFFF` é a área
+  **P4 do SH4 — Store Queues (SQ)**, não VRAM/área4. 16 palavras = exatamente
+  2 store queues × 8 palavras cada, todas zeradas (um "fast clear" via SQ,
+  padrão clássico de jogo Dreamcast/Naomi). O outro endereço (`0x8C1C03F4`)
+  é RAM normal, mas cai numa página provavelmente sob rastreamento de
+  "vram lock"/dirty-page (mecanismo de invalidação de cache de textura via
+  mprotect+SIGSEGV, `vramlock_list_add`/`libCore_vramlock_Lock`, que também
+  apareceram nos profiles `perf` anteriores).
+- **Por que isso não passa pelo fastmem, e por que isso é ARQUITETURALMENTE
+  necessário, não um bug:** Store Queue é um recurso de hardware do SH4 —
+  as 8 escritas individuais que enchem a fila são instruções `MOV.L`
+  SEPARADAS no código do jogo (não dá pra saber que são um "burst" até a
+  instrução `PREF` que dispara o flush de verdade — confirmado em
+  `rec_arm64.cpp:811-841`, `do_sqw_mmu` só dispara no `shop_pref`, nunca nos
+  writes individuais). Não tem como "fastmem-mapear" a região de SQ (não é
+  RAM real, é um buffer especial do CPU) nem "agrupar" os 8 writes sem
+  reconhecer um padrão de MÚLTIPLAS instruções do jogo — a mesma categoria
+  de risco (mexer em como o código do jogo é interpretado, não só no nosso
+  próprio C++) que já tínhamos identificado como arriscada antes.
+- **Correção de rota:** a ideia de "mapear VRAM no fastmem condicionalmente
+  a LMMODE" (proposta na mensagem anterior) **não se aplica** — não é isso
+  que está acontecendo. Descartada.
+- **Conclusão honesta:** não achei um fix seguro e rápido pra esse call
+  site específico nesta sessão. As opções reais que restam são todas de
+  escopo maior: (a) implementar reconhecimento do padrão "8 stores + PREF"
+  no JIT pra tratar como operação composta (otimização de padrão de código
+  do jogo — arriscado, precisa de bastante cuidado e testes com vários
+  jogos), ou (b) aceitar esse custo como inerente ao hardware emulado e
+  focar em reduzir o custo por chamada genericamente (volta pro item 4.9).
+  Registrado como aprendizado, não como fix pronto.
+
+## 2026-09-14 (sessão seguinte, implementação) — Fast-path de Store Queue no JIT ARM64
+
+- Implementado em `core/rec-ARM64/rec_arm64.cpp`, `GenWriteMemoryFast`: antes
+  do caminho existente (nvmem identity-map + SIGSEGV/`ngen_Rewrite` pro
+  slow-path), adiciona uma checagem barata (`addr>>26==0x38`, o mesmo check
+  já usado por `shop_pref` pro flush) pra detectar escrita de 32 bits em
+  endereço de Store Queue (0xE0000000-0xE3FFFFFF) e gravar DIRETO no
+  `sq_buffer` (offset fixo relativo a `x28`, `offsetof(Sh4RCB,cntx)-
+  offsetof(Sh4RCB,sq_buffer)`, mesma expressão que `shop_pref` já usa),
+  pulando o `GenCallRuntime`/`_vmem_WriteMem32` inteiramente.
+- **Decisão de design importante:** optei por essa abordagem (checagem
+  inline sempre emitida, só custa uns instructions extras bem previsíveis
+  em TODO write de 32 bits) em vez de estender o mecanismo de
+  SIGSEGV+`ngen_Rewrite` — a segunda seria mais cirúrgica (só afeta call
+  sites que já precisaram de rewrite) mas exigiria mexer no signal handler
+  cross-platform e caberia num orçamento de só 3 instruções por rewrite
+  (`write_memory_rewrite_size`), forçando um stub out-of-line — infra nova
+  que não existe. A abordagem escolhida é mais simples de raciocinar e não
+  toca em nada fora de `GenWriteMemoryFast`.
+- **Cuidado de correção:** o código novo é emitido ANTES de
+  `start_instruction`/`EnsureCodeSize`, então a sequência que `ngen_Rewrite`
+  já sabe reescrever (Ubfx/Add+Str) fica exatamente na mesma posição
+  relativa à instrução que causa o SIGSEGV — não precisou mexer em
+  `ngen_Rewrite` nem em `write_memory_rewrite_size`. Pra tamanhos != 4 (SQ é
+  documentado como "write only 32bit" em `sh4_mmr.cpp`), zero instruções
+  novas são emitidas — o caminho original fica 100% intocado.
+- **Build limpo, deploy feito** com backup do binário anterior
+  (`flycast_libretro.so.pre-sq-fastpath.bak`). Sanity check (sem crash,
+  sem `verify()` disparando) em kofnw (15s bench/3s warmup) e Shenmue (20s
+  bench/15s warmup, warmup curto — não é o protocolo oficial, só checagem
+  de "não quebrou"). **Pendente: confirmação visual do usuário** — essa
+  mudança mexe no canal usado pra mandar geometria/partículas pro GPU
+  (Store Queues), então um bug aqui provavelmente apareceria como corrupção
+  visual, não crash.
+
+## 2026-09-14 (sessão seguinte, resultado negativo) — Fast-path de Store Queue REVERTIDO: regrediu, não melhorou
+
+- Benchmark oficial (mesmo protocolo de sempre, 20s/5s warmup, savestate
+  kofnw) com a build do fast-path de SQ, repetido 2x pra descartar ruído:
+  - Rodada 1: `core_average=12,762ms`
+  - Rodada 2: `core_average=12,837ms`
+  - **Antes do fix (só regalloc+batching): `core_average=12,070ms`.**
+  - **Resultado: ~+6% MAIS LENTO, consistente nas duas rodadas — não é
+    ruído.**
+- **Causa provável:** a checagem nova (`Lsr`/`Cmp`/`B`) roda em TODO write
+  de 32 bits, não só nos de Store Queue — e escritas de 32 bits comuns
+  (RAM normal) são numericamente muito mais frequentes que as de SQ. O
+  custo do "imposto" pago em toda escrita comum superou a economia nas
+  poucas (mas quentes) escritas de SQ. **Confirma na prática o oposto do
+  que a leitura de código sugeria** — a suposição de "checagem barata e
+  bem prevista" não se sustentou na medição real.
+- **Revertido imediatamente** (`core/rec-ARM64/rec_arm64.cpp` de volta ao
+  estado só com regalloc+batching, sem o fast-path de SQ). Rebuild, deploy,
+  confirmado de volta à faixa boa (`core_average=11,813ms`).
+- **Lição registrada:** essa é exatamente a regra de ouro do projeto se
+  provando na prática de novo — "toda hipótese levantada só de olhar
+  código precisa ser validada com medição real antes de virar mudança
+  definitiva". A leitura de código (útil pra entender o mecanismo) não
+  substituiu a medição — e aqui a medição corrigiu a intuição. O achado do
+  Store Queue (item novo em `tech_debits.md`) continua válido como
+  DIAGNÓSTICO (é real, é o que domina o profile), mas o fix tentado não
+  funciona nesse formato — precisaria da abordagem mais cirúrgica via
+  `ngen_Rewrite` (só afeta call sites que já precisam de rewrite, não
+  adiciona custo ao caminho comum) pra ter chance de dar certo, e isso é
+  bem mais arriscado/complexo, como já havia sido avaliado antes de
+  implementar.

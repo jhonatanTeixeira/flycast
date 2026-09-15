@@ -205,20 +205,26 @@ são confiáveis. Ver `docs/history.md` pra tabela comparativa completa.
 continua dominando (~40-51% self-time) mesmo em combate ativo, não só idle —
 ver item 1 abaixo, que foi REORDENADO pra topo da fila por causa disso.
 
-### 1. [NOVO TOPO DA FILA] Investigar o spin-loop dominante do `SH4_TCB` — maior alavanca em potencial de todo o projeto
-`SH4_TCB+offset` domina o profile tanto parado (58%/43% self) quanto em
-combate ativo (51%/39% self), sempre concentrado num endereço ÚNICO — padrão
-clássico de busy-wait/spin-loop (provavelmente sincronização com
-VBlank/timer, comum em código de Dreamcast), não "SH4 fazendo trabalho útil
-espalhado". **Se for confirmado, isso é potencialmente MAIOR alavanca que o
-batching de draw calls** — técnica de "idle-loop detection" (fast-forward do
-relógio simulado em vez de executar o spin real) é usada por emuladores
-maduros exatamente pra isso, e beneficiaria TODOS os jogos, não só kofnw.
-**Ainda não confirmado o que é exatamente esse endereço** — próximo passo é
-inspecionar o código ARM64 gerado ali (dump de `/proc/<pid>/mem` na região do
-`SH4_TCB` + desmontagem) ou instrumentação temporária (contar qual PC do SH4
-é compilado/executado mais, adicionada e revertida no mesmo ciclo, não fica
-no tree). Não decidir se vale a pena atacar antes de confirmar a hipótese.
+### 1. `SH4_TCB` dominante — DIAGNOSTICADO (não é idle-loop), fix tentado e REVERTIDO
+**Concluído (2026-09-14):** não é busy-wait/idle. Via `perf`+gdb ao vivo
+(dump de `/proc/pid/mem` + desmontagem + breakpoint lendo endereço/dado
+reais), confirmado que o que domina é enchimento de Store Queue —
+8+8 palavras (`MOV.L` individuais) escritas antes do `PREF`, cada uma
+pagando uma chamada `GenCallRuntime`→`_vmem_WriteMem32` completa pra fazer
+o equivalente a um store num buffer fixo. Confirmado com `cycles` vs
+`instructions` sampling que é trabalho real (fica MAIS dominante em
+instructions, não menos — não é stall). Ver item 1.7 em `tech_debits.md`.
+
+**Fix tentado:** checagem inline em `GenWriteMemoryFast` (detecta endereço
+de SQ, grava direto, pula a chamada). **Resultado: piorou ~6%
+(`core_average` 12,07→12,76-12,84ms), revertido.** A checagem roda em todo
+write de 32 bits (não só SQ), e o volume de writes comuns supera o
+benefício nos poucos-mas-quentes writes de SQ. Uma abordagem via
+`ngen_Rewrite` (só afeta call sites que já precisaram de rewrite, sem
+custo no caminho comum) é mais promissora mas exige mexer em signal
+handler/code-patching — mais arriscado, não tentado ainda. **Item fechado
+por ora** — sem uma correção segura em mãos, não vale reabrir sem tempo
+dedicado.
 
 ### 2. Batching de draw calls (item 4.2, tech_debits.md) — maior impacto confirmado do lado de render
 `glDrawElements` custa ~15ms dos ~25ms de `render` em cena pesada do Shenmue
