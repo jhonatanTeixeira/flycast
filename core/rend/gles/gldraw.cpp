@@ -237,6 +237,27 @@ __forceinline
 	}
 }
 
+#ifndef GL_PRIMITIVE_RESTART_FIXED_INDEX
+// Not declared by the GLES2 headers this fork builds against (HAVE_OPENGLES2),
+// but the value is a fixed part of the GLES3/GL4 core spec and works fine on
+// any GLES3+ context reached at runtime (glEnable/glDisable need no extra
+// entry point) -- see docs/tech_debits.md item 4.2.
+#define GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D69
+#endif
+
+// Same GPU-relevant state comparison as PP_EQ() in sorter.cpp (duplicated
+// locally on purpose, to keep this batching change self-contained/easy to
+// revert). Covers every PolyParam field SetGPState() reads; texid isn't
+// compared separately because it's derived purely from tsp+tcw.
+static inline bool PP_SameGPUState(const PolyParam* pp0, const PolyParam* pp1)
+{
+	return (pp0->pcw.full & PCW_DRAW_MASK) == (pp1->pcw.full & PCW_DRAW_MASK)
+			&& pp0->isp.full == pp1->isp.full
+			&& pp0->tcw.full == pp1->tcw.full
+			&& pp0->tsp.full == pp1->tsp.full
+			&& pp0->tileclip == pp1->tileclip;
+}
+
 template <u32 Type, bool SortingEnabled>
 static void DrawList(const List<PolyParam>& gply, int first, int count)
 {
@@ -251,17 +272,84 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 	glcache.StencilFunc(GL_ALWAYS,0,0);
 	glcache.StencilOp(GL_KEEP,GL_KEEP,GL_REPLACE);
 
-	while(count-->0)
+	// Batch runs of consecutive strips that share identical GPU state into a
+	// single glDrawElements call via GLES3 fixed-index primitive restart,
+	// instead of one draw call per strip -- draw call submission overhead on
+	// the Mali driver dominates render time in heavy scenes (tech_debits.md
+	// item 4.2, ~15ms/25ms measured on Shenmue's snow cutscene). Only taken on
+	// confirmed GLES3+ contexts; every other config keeps the original
+	// one-draw-per-strip path untouched.
+	const bool canBatch = gl.is_gles && gl.gl_major >= 3;
+	if (canBatch)
+		// Parenthesized to dodge glsm's glEnable(T)->rglEnable(S##T) shadow-state
+		// macro (glsm.h): GL_PRIMITIVE_RESTART_FIXED_INDEX has no SGL_* entry in
+		// glsm's fixed capability set, so route straight to the real driver call.
+		(glEnable)(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+
+	static std::vector<u32> batchIdx;
+	const u32 *idx_base = pvrrc.idx.head();
+
+	PolyParam* end = params + count;
+	while (params < end)
 	{
-		if (params->count>2) /* this actually happens for some games. No idea why .. */
+		if (params->count <= 2) /* this actually happens for some games. No idea why .. */
 		{
-			SetGPState<Type,SortingEnabled>(params);
+			params++;
+			continue;
+		}
+
+		PolyParam* runEnd = params + 1;
+		if (canBatch)
+		{
+			while (runEnd < end && runEnd->count > 2 && PP_SameGPUState(runEnd, params))
+				runEnd++;
+		}
+
+		SetGPState<Type,SortingEnabled>(params);
+
+		if (runEnd - params == 1)
+		{
 			glDrawElements(GL_TRIANGLE_STRIP, params->count, gl.index_type,
 						(GLvoid*)(gl.get_index_size() * params->first));
 		}
+		else
+		{
+			// Merge this run's strips into one draw call, separating them with
+			// the fixed restart index so each strip keeps its own topology
+			// (GL starts a fresh strip right after a restart index, exactly
+			// like a new, independent glDrawElements call would).
+			batchIdx.clear();
+			for (PolyParam* p = params; p < runEnd; p++)
+			{
+				for (u32 i = 0; i < p->count; i++)
+					batchIdx.push_back(idx_base[p->first + i]);
+				if (p + 1 < runEnd)
+					batchIdx.push_back(0xFFFFFFFF);
+			}
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs2);
+			if (gl.index_type == GL_UNSIGNED_SHORT)
+			{
+				static std::vector<u16> batchIdx16;
+				batchIdx16.resize(batchIdx.size());
+				for (size_t i = 0; i < batchIdx.size(); i++)
+					batchIdx16[i] = (u16)batchIdx[i];
+				glBufferData(GL_ELEMENT_ARRAY_BUFFER, batchIdx16.size() * sizeof(u16), batchIdx16.data(), GL_STREAM_DRAW);
+			}
+			else
+			{
+				glBufferData(GL_ELEMENT_ARRAY_BUFFER, batchIdx.size() * sizeof(u32), batchIdx.data(), GL_STREAM_DRAW);
+			}
+			glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
+			// Re-bind the main index buffer so unrelated draws (and the next
+			// DrawList call) keep using the un-batched geometry as before.
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs);
+		}
 
-		params++;
+		params = runEnd;
 	}
+
+	if (canBatch)
+		(glDisable)(GL_PRIMITIVE_RESTART_FIXED_INDEX); // see the glEnable comment above
 }
 
 static std::vector<SortTrigDrawParam> pidx_sort;
