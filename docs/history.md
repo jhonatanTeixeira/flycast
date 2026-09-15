@@ -1224,3 +1224,71 @@ decidir atacar.
   `PushCallerSaved`/`PopCallerSaved` em vez de reduzir a frequência de
   chamada — mas não implementado ainda, aguardando decisão do usuário.
   Ver item 4.10 em `docs/tech_debits.md` pro registro completo.
+
+## 2026-09-15 (sessão seguinte) — Autocorreção: item 4.9 não se aplica; identificado o bloco SH4 real por trás do achado
+
+- Usuário: "podemos implementar [item 2], mas vamos mexer no timeslice
+  depois caso o ganho ainda não deixe os games em boa velocidade" — sinal
+  pra prosseguir com o Item 2. Antes de escrever código, reexaminei o
+  próprio disassembly do `intc_sched` já capturado e percebi um problema:
+  **não há NENHUM `stp`/`ldp` ao redor do `bl UpdateSystem`/`bl
+  rdv_DoInterrupts`** — push/pop vazio. Item 2 reduz o custo de um
+  push/pop que, nesse call site específico, já não existe.
+- Causa raiz confirmada lendo o código: `generate_mainloop()` cria seu
+  próprio `Arm64Assembler`/`regalloc` do zero (mesmo padrão de
+  `ngen_Compile`, um por bloco) e nunca faz `Preload_FPU` antes de gerar
+  `intc_sched` — `reg_alloced` fica vazio, então `PushCallerSaved` calcula
+  uma lista vazia e não emite nada. **O item 4.9 não se aplica aqui** —
+  autocorreção feita ANTES de implementar algo que não atacaria o achado
+  medido, em vez de depois (diferente do episódio da Store Queue v1).
+- Perguntei ao usuário como prosseguir (investigar mais fundo vs.
+  implementar Item 2 mesmo assim vs. pular pro Item 3) — escolheu
+  investigar mais fundo primeiro.
+- **Identificação por fonte real, não só heurística de endereço:**
+  encontrado `bm_WriteBlockMap(const std::string&)` — função já existente
+  e ATIVA no binário (não em `#if 0`, ao contrário de `print_blocks()`,
+  que tentei reativar com `__attribute__((used))` sem efeito porque o
+  pré-processador nunca alcança esse código — edit revertida) — que
+  despeja endereço guest, `code`, `guest_cycles`, `guest_opcodes` e o
+  oplist inteiro de cada bloco compilado. Está oculta do dynsym mas
+  presente no symtab completo (achada via `nm` sem `-D`, mangled name
+  `_Z16bm_WriteBlockMapRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE`).
+  Chamada ao vivo via gdb: como ela recebe `const std::string&` (uma
+  referência = um ponteiro na ABI), construí um objeto `std::string` fake
+  na memória do processo à mão (`malloc` de 64 bytes pro objeto + 64 pro
+  buffer de caracteres, `strcpy` do caminho, `set {long}obj = charbuf` /
+  `set {long}(obj+8) = tamanho` pros campos `_M_p`/`_M_string_length` —
+  não precisei me preocupar com o campo de capacidade porque a função só
+  lê via `.c_str()`, nunca modifica) e chamei a função pelo nome mangled.
+  Gerou `blkmap_hot.lst` (1.98MB, ~58k linhas) com TODOS os blocos
+  compilados até aquele momento.
+- **Achado de metodologia:** a máquina compartilhada matou o processo
+  local (`run_in_background`) por baixa memória bem no meio dessa
+  captura — mas o trabalho remoto (gdb + escrita do arquivo) já tinha
+  terminado antes do kill, então o arquivo saiu íntegro; só precisei
+  limpar o `retrorun3` órfão que ficou rodando no device depois (kill -9
+  manual). Lição: um kill do harness local não significa que o trabalho
+  remoto foi perdido — vale checar antes de re-tentar do zero.
+- **Resultado:** o bloco contendo o endereço quente é **vaddr SH4
+  `0x8C05B3A4`** — 6 opcodes SHIL, `guest_cycles=7`,
+  `host_code_size=124 bytes`: carrega uma constante de endereço
+  (`0x8c386928`), lê aquela palavra de memória, lê outra palavra do
+  stack (`r15+19`), e compara (`setae`, >= sem sinal) — uma checagem de
+  contador/limite típica de bookkeeping de objeto/partícula. Blocos
+  vizinhos no mesmo caminho (`8C05B3D0`, `8C05B3D6`, `8C05B68E`) são
+  igualmente minúsculos (2-3 opcodes). **Não é ineficiência de tradução
+  do emulador — é a lógica do próprio jogo, rodando um número enorme de
+  vezes nessa cena específica** (bate 100% com a descrição do usuário:
+  "monstro gigante mecânico de muitas partículas diferenciadas"). O
+  `bl intc_sched` fica visível no profile simplesmente porque QUALQUER
+  bloco executado tantas vezes acaba sendo "a vez" de estourar o
+  orçamento de 448 ciclos com frequência proporcional às suas próprias
+  execuções.
+- **Conclusão honesta:** não há alavanca de baixo risco do lado do JIT
+  pra esse achado específico — nem Item 2 (push/pop já vazio aqui), nem
+  encolher o SH4 traduzido (já é o mínimo possível, 6 opcodes), nem a
+  cauda longa de renderização (descartada no post anterior). A única
+  alavanca conhecida é frequência de checagem (`SH4_TIMESLICE`),
+  explicitamente adiada pelo usuário pra depois "caso o ganho ainda não
+  deixe os games em boa velocidade". Ver item 4.10 em `tech_debits.md`
+  (atualizado com a correção e o achado completo).
