@@ -1342,6 +1342,23 @@ void retro_run (void)
 
    g_lastFrameTimeMs = (float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
 
+   // FC_IFB_COUNT (opt-in, see rec_arm64.cpp): periodically flush the
+   // interpreter-fallback opcode hit counts to /tmp/ifb-counts-<pid>.txt
+   // so they're readable mid-session (this core's clean-shutdown path is
+   // unreliable, see docs/tech_debits.md item 5.3's crash addendum) --
+   // every ~150 frames (a few real seconds), cheap enough to check every
+   // frame since it's a single getenv-cached bool.
+   if (getenv("FC_IFB_COUNT") != nullptr)
+   {
+      extern void DumpIfbCounts();
+      static int ifbDumpCounter = 0;
+      if (++ifbDumpCounter >= 150)
+      {
+         ifbDumpCounter = 0;
+         DumpIfbCounts();
+      }
+   }
+
    // Live measured retro_run() call rate (g_measuredFps) -- mirrors
    // retrorun3's OWN formula, verified against its real source
    // (navy1978/retrorun, src/main.cpp): count total calls, and once a full

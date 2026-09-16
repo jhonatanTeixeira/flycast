@@ -32,6 +32,49 @@ using namespace vixl::aarch64;
 
 #include "hw/sh4/sh4_opcode_list.h"
 
+// Opt-in interpreter-fallback (shop_ifb) hit counter, by raw 16-bit SH4
+// opcode value -- indexed the same way OpDesc[] is, so OpDesc[i]->diss
+// gives the disassembly string directly for the dump. Off by default
+// (only enabled by setting FC_IFB_COUNT in the environment before
+// launching), same opt-in pattern as EmitPerfMapEntry below -- a debug/
+// profiling aid, not something a normal player's session needs. See
+// docs/tech_debits.md for the question this answers: which SH4 opcodes
+// (if any) actually hit the interpreter fallback in real gameplay,
+// since ~17 opcodes in the table have neither a hand-written recompiler
+// handler nor a generic-decode descriptor and always fall here.
+static bool IfbCountEnabled()
+{
+	static int enabled = -1; // -1: not checked yet, 0: disabled, 1: enabled
+	if (enabled == -1)
+		enabled = getenv("FC_IFB_COUNT") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+static u64 g_ifbHitCount[0x10000];
+static void ifb_counted_call(u32 op)
+{
+	g_ifbHitCount[op]++;
+	OpDesc[op]->oph(op);
+}
+// Dumps unconditionally when called -- caller (driver.cpp, gated by
+// IfbCountEnabled()) decides when. Overwrites the file each time so the
+// latest snapshot is always readable without waiting for a clean
+// shutdown (this core's shutdown path is known unreliable, see
+// docs/tech_debits.md item 5.3's crash addendum).
+void DumpIfbCounts()
+{
+	char path[64];
+	snprintf(path, sizeof(path), "/tmp/ifb-counts-%d.txt", (int)getpid());
+	FILE *f = fopen(path, "w");
+	if (f == nullptr)
+		return;
+	for (u32 i = 0; i < 0x10000; i++)
+	{
+		if (g_ifbHitCount[i] != 0 && OpDesc[i] != nullptr)
+			fprintf(f, "%llu\t%04x\t%s\n", (unsigned long long)g_ifbHitCount[i], i, OpDesc[i]->diss);
+	}
+	fclose(f);
+}
+
 #include "hw/sh4/sh4_mmr.h"
 #include "hw/sh4/sh4_interrupts.h"
 #include "hw/sh4/sh4_core.h"
@@ -390,7 +433,16 @@ public:
 
 				if (!mmu_enabled())
 				{
-					GenCallRuntime(OpDesc[op.rs3._imm]->oph);
+					// FC_IFB_COUNT (opt-in, see comment above IfbCountEnabled()):
+					// route through a counting wrapper instead of calling the
+					// interpreter handler directly, to see which opcodes (if
+					// any) actually hit this fallback in real gameplay. Not
+					// instrumented in the mmu_enabled() branch below -- MMU is
+					// off for the content this was checked against.
+					if (IfbCountEnabled())
+						GenCallRuntime(ifb_counted_call);
+					else
+						GenCallRuntime(OpDesc[op.rs3._imm]->oph);
 				}
 				else
 				{

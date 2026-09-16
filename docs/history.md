@@ -1489,3 +1489,133 @@ decidir atacar.
   deployado no device, `disabled` no `retrorun.cfg` oficial e em todos
   os `.cfg` de teste. Ver item 5.3 em `tech_debits.md` pro registro
   completo.
+
+## 2026-09-16 (continuação) — Auditoria: seria seguro nativizar `lds Rn,FPSCR` no JIT?
+
+- Ponto de partida: instrumentação `FC_IFB_COUNT` (opt-in, `rec_arm64.cpp:35-76`,
+  ver item novo em `tech_debits.md` seção 1) contou hits de `shop_ifb` por
+  opcode SH4 em Shenmue real (90s+90s warmup, 2476 frames). `lds
+  <REG_N>,FPSCR` domina disparado (484.809 hits, ~196/frame), seguido de
+  `lds.l @<REG_N>+,FPSCR` (~21/frame), `div1` (~62/frame) e `tas.b`.
+- Subagente de investigação (read-only, sem medição nova) despachado pra
+  responder: por que esses opcodes caem no fallback, o que a instrução real
+  faz, se `shop_sync_fpscr`/`UpdateFPSCR` já dão uma base pra tradução
+  nativa, se existe precedente de invalidação de bloco por mudança de modo
+  de FPU, e um veredito de risco.
+- **Achado central:** `state.cpu.FPR64`/`FSZ64` (o que decide, em
+  `core/hw/sh4/dyna/decoder.cpp`, se um bloco trata FPU em precisão simples
+  ou dupla e como pareia registradores) são capturados **uma única vez**,
+  no início da compilação do bloco (`decoder.cpp:954-955`, do FPSCR ao vivo
+  em `driver.cpp:216`), e **nunca atualizados** por `lds`/`lds.l Rn,FPSCR`
+  — só `fschg` atualiza um desses campos mid-block, e só porque seu efeito
+  é um XOR de bit fixo conhecido em tempo de compilação, não um valor de
+  registrador lido em runtime (que é exatamente o caso de `lds`). A
+  segurança de hoje vem de um fim de bloco FORÇADO imediatamente após
+  qualquer opcode que escreve FPSCR e cai no fallback
+  (`decoder.cpp:1034-1037`) — não existe invalidação de bloco dedicada a
+  FPSCR no `blockmanager` (dispatch é indexado só por endereço,
+  `blockmanager.cpp:44-49`).
+- **`shop_sync_fpscr` existe completo (SHIL + codegen ARM64/x64/x86 +
+  regalloc + SSA) mas nunca é emitido** (`grep "Emit(shop_sync_fpscr"` em
+  todo `core/` = vazio) — infraestrutura órfã, provavelmente preparada pra
+  uma tradução nativa que nunca foi conectada no decoder. Sozinha não
+  resolve o problema de `FPR64`/`FSZ64` obsoletos (sincroniza estado físico
+  — banco FR/XF, modo de arredondamento do host — não o estado de
+  decodificação do bloco).
+- **Veredito:** tradução nativa "ingênua" (escrever FPSCR e continuar o
+  bloco sem forçar fim) = **risco ALTO**, corrupção silenciosa de FPU sem
+  rede de segurança em runtime pra detectar. Caminho "nativizar só quando
+  PR/SZ não mudam, fallback idêntico ao atual quando mudam" = **risco
+  MÉDIO**, viável (existe até uma máscara de 2 bits pronta e nunca usada,
+  `fpscr_t::PR_SZ` em `sh4_if.h:271/275`) mas exige mecanismo novo de fim
+  de bloco condicionado a valor de runtime (o precedente mais próximo,
+  `BET_Cond_0/1`, é hardcoded pra `sr.T`, não genérico).
+- **Não implementado — só investigação, por pedido explícito.** Documento
+  completo com toda citação arquivo:linha em `docs/fpscr_jit_code_audit.md`.
+  Próximo passo sugerido (não feito): instrumentar `fpscr.full` antigo-vs-
+  -novo nos hits reais desse opcode pra medir que fração de fato muda
+  `PR`/`SZ` antes de decidir se vale implementar o caminho de risco médio.
+  completo.
+
+## 2026-09-16 (continuação 2) — Pesquisa externa: como outros JITs de SH4/outras CPUs tratam FPSCR-like
+
+- Complemento externo à auditoria interna acima (`docs/fpscr_jit_code_audit.md`):
+  em vez de olhar só o código deste fork, foi lido código-fonte real do
+  `flyinghead/flycast` (master, ~10 anos mais evoluído que este fork),
+  do `inolen/redream` (outro JIT SH4 independente), do `dolphin-emu/dolphin`
+  (JIT PowerPC, paralelo com paired-single/`GQR`/`HID2`) e do `hrydgard/ppsspp`
+  (JIT MIPS, paralelo com `FCR31`/`ctc1`), pra ver se existe precedente de
+  compilar nativamente uma escrita em registrador de controle de FPU que muda
+  modo de precisão, em vez de sempre cair no interpretador.
+- **Achado central, e confirma de forma independente o veredito da auditoria
+  interna:** nem `flycast` master nem `redream` compilam `LDS Rn,FPSCR` como um
+  "mov" contínuo sem terminar o bloco. Os dois fazem exatamente o padrão que a
+  auditoria interna já tinha identificado como o único caminho seguro: a
+  escrita bruta é nativa (`shop_mov32` no flycast master), mas o bloco termina
+  ali (`dec_End(..., BET_StaticJump, false)` no flycast; `SH4_FLAG_STORE_FPSCR`
+  tratado como terminador no redream) — o bloco seguinte é recompilado do zero
+  lendo o FPSCR real. Em contraste, `FRCHG`/`FSCHG` (que só invertem 1 bit
+  fixo, efeito conhecido em tempo de compilação) continuam no mesmo bloco sem
+  terminá-lo nos dois projetos — é essa distinção (efeito previsível em
+  compile-time vs. valor de runtime arbitrário) que decide quem pode continuar
+  no bloco e quem não pode.
+- **Precedente extra do redream, não confirmado no flycast master:** blocos que
+  dependem de FPSCR recebem um assert em runtime no início (`ir_assert_eq`
+  comparando FPSCR real vs. assumido na compilação) — cobre o caso de
+  reentrar o mesmo PC via branch sob modo diferente, uma lacuna que a
+  auditoria interna tinha apontado (dispatch indexado só por endereço, sem
+  `fpu_cfg` na chave). Implementação do fallback desse assert não foi
+  rastreada (não baixei o backend do redream).
+- **Precedentes fora de SH4, pedidos como adendo:** Dolphin (PowerPC) trata os
+  dois lados do mesmo problema de forma diferente dependendo do tipo de bit —
+  `GQR` (equivalente mais próximo do PR/SZ do SH4: decide *forma* de código)
+  é nativo sem terminar bloco, mas com um pass de constant-propagation
+  (`js.constantGqrValid`) que gera um caminho genérico-mas-nativo quando o
+  valor não é constante; já `HID2` (que liga/desliga paired-single como um
+  todo, mais perto architeturalmente do problema do FPSCR completo) **cai
+  100% no fallback pro interpretador** (`default: FALLBACK_IF(true)` em
+  `Jit_SystemRegisters.cpp`, sem case dedicado) — ou seja, mesmo o JIT do
+  Dolphin, 20+ anos maduro, escolhe fallback puro pra esse tipo de bit, igual
+  ao que este fork faz hoje. PPSSPP (MIPS) é o contra-exemplo: `ctc1`/`FCR31`
+  é nativo sem terminar bloco nenhum, mas só porque os bits que importam lá
+  são puramente arredondamento/flush-to-zero — mapeados direto pro registro
+  de controle da FPU real do host (`MXCSR`/`FPCR`), não pra forma de código.
+  Achado curioso: o flycast master parece já fazer algo parecido
+  (`Sh4Context::restoreHostRoundingMode()`, chamado em `driver.cpp`) só pro
+  bit `RM` do FPSCR — não confirmado em detalhe, mas é pista de que só a
+  parte PR/SZ do FPSCR exigiria mesmo o tratamento de "terminar bloco".
+- **Conclusão prática:** não existe atalho seguro conhecido além do que a
+  auditoria interna já tinha proposto (mov nativo + fim de bloco forçado,
+  igual ao flycast master) — nenhum dos projetos de referência encontrados
+  arrisca continuar o bloco depois de uma escrita de FPSCR com efeito
+  desconhecido em compile-time. Documento completo com todas as citações
+  (URLs de código real, manual oficial SH-4 `ADE-602-156D` com layout de bits
+  e custo em ciclos) em `docs/sh4_fpscr_external_research.md`.
+
+## 2026-09-16 (continuação 3) — Síntese final: plano de nativização de `LDS Rn,FPSCR`
+
+- Terceiro documento do padrão "2 agentes + junção" (mesmo padrão já usado
+  antes pra investigação de renderização), combinando `docs/fpscr_jit_code_audit.md`
+  (auditoria interna) e `docs/sh4_fpscr_external_research.md` (pesquisa
+  externa) num plano concreto: `docs/fpscr_native_translation_plan.md`.
+- **Recomendação da síntese:** o caminho validado por dois JITs SH4 reais e
+  independentes (`flyinghead/flycast` master e `redream`) é mais simples do
+  que a alternativa "risco médio" que a própria auditoria interna tinha
+  cogitado — não precisa de plumbing novo de fim-de-bloco condicionado a
+  valor de runtime (o que a auditoria propôs pra só nativizar quando PR/SZ
+  não mudam). Os projetos reais terminam o bloco **incondicionalmente** toda
+  vez que `LDS Rn,FPSCR`/`LDS.L @Rn+,FPSCR` executa, reusando o mecanismo de
+  fim de bloco (`dec_End`/`BET_StaticJump`) que este fork já tem e já usa em
+  outros lugares — sem inventar nada novo em decodificação/regalloc/SSA.
+  Risco reavaliado pra baixo-médio (mais baixo que a estimativa inicial da
+  auditoria, que não tinha ainda a validação externa).
+- Esboço de implementação registrado no documento (dar `decode` novo ou
+  reaproveitar `shop_sync_fpscr` — órfão, já com codegen completo — pras
+  duas entradas de tabela em `sh4_opcode_list.cpp:240,275`, emitir a escrita
+  + forçar `dec_End` imediatamente depois, medir em Shenmue com o protocolo
+  já estabelecido). **Nenhuma implementação feita ainda — decisão de seguir
+  ou não fica pendente com o usuário.**
+- Instrumentação `FC_IFB_COUNT` (`core/rec-ARM64/rec_arm64.cpp`,
+  `core/libretro/libretro.cpp`) que motivou toda essa investigação,
+  commitada nesta mesma sessão junto com os 3 documentos (código opt-in,
+  sem custo quando a env var não está setada).
