@@ -53,10 +53,6 @@ dois é uma ferramenta de investigação legítima.
   pegou a intro e a outra pegou "New Game" + cutscene de neve (cena bem mais
   pesada) — sempre confirme o que cada rodada realmente mediu antes de comparar
   números.
-- **Testes de performance precisam de pelo menos ~90-100s de warmup** antes de
-  começar a medir, pra passar do boot/BIOS/logos e chegar em conteúdo 3D real do
-  jogo. Não tire conclusão de rodadas curtas (<30s) a menos que o objetivo seja
-  especificamente isolar a tela de boot.
 - **Build cross-compile (aarch64) tem bugs conhecidos no Makefile deste fork —
   não confie em `CXX ?=`/`CC_AS ?=` do Makefile.** Sempre passe explicitamente na
   linha de comando:
