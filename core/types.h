@@ -552,6 +552,10 @@ struct settings_t
 		bool WidescreenGameHacks;
 		int AnisotropicFiltering;
 		bool PowerVR2Filter;
+		// 0 = disabled. Otherwise, the "spike" multiplier over the recent
+		// baseline RenderFrame() time that triggers a translucent-layer skip
+		// next frame -- lower = more aggressive (triggers on smaller spikes).
+		float FrameBudgetSkipTranslucentThreshold;
 	} rend;
 
 	struct

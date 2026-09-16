@@ -41,6 +41,16 @@
 extern u32 gcflip;
 extern glm::mat4 ViewportMatrix;
 
+// Speedhack (opt-in, settings.rend.FrameBudgetSkipTranslucentThreshold): decided at the
+// end of the PREVIOUS RenderFrame() call, based on how long that frame's
+// render actually took vs. a running baseline -- see gles.cpp. When true,
+// DrawStrips() (gldraw.cpp) skips the Translucent + Translucent_Modifier_Volume
+// PowerVR lists for THIS frame only (opaque geometry/gameplay-critical content
+// is untouched). Trades a visible glitch (missing transparency/particle
+// effects) for staying on pace, on frames immediately following a real spike.
+// See docs/tech_debits.md.
+extern bool render_skip_translucent_this_frame;
+
 void DrawStrips(void);
 
 struct PipelineShader

@@ -689,6 +689,12 @@ void DrawStrips()
 			DrawModVols(previous_pass.mvo_count, current_pass.mvo_count - previous_pass.mvo_count);
 
 		//Alpha blended
+		// Frame-budget speedhack (settings.rend.FrameBudgetSkipTranslucent):
+		// skip the translucent list entirely for this frame -- also skips
+		// the CPU-side sort (SortTriangles/SortPParams), not just the GPU
+		// submission. Opaque/Punch-Through/Modifier-Volumes above are never
+		// affected. See render_skip_translucent_this_frame in gles.h.
+		if (!render_skip_translucent_this_frame)
 		{
 			if (current_pass.autosort)
 			{

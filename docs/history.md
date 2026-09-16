@@ -1409,3 +1409,67 @@ decidir atacar.
   Ver item 5.1 em `tech_debits.md` e frente de renderização em
   `current_plan.md` pro item 2 (instrumentar `rqueue`) como próximo
   passo natural, não decidido ainda.
+
+## 2026-09-16 — Skip de Translucent sob pressão de frame time (speedhack novo) + bug real de build
+
+- Usuário perguntou sobre técnicas "toscas" de preencher gap de frame
+  faltante (frame duplication, black frames, preemptive). Investigação:
+  frame duplication já existe (`is_dupe`/`video_cb` em `libretro.cpp`,
+  protocolo padrão libretro); black frame insertion é ferramenta de
+  nitidez de movimento, não de preenchimento de gap (descartada); a
+  ideia real e nova era usar a separação de listas do PowerVR
+  (`ListType_Opaque/Punch_Through/Translucent`, `ta_structs.h:754-758`)
+  pra pular a lista Translucent (efeitos/partículas) quando o frame
+  anterior estourou o orçamento, mantendo geometria opaca intacta.
+  Usuário: "prefiro glitch que lentidão" — sinal verde pra implementar.
+- Implementado: medição via `chrono` em `RenderFrame()`
+  (`core/rend/gles/gles.cpp`), baseline EWMA só de frames completos
+  (evita efeito catraca), decisão pro frame seguinte, aplicada em
+  `DrawStrips()` (`core/rend/gles/gldraw.cpp`) pulando o bloco "Alpha
+  blended" inteiro (sort em CPU incluído, não só GPU). Opção opt-in via
+  libretro core option, categoria "hacks".
+- **Bug 1 (achado e corrigido):** primeiro teste não disparou nenhuma
+  vez. Causa: editei o `retroarch-core-options.cfg` errado — o
+  `retrorun3` lê as opções `reicast_*` embutidas direto no `.cfg`
+  passado via `-c` (`retrorun_debug_kofnw.cfg`), não aquele arquivo
+  genérico. Confirmado com log temporário (aprendi no processo que
+  `INFO_LOG`/`DEBUG_LOG` são cortados em tempo de compilação nesse build
+  `-DNDEBUG`, `core/log/Log.h` define `MAX_LOGLEVEL=LWARNING` — usei
+  `WARN_LOG` pro diagnóstico). Corrigido, disparo confirmado com números
+  coerentes.
+- Usuário pediu opção de agressividade ajustável ("menos e mais
+  agressivo"). Implementado: campo virou `float
+  FrameBudgetSkipTranslucentThreshold` (0=desligado) em vez de `bool`,
+  3 níveis (`low`=2,2x, `medium`=1,4x, `high`=1,15x) em
+  `core/types.h`/`libretro_core_options.h`/`libretro.cpp`.
+- **Bug 2 (grave, achado e corrigido):** depois desse rebuild
+  incremental, os 3 níveis testados deram **~107ms de `core_average`
+  (~9fps)** — regressão catastrófica, confirmada tanto pelo benchmark
+  quanto pelo usuário observando a tela ao vivo. **Diagnóstico errado no
+  caminho:** presumi que o usuário estava jogando ao vivo e meus testes
+  automatizados brigavam pelo display — usuário corrigiu firmemente
+  ("pare de assumir coisas, eu não estou jogando"). Reconsiderei: o
+  usuário só estava OBSERVANDO a tela enquanto eu lançava os testes
+  (não jogando), então a hipótese de contenção de processo não se
+  sustentava mais. **Também descartei warmup curto** (repeti com os
+  mesmos parâmetros que tinham funcionado antes, 15s/5s — ainda ruim).
+  **Causa real:** mudei o TIPO de um campo (`bool`→`float`) dentro de
+  `settings_t` (`core/types.h`), um struct global incluído por quase
+  todo o projeto. O build incremental só recompilou 1-3 `.cpp` (os
+  editados direto) em vez dos ~100+ que também incluem `types.h` — sem
+  erro, sem warning, mas o binário final ficou com `.o`s discordando
+  sobre o layout de `settings` (offsets diferentes pros campos
+  seguintes na struct) → corrupção de memória silenciosa. **Confirmado**
+  rodando o binário ANTERIOR (antes de qualquer mudança desta feature)
+  nas mesmas condições, mesmo momento: `core_average`=11,98ms, limpo —
+  provando que não era estado do device/térmico, era o binário.
+  `make clean` + rebuild completo (111 arquivos, vs 1-3 do incremental)
+  resolveu por completo: `core_average` voltou a 11,88ms, mecanismo
+  disparando corretamente (30x em 15s com "high"). Adicionado item novo
+  no `CLAUDE.md` sobre rodar `make clean` após qualquer mudança em
+  header amplamente incluído (não só mudança de `CXX`/`CC`, que já era
+  coberto).
+- **Status ao fim da sessão:** recurso implementado, funcional,
+  deployado (default `medium` no `retrorun_debug_kofnw.cfg`) — mas
+  ainda sem validação de jogo real (usuário só observou os lançamentos
+  automatizados de teste). Ver item 5.2 em `tech_debits.md`.

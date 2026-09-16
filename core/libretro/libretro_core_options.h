@@ -307,6 +307,22 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "1x",
    },
    {
+      CORE_OPTION_NAME "_frame_budget_skip_translucent",
+      "Skip Translucent Effects On Frame Time Spikes (Speedhack)",
+      NULL,
+      "When a frame's render takes noticeably longer than the recent baseline (e.g. a burst of particles/effects during a special move), skip drawing the translucent layer (transparency/particle effects; opaque geometry is untouched) on the NEXT frame to help catch back up. Trades a visible glitch (effects flicker/disappear briefly) for avoiding a slowdown. Reactive to the previous frame only -- may not help every spike, and the flicker can be noticeable in effects-heavy games. Higher aggressiveness triggers on smaller spikes (more frequent, smaller glitches); lower aggressiveness only reacts to bigger spikes (rarer, but the spike itself lasts longer before it catches up).",
+      NULL,
+      "hacks",
+      {
+         { "disabled",     NULL },
+         { "low",          "Low (only big spikes, ~2.2x baseline)" },
+         { "medium",       "Medium (~1.4x baseline)" },
+         { "high",         "High (~1.15x baseline, triggers often)" },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+   {
       CORE_OPTION_NAME "_widescreen_hack",
       "Widescreen Hack (Restart Required)",
       NULL,
