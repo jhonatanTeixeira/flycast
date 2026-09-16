@@ -15,6 +15,18 @@
 #define GL_MINOR_VERSION                  0x821C
 #endif
 
+// glInvalidateFramebuffer is GLES3 core, but this fork's glsym symbol table
+// (core/libretro/glsym_private.h, used instead of the fuller
+// libretro-common/glsym_gl.h because of HAVE_GLSYM_PRIVATE) only covers
+// GLES2 + selected OES/KHR extensions -- it was never wired up for GLES3
+// core functions like this one, so it isn't declared anywhere reachable
+// from here. Resolve it ourselves via EGL (the actual context API on this
+// KMSDRM/EGL platform, independent of whatever windowing toolkit sits on
+// top of it) instead of extending that symbol table for one function.
+#include <EGL/egl.h>
+typedef void (*PFN_glInvalidateFramebuffer)(GLenum target, GLsizei numAttachments, const GLenum *attachments);
+static PFN_glInvalidateFramebuffer glInvalidateFramebuffer_;
+
 GLCache glcache;
 gl_ctx gl;
 
@@ -418,6 +430,7 @@ void findGLVersion()
 		{
 			gl.gl_version = "GLES3";
 			gl.glsl_version_header = "#version 300 es";
+			glInvalidateFramebuffer_ = (PFN_glInvalidateFramebuffer)eglGetProcAddress("glInvalidateFramebuffer");
 		}
 		else
 		{
@@ -1055,6 +1068,24 @@ static bool RenderFrame(void)
 
 	if (is_rtt)
 		ReadRTTBuffer();
+
+	// Tell the driver we're done with depth/stencil for whichever framebuffer
+	// is still bound here (the RTT one if is_rtt, otherwise the frontend's
+	// main one) -- nothing downstream ever reads either back (depth is
+	// cleared again next frame at the top of this function; RTT only reads
+	// color, in ReadRTTBuffer() above). On Mali (a tile-based renderer) this
+	// avoids writing tile memory back to system memory for data that's about
+	// to be discarded/re-cleared anyway. Per ARM's own guidance this must run
+	// before the framebuffer is unbound, not at its next use -- doing it here,
+	// right before RenderFrame() returns and control passes back to whatever
+	// binds the next framebuffer, is the earliest point that's still safe for
+	// both the is_rtt and non-RTT case. See docs/rendering_improvement_plan.md
+	// item 1 / docs/tech_debits.md.
+	if (gl.is_gles && gl.gl_major >= 3 && glInvalidateFramebuffer_ != nullptr)
+	{
+		GLenum attachments[] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
+		glInvalidateFramebuffer_(GL_FRAMEBUFFER, 2, attachments);
+	}
 
 	return !is_rtt;
 }

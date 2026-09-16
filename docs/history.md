@@ -1336,3 +1336,76 @@ decidir atacar.
   incluindo uma hipótese não testada pra por que não ajudou (o overhead
   visto no profile pode não estar no caminho crítico do tempo de frame
   nessa cena específica).
+
+## 2026-09-15/16 — Item 1 do plano de renderização: `glInvalidateFramebuffer`
+
+- Pedido do usuário ("eu quero entrar nesse mundo [renderização]... Consegue
+  jogar uns 2 agentes de investigação?") disparou 2 agentes paralelos: um
+  auditando `core/rend/gles/*.cpp` linha a linha, outro pesquisando fontes
+  primárias (guia oficial de 135 páginas da ARM, blog "Mali Performance",
+  deck "Beyond Porting", precedente do Dolphin). Resultado cruzado em
+  `docs/gles_code_audit.md` + `docs/mali_gles_best_practices.md` →
+  sintetizado em `docs/rendering_improvement_plan.md`, 7 itens
+  priorizados. Item 1 (`glInvalidateFramebuffer`) era o de maior
+  confiança: zero ocorrências no código (fato do audit) + ARM documenta
+  que buffer transitório precisa ser invalidado ANTES do unbind, não no
+  próximo uso.
+- **Implementado** em `core/rend/gles/gles.cpp`: resolvido via
+  `eglGetProcAddress` (a tabela de símbolos deste fork,
+  `glsym_private.h`/`HAVE_GLSYM_PRIVATE`, só cobre GLES2+extensões, não
+  GLES3 core — primeira tentativa de compilar falhou por isso). Chamado
+  no fim de `RenderFrame()`, depois de `ReadRTTBuffer()`, invalidando
+  `GL_DEPTH_ATTACHMENT`+`GL_STENCIL_ATTACHMENT` (confirmado em
+  `gltex.cpp:186-257`/`BindRTT()` que este build usa o branch de
+  attachments separados, não combinado).
+- Build limpo, deploy, sanity check sem crash em kofnw, Metal Slug 6 e
+  mbaa.
+- **Medição — Metal Slug 6, protocolo oficial** (`retrorun3 --benchmark 60
+  --benchmark-warmup 15`, mesmo savestate/cena, 2 rodadas), comparado
+  contra a baseline pós-fix-da-SQ já documentada (item 1.7):
+  | | baseline (sem invalidate) | Run 1 | Run 2 |
+  |---|---|---|---|
+  | `core_average` | 21,00ms | 21,397ms (+1,9%) | 21,660ms (+3,1%) |
+  | `core_frames`/60s | 1932 | 1916 (-0,8%) | 1910 (-1,1%) |
+
+  As 2 rodadas concordam na direção: **pequena regressão real**, não
+  ruído. Cena é CPU-bound (o próprio usuário já tinha marcado essa cena
+  como "nunca vai ficar mais leve") — sem banda de framebuffer sobrando
+  pra aliviar, só sobra o custo fixo da chamada extra.
+- **mbaa** (2D, ação, testado ao vivo pelo usuário jogando — não
+  benchmark automatizado): usuário relatou pico novo de 50fps (teto
+  histórico do jogo nesse device era 45fps). Percentis de
+  `active_frame` (frame time real, core+vídeo) das 2 rodadas com o fix:
+  p50≈20,85-20,97ms (≈47,7-48,0fps), p95≈22,90-26,13ms, p99≈28,27-102,64ms
+  (cauda variável, puxada por picos de ação genuínos do gameplay, não
+  ruído térmico — usuário esclareceu que a variância run-to-run era
+  porque estava jogando ativamente, não rodando um benchmark passivo).
+  Usuário: "eu pessoalmente acho que ficou melhor... talvez tenha sido
+  por conta do frameskip do retrorun ter tido mais espaço para
+  respirar" — e optou por **não** jogar uma sessão baseline equivalente
+  (sem o fix) pra comparação formal.
+- `kofnw` (benchmark automatizado, sessão anterior): sem diferença clara
+  em nenhuma direção.
+- **Mecanismo plausível levantado em resposta ao usuário** (não
+  confirmado por instrumentação direta, mas consistente com achado de
+  código já documentado): `docs/gles_code_audit.md` §5.3 já tinha
+  identificado que `QueueRender()`/`rqueue` é fila de slot único — o
+  frame simulado seguinte é descartado (frameskip) se a thread de
+  render ainda estiver dentro de `Render()` do frame anterior. Ou seja,
+  o tempo de `Render()` (que agora inclui a chamada de invalidate) não é
+  só custo de CPU — é também a *janela* de frameskip. Em cena GPU-bound
+  (mbaa em ação), se o invalidate reduz trabalho real de GPU (bandwidth
+  de depth/stencil), `Render()` termina mais rápido do ponto de vista da
+  emu thread, o slot libera mais rápido, menos frames são descartados —
+  "mais espaço pra respirar" sem precisar reduzir `core_average`. Em
+  cena CPU-bound (Metal Slug 6), `Render()` nunca era o fator limitante,
+  então esse mecanismo não tem como ajudar e só sobra o custo da
+  chamada. Reconcilia os 3 resultados sem contradição, mas fica como
+  hipótese até alguém instrumentar o contador de descarte da
+  `QueueRender()` (item 2 do `rendering_improvement_plan.md`).
+- **Decisão:** manter a mudança. É uso correto de API por documentação
+  oficial da ARM, custo pequeno e concentrado exatamente onde não pode
+  ajudar mesmo, benefício potencial real em cena GPU-bound. Commitado.
+  Ver item 5.1 em `tech_debits.md` e frente de renderização em
+  `current_plan.md` pro item 2 (instrumentar `rqueue`) como próximo
+  passo natural, não decidido ainda.

@@ -282,3 +282,33 @@ de fechar esse gap especificamente pra Shenmue em cena pesada.
 1.4, 1.5, 2.4-2.7, 3.5, 3.8, 4.3, 4.5, 4.7, 4.8 — ver `docs/tech_debits.md`
 pra descrição de cada um. Ficam de fora da fila ativa a menos que o item 0
 (recaptura `perf`) traga evidência nova apontando pra algum deles.
+
+## Frente de renderização (`docs/rendering_improvement_plan.md`, aberta 2026-09-15)
+
+Nasceu de dois agentes de investigação (auditoria de código +
+boas-práticas Mali/GLES externas), ver `docs/gles_code_audit.md` e
+`docs/mali_gles_best_practices.md`. Fila priorizada de 7 itens, item 1 já
+trabalhado nesta sessão:
+
+1. **done (2026-09-16)** — `glInvalidateFramebuffer(depth+stencil)` no fim
+   de `RenderFrame()`. Resultado misto, mantido no código. Ver item 5.1 em
+   `tech_debits.md` pro registro completo: pequena regressão real (+2-3%
+   `core_average`) em Metal Slug 6 (CPU-bound, protocolo oficial, 2 rodadas
+   consistentes), sinal positivo forte mas não formalmente controlado em
+   mbaa (GPU-bound em ação, usuário jogando: pico novo de 50fps vs teto
+   histórico de 45fps), kofnw neutro. Mecanismo plausível pra reconciliar:
+   §5.3 do audit (fila `rqueue` de slot único descarta frame se `Render()`
+   ainda não terminou) — em cena GPU-bound, `Render()` mais rápido = menos
+   frameskip, independente do `core_average`. Não confirmado por
+   instrumentação direta (contador de descarte em `QueueRender()`) — seria
+   o próximo passo natural se o item 2 abaixo for retomado.
+2. **pendente** — Instrumentar frameskip da `rqueue` (audit §5.3): contador
+   no branch de descarte de `QueueRender()`, correlacionado com duração de
+   `Render()`. Item mais promissor pra confirmar o mecanismo do item 1 e
+   medir taxa de frameskip diretamente (não só `core_average`/fps).
+3. **pendente** — Pool de FBO/renderbuffer/textura de RTT (parar de
+   destruir+recriar do zero). Ver resumo executivo em
+   `rendering_improvement_plan.md`.
+4-7. **pendente** — texture-in-flight, CLUT shader-lookup, máscara de
+   `PP_SameGPUState`, documentação de risco texid/CustomTextures. Ver
+   `rendering_improvement_plan.md` pra detalhe de cada um.
