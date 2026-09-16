@@ -406,7 +406,12 @@ protected:
 			if (op->op == shop_sync_sr && (/*reg == reg_sr_T ||*/ reg == reg_sr_status || reg == reg_old_sr_status || (reg >= reg_r0 && reg <= reg_r7)
 					|| (reg >= reg_r0_Bank && reg <= reg_r7_Bank)))
 				return true;
-			if (op->op == shop_sync_fpscr && (reg == reg_fpscr || reg == reg_old_fpscr || (reg >= reg_fr_0 && reg <= reg_xf_15)))
+			// All regs, not just the FP ones: shop_sync_fpscr can now bail out
+			// of the block mid-way (the PR/SZ guard in the ARM64 backend), and
+			// that exit jumps straight to the dispatcher, so every live value
+			// has to already be in the context -- same guarantee shop_ifb needs
+			// above, for the same reason. See docs/fpscr_native_translation_plan.md.
+			if (op->op == shop_sync_fpscr)
 				return true;
 			// if reg is used by a subsequent vector op that doesn't use reg allocation
 			if (UsesReg(op, reg, version, true))

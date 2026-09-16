@@ -1359,6 +1359,19 @@ void retro_run (void)
       }
    }
 
+   // FC_FPSCR_STATS (opt-in, see sh4_core_regs.cpp): same idea, for the
+   // "how many FPSCR writes actually change anything" counters.
+   if (getenv("FC_FPSCR_STATS") != nullptr)
+   {
+      extern void DumpFpscrStats();
+      static int fpscrDumpCounter = 0;
+      if (++fpscrDumpCounter >= 150)
+      {
+         fpscrDumpCounter = 0;
+         DumpFpscrStats();
+      }
+   }
+
    // Live measured retro_run() call rate (g_measuredFps) -- mirrors
    // retrorun3's OWN formula, verified against its real source
    // (navy1978/retrorun, src/main.cpp): count total calls, and once a full

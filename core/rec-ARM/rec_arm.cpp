@@ -2481,6 +2481,7 @@ void ngen_GetFeatures(ngen_features* dst)
 {
 	dst->InterpreterFallback = false;
 	dst->OnlyDynamicEnds     = false;
+	dst->FpscrGuard          = false;	// no PR/SZ guard here: FPSCR writes end the block, as before
 }
 
 RuntimeBlockInfo* ngen_AllocateBlock()

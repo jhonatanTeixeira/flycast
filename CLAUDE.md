@@ -42,6 +42,19 @@ dois é uma ferramenta de investigação legítima.
 
 ## Regras de ouro
 
+- **Código não se reverte — se corrige. O projeto só anda pra frente.** Quando uma
+  implementação não entrega o ganho esperado, a conclusão NÃO é "o caminho é
+  inválido, vamos reverter" — é "a implementação (ou a premissa dela) está
+  incompleta, vamos achar o porquê e corrigir". Nada de `git revert`, nada de
+  descartar trabalho feito, nada de voltar pro estado anterior como "solução".
+  Isso vale com força dobrada quando existe prova em outros emuladores maduros de
+  que o caminho está certo: se lá funciona e aqui piorou, o que está errado é a
+  nossa versão, não o caminho — vá investigar a diferença até achar. Já aconteceu
+  neste projeto de uma mudança dar resultado nulo porque a premissa da
+  investigação estava furada (o fim de bloco forçado do FPSCR já existia desde
+  2015, então a "nova" implementação só trocava o destino da chamada em vez de
+  eliminá-la) — a resposta certa ali era corrigir pra eliminar a chamada de
+  verdade, não desfazer.
 - **Meça antes de otimizar, sempre.** Toda hipótese levantada só de olhar código
   (mesmo as "óbvias") precisa ser validada com medição real no device antes de
   virar uma mudança de código. Neste projeto, hipóteses razoáveis já cairam por

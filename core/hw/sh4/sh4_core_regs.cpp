@@ -5,6 +5,7 @@
 #include "types.h"
 #include "sh4_core.h"
 #include "sh4_interrupts.h"
+#include <unistd.h>	// getpid(), for the opt-in FPSCR stats dump below
 
 
 Sh4RCB* p_sh4rcb;
@@ -144,14 +145,68 @@ static void setHostRoundingMode()
 	}
 }
 
+// Opt-in counters (FC_FPSCR_STATS in the environment), same pattern as
+// FC_IFB_COUNT in rec_arm64.cpp. Answers the question the FPSCR JIT work
+// needs before it can be finished: of all the FPSCR writes a game does,
+// how many actually change anything? A write that leaves every meaningful
+// bit alone pays a full JIT->C++ call plus a forced block end for nothing,
+// so the no-op rate decides whether an inline guard is worth emitting, and
+// the PR/SZ-unchanged rate decides whether the forced block end can be
+// made conditional. See docs/fpscr_native_translation_plan.md.
+u64 g_fpscrTotal;
+u64 g_fpscrNoOp;        // nothing changed at all
+u64 g_fpscrPrSzSame;    // PR/SZ unchanged (block end would be avoidable)
+u64 g_fpscrFrChanged;   // FR changed (the expensive ChangeFP() path)
+u64 g_fpscrRmDnChanged; // RM/DN changed (the expensive host FPCR write)
+
+static bool FpscrStatsEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_FPSCR_STATS") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+
 //called when fpscr is changed and we must check for reg banks etc..
 void UpdateFPSCR()
 {
+	if (FpscrStatsEnabled())
+	{
+		u32 diff = fpscr.full ^ old_fpscr.full;
+		g_fpscrTotal++;
+		if (diff == 0)
+			g_fpscrNoOp++;
+		if ((diff & ((1 << 20) | (1 << 19))) == 0)	// SZ is bit 20, PR is bit 19
+			g_fpscrPrSzSame++;
+		if (fpscr.FR != old_fpscr.FR)
+			g_fpscrFrChanged++;
+		if (fpscr.RM != old_fpscr.RM || fpscr.DN != old_fpscr.DN)
+			g_fpscrRmDnChanged++;
+	}
+
 	if (fpscr.FR !=old_fpscr.FR)
 		ChangeFP(); // FPU bank change
 
    old_fpscr=fpscr;
    setHostRoundingMode();
+}
+
+// Overwrites the file each time; caller decides when (libretro.cpp, gated
+// by the same env var). Mirrors DumpIfbCounts()'s approach for the same
+// reason: this core's clean-shutdown path is unreliable.
+void DumpFpscrStats()
+{
+	char path[64];
+	snprintf(path, sizeof(path), "/tmp/fpscr-stats-%d.txt", (int)getpid());
+	FILE *f = fopen(path, "w");
+	if (f == nullptr)
+		return;
+	fprintf(f, "total\t%llu\n", (unsigned long long)g_fpscrTotal);
+	fprintf(f, "noop\t%llu\n", (unsigned long long)g_fpscrNoOp);
+	fprintf(f, "prsz_same\t%llu\n", (unsigned long long)g_fpscrPrSzSame);
+	fprintf(f, "fr_changed\t%llu\n", (unsigned long long)g_fpscrFrChanged);
+	fprintf(f, "rmdn_changed\t%llu\n", (unsigned long long)g_fpscrRmDnChanged);
+	fclose(f);
 }
 
 void RestoreHostRoundingMode()

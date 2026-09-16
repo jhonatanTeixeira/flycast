@@ -293,38 +293,60 @@ sh4dec(i0100_nnnn_0000_1110)
 	dec_End(0xFFFFFFFF,BET_StaticIntr,false);
 }
 
+//Guarded FPSCR write, shared by the two lds-to-FPSCR forms below.
+//
+//Why this isn't just a mov: state.cpu.FPR64/FSZ64 (the PR and SZ bits) are
+//captured ONCE per block, at state_Setup(), and they decide how every FP
+//opcode after this point in the block gets decoded (single vs double
+//precision, register pairing). A runtime value written here could disagree
+//with decisions already baked into the rest of the block.
+//
+//This fork's answer to that, since 2015, was to end the block after every
+//FPSCR write (the OPCODE_SETFPSCR check further down, in the fallback
+//path). That is always correct but always paid: measured on kofnw, 11.9M
+//FPSCR writes and PR/SZ changed in ZERO of them, so ~9.6k block ends per
+//frame bought nothing. So instead of ending the block unconditionally, emit
+//a runtime guard -- the block only bails out to a fresh compile on the cold
+//path where PR/SZ really did change. Same shape as redream's ir_assert_eq
+//guard; see docs/fpscr_native_translation_plan.md for the measurements.
+//
+//rs1 = the PR|SZ value this block was compiled for, rs2 = where to resume
+//if the guard fails. In a delay slot we can't bail out mid-instruction, so
+//fall back to the old unconditional block end there (it's rare, and the
+//branch that owns the delay slot ends the block anyway).
+static void dec_write_fpscr()
+{
+	if (state.cpu.is_delayslot)
+	{
+		// The branch that owns this delay slot ends the block itself -- we
+		// must not end it here, and we can't bail out mid-instruction either.
+		Emit(shop_sync_fpscr);
+		return;
+	}
+	if (!state.ngen.FpscrGuard)
+	{
+		// Backend without the guard: keep the old unconditional block end.
+		Emit(shop_sync_fpscr);
+		dec_End(state.cpu.rpc+2,BET_StaticJump,false);
+		return;
+	}
+	u32 expected_pr_sz = (state.cpu.FSZ64 ? (1 << 20) : 0) | (state.cpu.FPR64 ? (1 << 19) : 0);
+	Emit(shop_sync_fpscr, shil_param(), mk_imm(expected_pr_sz), mk_imm(state.cpu.rpc + 2));
+}
+
 //lds <REG_N>,FPSCR
-//Native translation of the FPSCR write itself (mov, same as any other reg
-//write) + shop_sync_fpscr (native call to UpdateFPSCR(), same helper the
-//interpreter fallback would've called internally) + forced block end right
-//after. Block end is required, not optional: state.cpu.FPR64/FSZ64 (which
-//decide how FP opcodes REST OF THIS BLOCK get decoded) are only captured
-//once, at state_Setup() when the block starts compiling -- a runtime value
-//written here could silently disagree with that decision for any FP op
-//after this one in the same block. Terminating immediately means the next
-//instruction starts a fresh block, compiled from the real (now updated)
-//FPSCR. This is the exact same pattern already used, unconditionally, by
-//both flyinghead/flycast (master) and redream -- see
-//docs/fpscr_jit_code_audit.md and docs/sh4_fpscr_external_research.md for
-//the investigation, and docs/fpscr_native_translation_plan.md for why this
-//is preferred over a conditional (PR/SZ-changed-only) fast path: no known
-//mature JIT actually builds that conditional path, so it's not worth the
-//new block-end-on-runtime-value plumbing it would need.
 sh4dec(i0100_nnnn_0110_1010)
 {
 	u32 n = GetN(op);
 
 	Emit(shop_mov32,reg_fpscr,(Sh4RegType)(reg_r0+n));
-	Emit(shop_sync_fpscr);
-	if (!state.cpu.is_delayslot)
-		dec_End(state.cpu.rpc+2,BET_StaticJump,false);
+	dec_write_fpscr();
 }
 
 //lds.l @<REG_N>+,FPSCR
 //Same as above, but the value comes from memory (post-increment) instead
 //of a GPR -- mirrors dec_LDM(PRM_SREG)'s memory-read shape (used by the
-//sibling MACH/MACL/PR/FPUL cases) plus the same shop_sync_fpscr + forced
-//block end as the register form above.
+//sibling MACH/MACL/PR/FPUL cases).
 sh4dec(i0100_nnnn_0110_0110)
 {
 	u32 n = GetN(op);
@@ -333,9 +355,7 @@ sh4dec(i0100_nnnn_0110_0110)
 	state.info.has_readm=true;
 	Emit(shop_readm,reg_fpscr,rn,shil_param(),4);
 	Emit(shop_add,rn,rn,mk_imm(4));
-	Emit(shop_sync_fpscr);
-	if (!state.cpu.is_delayslot)
-		dec_End(state.cpu.rpc+2,BET_StaticJump,false);
+	dec_write_fpscr();
 }
 
 //nop !

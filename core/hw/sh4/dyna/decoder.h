@@ -42,6 +42,10 @@ struct ngen_features
 {
 	bool OnlyDynamicEnds;     //if set the block endings aren't handled natively and only Dynamic block end type is used
 	bool InterpreterFallback; //if set all the non-branch opcodes are handled with the ifb opcode
+	bool FpscrGuard;          //if set the backend implements the PR/SZ runtime guard on shop_sync_fpscr (rs1/rs2),
+	                          //so a FPSCR write doesn't have to end the block unconditionally. Backends that
+	                          //leave this false keep the old always-end-the-block behaviour, which is always
+	                          //correct, just slower. See dec_write_fpscr() in decoder.cpp.
 };
 struct RuntimeBlockInfo;
 bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles);

@@ -108,7 +108,90 @@ decodificação/regalloc/SSA.
    dois, sempre p50/p95/p99 + média — regra nova do `CLAUDE.md`) em
    Shenmue especificamente, já que é onde o achado apareceu.
 
-## Decisão
+## Correção (v2) — a premissa do plano acima estava furada
+
+**O erro central deste documento:** ele tratou "terminar o bloco" como o
+mecanismo NOVO a ser implementado. Mas este fork **já terminava o bloco
+depois de toda escrita de FPSCR desde 2015** — `decoder.cpp:1034-1037`
+(`OPCODE_SETFPSCR(...) && !is_delayslot → dec_End(rpc+2, BET_StaticJump)`),
+presente no commit base `603814c9f`, dentro do caminho do fallback, que era
+exatamente por onde esses opcodes passavam. Nem a auditoria interna nem a
+pesquisa externa registraram isso, e a síntese citou essa linha como "o
+mecanismo existe e pode ser reusado" sem perceber que ela **já estava sendo
+aplicada nesses exatos opcodes**.
+
+Consequência: a v1 não eliminou custo nenhum. Ela trocou
+`shop_ifb → GenCallRuntime(handler_do_interpretador)` por
+`shop_mov32 nativo + shop_sync_fpscr → GenCallRuntime(UpdateFPSCR)` —
+**mesma travessia JIT→C++, mesmo corte de bloco**, só movendo dois acessos
+de memória pra dentro do bloco JIT. Resultado medido: neutro no Shenmue,
+levemente negativo no kofnw. Coerente.
+
+### O dado que faltava
+
+Contadores `FC_FPSCR_STATS` (novos, `sh4_core_regs.cpp`), medindo o que
+cada escrita de FPSCR realmente muda:
+
+| | kofnw (2D) | Shenmue (3D) |
+|---|---|---|
+| Escritas de FPSCR / frame | **9.628** | 92 |
+| PR/SZ inalterado | **100,0%** (0 de 11,9M) | 11,1% |
+| No-op total (nada mudou) | **60,1%** | ~0% |
+| `FR` mudou (troca de banco) | 39,9% | 33% |
+| `RM`/`DN` mudou | 0% | 20% |
+
+Ou seja: no kofnw o jogo usa `LDS Rn,FPSCR` como **troca de banco de
+registradores FP**, nunca pra mudar precisão — então os ~9.628 cortes de
+bloco por frame (a única razão de o corte existir) eram 100% desperdiçados.
+E 60% das chamadas a `UpdateFPSCR()` não faziam literalmente nada
+(`ChangeFP()` só roda se `FR` mudou, e `setHostRoundingMode()` tem cache
+próprio de `RM`/`DN`) — pagavam só a travessia da chamada.
+
+### O que a v2 faz
+
+Duas coisas que a v1 não fazia, ambas no `shop_sync_fpscr` do backend ARM64:
+
+1. **Guard inline de no-op** — compara `fpscr` com `old_fpscr` em 3
+   instruções e pula a chamada inteira quando nada mudou. Comprovado em
+   medição: no-ops que chegavam em `UpdateFPSCR` caíram de **7.166.131 → 2**.
+2. **Guard de PR/SZ em runtime** — em vez de terminar o bloco sempre, compara
+   os bits PR/SZ com o valor de compile-time e só sai pro dispatcher no
+   caminho frio onde eles realmente mudaram (`dec_write_fpscr()` em
+   `decoder.cpp` passa o esperado em `rs1` e o PC de retomada em `rs2`).
+   É a forma do `ir_assert_eq` do redream, já citada na pesquisa externa e
+   descartada pela síntese original com base na premissa furada.
+
+Sair do bloco no meio é seguro porque `shop_sync_fpscr` agora força
+writeback de **todos** os registradores vivos (`ssa_regalloc.h`), a mesma
+garantia que `shop_ifb` já exigia. `write_back` não desaloca o registrador,
+então o resto do bloco continua usando os valores em registrador — é
+bem mais barato que um fim de bloco (que obriga o bloco seguinte a
+recarregar tudo da memória, além do dispatch).
+
+Backends sem o guard (x64, x86, ARM32, cpp) mantêm o comportamento antigo
+via a flag nova `ngen_features::FpscrGuard` — correto, só mais lento, sem
+bug latente.
+
+### Resultado medido (kofnw, 2 rodadas por lado, mesma cena)
+
+| Métrica | Baseline | v1 (sem guard) | **v2 (com guard)** | v2 vs base (R1 / R2) |
+|---|---|---|---|---|
+| fps | 50,60 | 49,47 | **51,15 / 51,48** | **+1,1% / +1,7%** |
+| `core_average` | 11,539 | 11,976 | **11,315 / 11,174** | **-1,9% / -3,3%** |
+| `core_p50` | 10,000 | 10,225 | **9,932 / 9,854** | -0,7% / -2,3% |
+| `core_p95` | 20,948 | 21,745 | **20,692 / 20,788** | -1,2% / -1,1% |
+| `core_p99` | 39,456 | 43,181 | **38,673 / 36,244** | -2,0% / -2,7% |
+| `active_frame_p95` | 29,295 | 30,067 | **28,850 / 28,640** | -1,5% / -2,2% |
+| `active_frame_p99` | 46,889 | 50,977 | **45,460 / 44,605** | -3,0% / -1,9% |
+
+**Ganho real e reprodutível**: as 8 métricas melhoraram nas 2 rodadas, mesma
+direção — diferente do resultado misto/ruidoso da v1.
+
+**Caminho frio validado em execução real:** no Shenmue, PR/SZ muda em 88,9%
+das escritas (141.828 vezes em 60s), então o guard dispara e sai do bloco de
+verdade — o jogo rodou correto, sem crash. Não é código morto.
+
+## Decisão (v1, superada pela v2 acima)
 
 **Implementado em 2026-09-16.** Build limpo, deploy, zero crash em 2 rodadas
 de 90s+90s no Shenmue (~484k execuções reais do opcode mais comum sem
@@ -139,3 +222,34 @@ beneficiar algum fix futuro que se aproveite disso indiretamente, mesmo sem
 ganho próprio hoje. Diferente do skip-Translucent (que era opt-in e foi
 mantido desligado por padrão), esta mudança é incondicional — faz parte do
 comportamento padrão do JIT a partir de agora.
+
+### Shenmue: por que o número dele não decide nada aqui
+
+Par back-to-back (90s+90s, guard vs baseline rodados em sequência):
+fps +0,7%, `core_average` -1,5%, `core_p50` -4,7%, `core_p95` -0,9%,
+`active_frame_p50` -1,2%, `active_frame_p95` -0,2% — mas `core_p99` +21,3%
+e `active_frame_p99` +15,9%.
+
+**A cauda do Shenmue não é medível neste setup.** O `core_p99` do MESMO
+binário baseline deu 34,247ms numa rodada e 61,936ms noutra no mesmo dia
+(+81%), porque o Shenmue boota do zero e, rodando mais rápido, avança mais
+durante os 90s de warmup e cai numa cena diferente (a cutscene de neve, bem
+mais pesada). Um delta de +21% está dentro desse ruído. Por isso o número
+que vale é o do kofnw, que usa savestate e garante cena idêntica.
+
+Registrado como pendência honesta: **para medir Shenmue de forma confiável
+falta um savestate** (como o que o kofnw já tem), salvo num ponto fixo de
+gameplay. Sem isso, qualquer conclusão sobre a cauda do Shenmue é ruído.
+
+### Possível refinamento futuro (não implementado)
+
+O guard só é necessário se existir alguma instrução de FP DEPOIS da escrita
+de FPSCR no mesmo bloco — é só por causa delas que PR/SZ importa. Um
+pós-passe no fim de `dec_DecodeBlock()` poderia varrer a `oplist` e
+desativar o guard (limpar `rs1`) nos blocos em que nenhuma op de FP segue a
+escrita, eliminando tanto a comparação quanto a saída de bloco nesses casos.
+Também vale investigar fazer a saída fria do guard usar block linking
+(`GenBranch(pBranchBlock->code)`) em vez do dispatcher genérico
+(`arm64_no_update`), que é o que o fim de bloco antigo usava e é mais barato
+— relevante para jogos como o Shenmue, onde PR/SZ muda de verdade em 88,9%
+das escritas e portanto o caminho frio é o comum.

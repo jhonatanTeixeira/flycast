@@ -186,6 +186,7 @@ void ngen_GetFeatures(ngen_features* dst)
 {
 	dst->InterpreterFallback = false;
 	dst->OnlyDynamicEnds     = false;
+	dst->FpscrGuard          = true;	// shop_sync_fpscr implements the PR/SZ runtime guard below
 }
 
 template<typename T>
@@ -518,7 +519,46 @@ public:
 				GenCallRuntime(UpdateSR);
 				break;
 			case shop_sync_fpscr:
-				GenCallRuntime(UpdateFPSCR);
+				{
+					// Fast path 1 -- skip the call when the write changed nothing.
+					// UpdateFPSCR() is already a no-op in that case (it only acts
+					// if FR flipped, and setHostRoundingMode() has its own RM/DN
+					// cache), so the entire cost is the JIT->C++ traversal:
+					// PushCallerSaved + Bl + PopCallerSaved, which with the
+					// extended float pool means several STP/LDP pairs. Measured on
+					// kofnw: 60% of 11.9M FPSCR writes change nothing at all, so
+					// that traversal was being paid ~5.8k times per frame to do
+					// literally nothing.
+					Label sync_done;
+					Ldr(w9, sh4_context_mem_operand(&fpscr.full));
+					Ldr(w10, sh4_context_mem_operand(&old_fpscr.full));
+					Cmp(w9, w10);
+					B(eq, &sync_done);
+					GenCallRuntime(UpdateFPSCR);
+					Bind(&sync_done);
+
+					// Fast path 2 -- the PR/SZ guard that lets the block continue.
+					// rs1 is the PR|SZ this block was compiled for and rs2 where to
+					// resume if it no longer holds (see dec_write_fpscr() in
+					// decoder.cpp). Only the cold path leaves the block, so the
+					// unconditional block end this fork did since 2015 is gone:
+					// measured on kofnw, PR/SZ changed in 0 of 11.9M writes.
+					// Bailing out mid-block is safe because shop_sync_fpscr forces
+					// every live reg to be written back first (ssa_regalloc.h),
+					// exactly like shop_ifb does.
+					if (op.rs1.is_imm())
+					{
+						Label prsz_ok;
+						Ldr(w9, sh4_context_mem_operand(&fpscr.full));
+						And(w9, w9, (1 << 20) | (1 << 19));		// SZ | PR
+						Cmp(w9, op.rs1._imm);
+						B(eq, &prsz_ok);
+						Mov(w29, op.rs2._imm);
+						Str(w29, sh4_context_mem_operand(&next_pc));
+						GenBranch(*arm64_no_update);
+						Bind(&prsz_ok);
+					}
+				}
 				break;
 
 			case shop_swaplb:
