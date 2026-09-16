@@ -1450,3 +1450,42 @@ decidir atacar.
   completo, incluindo o que seria necessário pra revisitar a ideia com
   segurança (métrica absoluta de orçamento, não relativa à baseline;
   preservar setup de estado da lista Translucent em vez de pular tudo).
+
+## 2026-09-16 (continuação) — v2-v2.4 do skip de Translucent: corrigida, testada, descontinuada
+
+- Reimplementação completa corrigindo os 2 bugs do v1 (item 5.2):
+  granularidade (reduz contagem no `DrawList<Translucent>` já existente
+  em vez de pular o bloco, `SortPParams` continua na lista completa) e
+  sinal de detecção (`g_lastFrameTimeMs`, `retro_run()` inteiro, não só
+  `RenderFrame()`). Usuário confirmou visualmente em Shenmue: efeito
+  contido (cabelo picando), corrupção de frame inteiro não voltou.
+- Calibração ao vivo, 2 rodadas: multiplicadores de vblank sentavam em
+  múltiplos inteiros (2,0x = exatamente 30fps nativo), piscando em cena
+  estável. Recalibrado, ainda piscava (inclusive no logo trivial da
+  Sega) — causa real era ausência de tolerância a ruído de frame único.
+  Corrigido com histerese (2 frames consecutivos).
+- Usuário perguntou se o retrorun3 tem acesso a um "fps real" que a
+  gente não tinha — investigação levou ao código-fonte público real do
+  retrorun3 (`navy1978/retrorun` no GitHub) e confirmou: não existe
+  metadado de fps nativo por jogo em lugar nenhum, o contador do
+  retrorun é uma medição ao vivo (`ceil(totalFrames/elapsedSeconds)`
+  numa janela de ~1s). v2.4 implementa a mesma fórmula (`g_measuredFps`)
+  como referência em vez da heurística ad-hoc da v2.3.
+- **Incidente de crash intermitente:** 1 `DEBUGBREAK`/SIGSEGV em 2
+  rodadas de Shenmue com a v2.4. Investigação extensa com múltiplas
+  hipóteses do usuário, cada uma checada no código: handler de SIGSEGV
+  real (descartado, faltava o log característico), detecção de core
+  errada no retrorun3 (`isFlycast2021()`, descartado, versão bate
+  certinho), bug conhecido de `retro_unload_game()` documentado no
+  próprio repo do retrorun (achado real, mas o contorno deveria se
+  aplicar igual em toda rodada, não explica a intermitência). Usuário
+  confirmou visualmente não ter visto crash; retry rodou 100% limpo.
+  Não reproduzido, causa não cravada.
+- **Veredito final do usuário, após A/B extensivo (mesmo binário v2.4,
+  opção ligada vs desligada, mesmo protocolo de boot real repetido
+  várias vezes):** a feature introduz glitch visual sem gerar ganho de
+  performance mensurável. **Descontinuada** — mantida no código como
+  opt-in mas desligada por padrão (não removida). Estado final: v2.4
+  deployado no device, `disabled` no `retrorun.cfg` oficial e em todos
+  os `.cfg` de teste. Ver item 5.3 em `tech_debits.md` pro registro
+  completo.

@@ -175,6 +175,9 @@ float g_declaredFps = 60.0f;
 // Wall-clock duration of the PREVIOUS full retro_run() call -- see extern
 // declaration in core/rend/transform_matrix.h.
 float g_lastFrameTimeMs = 0.0f;
+// Live measured retro_run() call rate -- see extern declaration in
+// core/rend/transform_matrix.h. 0 until the first ~1s window completes.
+float g_measuredFps = 0.0f;
 
 // Callbacks
 retro_log_printf_t         log_cb = NULL;
@@ -1339,6 +1342,27 @@ void retro_run (void)
 
    g_lastFrameTimeMs = (float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
 
+   // Live measured retro_run() call rate (g_measuredFps) -- mirrors
+   // retrorun3's OWN formula, verified against its real source
+   // (navy1978/retrorun, src/main.cpp): count total calls, and once a full
+   // real second has elapsed since the window started, measuredFps =
+   // ceil(count / elapsedSeconds), then start a new window. This is what
+   // retrorun3's own on-screen fps counter shows -- a live loop-rate
+   // measurement, not a per-game declaration (none exists anywhere in this
+   // system, see docs/tech_debits.md item 5.3's addendum).
+   {
+      static int windowFrameCount = 0;
+      static std::chrono::steady_clock::time_point windowStart = std::chrono::steady_clock::now();
+      windowFrameCount++;
+      double windowElapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - windowStart).count();
+      if (windowElapsed >= 1.0)
+      {
+         g_measuredFps = (float)ceil((double)windowFrameCount / windowElapsed);
+         windowFrameCount = 0;
+         windowStart = std::chrono::steady_clock::now();
+      }
+   }
+
    // Frame-budget speedhack v2.1 decision for the NEXT retro_run() call.
    // ABSOLUTE reference (missed vblank periods from g_declaredFps), not a
    // moving baseline (see docs/tech_debits.md item 5.2 for why v1's
@@ -1361,6 +1385,20 @@ void retro_run (void)
    // back under budget resets the streak to 0. See docs/tech_debits.md
    // item 5.2's v2.2 addendum.
    static int overBudgetStreak = 0;
+   // Measured-fps gate (v2.4, replaces v2.3's ad-hoc "recent best" guess):
+   // the absolute vblank threshold above still doesn't know whether THIS
+   // content's native target is 30fps or 60fps -- g_declaredFps only
+   // reports the DISPLAY's sync rate, never the game's own internal update
+   // rate -- so it can still sit close to a native rate for some content.
+   // g_measuredFps (updated above, same formula as retrorun3's own
+   // on-screen counter -- verified against its real source) tracks what
+   // this content is ACTUALLY sustaining right now, over a real 1s window.
+   // Require the frame to also be worse than that live-measured rate by
+   // more than a tolerance, on top of the absolute/hysteresis check: if
+   // the content is already running at (near) its own currently-measured
+   // pace, don't reduce, even if the raw frametime crossed the absolute
+   // threshold. See docs/tech_debits.md item 5.3.
+   const float kMeasuredFpsTolerance = 1.10f; // allow 10% worse than measured fps' frame time
    if (settings.rend.FrameBudgetVblankMultiplier > 0.f)
    {
       float vblankMs = 1000.0f / std::max(1.f, g_declaredFps);
@@ -1368,15 +1406,18 @@ void retro_run (void)
       if (render_reduce_translucent_this_frame)
          NOTICE_LOG(RENDERER, "Frame budget result: reduced-translucent frame took %.2fms (vblank budget %.2fms x%.1f = %.2fms)",
             g_lastFrameTimeMs, vblankMs, settings.rend.FrameBudgetVblankMultiplier, thresholdMs);
-      if (g_lastFrameTimeMs > thresholdMs)
+      bool overAbsoluteBudget = g_lastFrameTimeMs > thresholdMs;
+      float measuredFrameTimeMs = g_measuredFps > 0.f ? 1000.0f / g_measuredFps : thresholdMs;
+      bool overMeasuredPace = g_lastFrameTimeMs > measuredFrameTimeMs * kMeasuredFpsTolerance;
+      if (overAbsoluteBudget)
          overBudgetStreak++;
       else
          overBudgetStreak = 0;
-      render_reduce_translucent_this_frame = overBudgetStreak >= 2;
+      render_reduce_translucent_this_frame = overBudgetStreak >= 2 && overMeasuredPace;
       render_translucent_draw_fraction = settings.rend.FrameBudgetTranslucentFraction;
       if (render_reduce_translucent_this_frame)
-         NOTICE_LOG(RENDERER, "Frame budget trigger: %.2fms > %.2fms (vblank %.2fms x%.1f, streak=%d) -- reducing translucent to %.0f%% next frame",
-            g_lastFrameTimeMs, thresholdMs, vblankMs, settings.rend.FrameBudgetVblankMultiplier, overBudgetStreak,
+         NOTICE_LOG(RENDERER, "Frame budget trigger: %.2fms > %.2fms (vblank %.2fms x%.1f, streak=%d, measured=%.1ffps/%.2fms) -- reducing translucent to %.0f%% next frame",
+            g_lastFrameTimeMs, thresholdMs, vblankMs, settings.rend.FrameBudgetVblankMultiplier, overBudgetStreak, g_measuredFps, measuredFrameTimeMs,
             render_translucent_draw_fraction * 100.0f);
    }
    else

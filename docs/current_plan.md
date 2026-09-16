@@ -312,3 +312,17 @@ trabalhado nesta sessão:
 4-7. **pendente** — texture-in-flight, CLUT shader-lookup, máscara de
    `PP_SameGPUState`, documentação de risco texid/CustomTextures. Ver
    `rendering_improvement_plan.md` pra detalhe de cada um.
+
+**Frente paralela (fora da fila dos 7, pedido direto do usuário 2026-09-16)
+— speedhack de skip de Translucent sob spike de frame time: concluída,
+descontinuada.** Implementada em várias iterações (v1 revertida por
+corrupção visual real; v2-v2.4 corrigiram arquitetura — granularidade
+por-strip em vez de bloco inteiro, sinal de detecção validado contra o
+código-fonte real do `retrorun3`, histerese contra ruído de frame único)
+e testada extensivamente em A/B (opção ligada vs desligada, mesmo
+binário, mesmo protocolo). **Veredito final do usuário: introduz glitch
+visual sem ganho de performance mensurável — mantida no código como
+opt-in mas desligada por padrão, não recomendada.** Ver item 5.3 em
+`tech_debits.md` pro registro completo (inclui um incidente de crash
+intermitente investigado e não confirmado como relacionado). Não
+retomar a menos que pedido explicitamente.

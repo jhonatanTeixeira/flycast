@@ -37,6 +37,16 @@ extern float g_declaredFps;
 // portion. See docs/tech_debits.md item 5.2's postmortem for why watching
 // only RenderFrame()'s own duration missed CPU-bound frame-time spikes.
 extern float g_lastFrameTimeMs;
+// Live measured retro_run() call rate: total calls counted over a rolling
+// ~1s real-time window, in libretro.cpp's retro_run(). Verified against
+// retrorun3's OWN real source (navy1978/retrorun, src/main.cpp): its
+// displayed fps is exactly `ceil(totalFrames / elapsedSeconds)` recomputed
+// once real time crosses 1s -- a live loop-rate measurement, NOT a
+// per-game "native fps" declaration (confirmed none exists anywhere in
+// this system). This mirrors that exact formula so g_measuredFps tracks
+// what retrorun3's own on-screen counter would show. 0 until the first
+// ~1s window completes -- see docs/tech_debits.md item 5.3's addendum.
+extern float g_measuredFps;
 
 template<bool invertY>
 class TransformMatrix
