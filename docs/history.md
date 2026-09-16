@@ -1409,3 +1409,44 @@ decidir atacar.
   Ver item 5.1 em `tech_debits.md` e frente de renderização em
   `current_plan.md` pro item 2 (instrumentar `rqueue`) como próximo
   passo natural, não decidido ainda.
+
+## 2026-09-16 — Skip de Translucent sob spike de frame time: implementado, testado, revertido
+
+- Pedido do usuário: técnica pra pular a lista Translucent do PowerVR
+  quando o frame time der um spike, preferindo "glitch a lentidão".
+  Implementado com 3 níveis de agressividade (`low`/`medium`/`high`),
+  opt-in via core option `reicast_frame_budget_skip_translucent`.
+- **Bug de build sério no meio do caminho** (não da feature em si):
+  mudar `bool`→`float` num campo de `settings_t` (`core/types.h`) sem
+  `make clean` deixou ~100+ `.o` desatualizados discordando sobre o
+  layout da struct — regressão catastrófica de performance (~9x mais
+  lento, ~9fps) confirmada tanto por benchmark quanto pelo usuário
+  observando a tela. Isolado comparando o binário anterior no mesmo
+  estado de device (limpo, sem o bug) — não era térmico nem warmup.
+  `make clean` completo resolveu. Ver `CLAUDE.md` (regra nova sobre
+  `make clean` após header amplamente incluído).
+- **Testado em Shenmue (boot real, sem savestate) — usuário identificou
+  2 bugs reais na feature em si, visualmente, com precisão:**
+  1. Detecção invertida do pretendido: cenas estáveis (30fps) tiveram
+     flicker (baseline EWMA baixa, jitter normal cruza o threshold
+     relativo); cenas pesadas uniformes (25fps) não dispararam e não
+     melhoraram (baseline alta, raramente varia o suficiente pra
+     cruzar 1,4x dela mesma). Usuário: "média de fps não mede nada... a
+     questão dos glitches com 0 ganhos é erro da sua lógica".
+  2. Corrupção visual real ("frame preenchido por cor predominante,
+     destruído por completo, pode ser mais de um frame"), não o
+     "efeito ausente" esperado. Código confirma que a lista Translucent
+     deste pipeline tem histórico de estado acoplado com passes/frames
+     seguintes (rebind de buffer de índice em `DrawSorted`, prime de
+     depth buffer "pro próximo pass" citando o jogo Cosmic Smash) —
+     pular o bloco inteiro pula qualquer preparação de estado que ele
+     devesse fazer, plausivelmente explicando corrupção que persiste
+     além de 1 frame.
+- **Decisão: revertido por completo** (`git revert f77fa6d1c` →
+  `de9a26625`), em vez de mais patches — risco maior do que dá pra
+  mapear com segurança só lendo código estático, resultado observado
+  (corrupção) categoricamente diferente do pedido original (efeito
+  visual ausente). Ver item 5.2 em `tech_debits.md` pro registro
+  completo, incluindo o que seria necessário pra revisitar a ideia com
+  segurança (métrica absoluta de orçamento, não relativa à baseline;
+  preservar setup de estado da lista Translucent em vez de pular tudo).
