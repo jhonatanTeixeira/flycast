@@ -293,6 +293,51 @@ sh4dec(i0100_nnnn_0000_1110)
 	dec_End(0xFFFFFFFF,BET_StaticIntr,false);
 }
 
+//lds <REG_N>,FPSCR
+//Native translation of the FPSCR write itself (mov, same as any other reg
+//write) + shop_sync_fpscr (native call to UpdateFPSCR(), same helper the
+//interpreter fallback would've called internally) + forced block end right
+//after. Block end is required, not optional: state.cpu.FPR64/FSZ64 (which
+//decide how FP opcodes REST OF THIS BLOCK get decoded) are only captured
+//once, at state_Setup() when the block starts compiling -- a runtime value
+//written here could silently disagree with that decision for any FP op
+//after this one in the same block. Terminating immediately means the next
+//instruction starts a fresh block, compiled from the real (now updated)
+//FPSCR. This is the exact same pattern already used, unconditionally, by
+//both flyinghead/flycast (master) and redream -- see
+//docs/fpscr_jit_code_audit.md and docs/sh4_fpscr_external_research.md for
+//the investigation, and docs/fpscr_native_translation_plan.md for why this
+//is preferred over a conditional (PR/SZ-changed-only) fast path: no known
+//mature JIT actually builds that conditional path, so it's not worth the
+//new block-end-on-runtime-value plumbing it would need.
+sh4dec(i0100_nnnn_0110_1010)
+{
+	u32 n = GetN(op);
+
+	Emit(shop_mov32,reg_fpscr,(Sh4RegType)(reg_r0+n));
+	Emit(shop_sync_fpscr);
+	if (!state.cpu.is_delayslot)
+		dec_End(state.cpu.rpc+2,BET_StaticJump,false);
+}
+
+//lds.l @<REG_N>+,FPSCR
+//Same as above, but the value comes from memory (post-increment) instead
+//of a GPR -- mirrors dec_LDM(PRM_SREG)'s memory-read shape (used by the
+//sibling MACH/MACL/PR/FPUL cases) plus the same shop_sync_fpscr + forced
+//block end as the register form above.
+sh4dec(i0100_nnnn_0110_0110)
+{
+	u32 n = GetN(op);
+	Sh4RegType rn=(Sh4RegType)(reg_r0+n);
+
+	state.info.has_readm=true;
+	Emit(shop_readm,reg_fpscr,rn,shil_param(),4);
+	Emit(shop_add,rn,rn,mk_imm(4));
+	Emit(shop_sync_fpscr);
+	if (!state.cpu.is_delayslot)
+		dec_End(state.cpu.rpc+2,BET_StaticJump,false);
+}
+
 //nop !
 sh4dec(i0000_0000_0000_1001)
 {

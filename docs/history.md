@@ -1619,3 +1619,61 @@ decidir atacar.
   `core/libretro/libretro.cpp`) que motivou toda essa investigação,
   commitada nesta mesma sessão junto com os 3 documentos (código opt-in,
   sem custo quando a env var não está setada).
+
+## 2026-09-16 (continuação 4) — Implementação de `LDS Rn,FPSCR` nativo, medido, sem ganho
+
+- A pedido do usuário ("implemente o 1"), implementado o caminho
+  recomendado pela síntese: duas novas `sh4dec` em
+  `core/hw/sh4/dyna/decoder.cpp` (declaradas em `decoder_opcodes.h`) pra
+  `lds <REG_N>,FPSCR` e `lds.l @<REG_N>+,FPSCR`, espelhando exatamente o
+  código real do `flyinghead/flycast` master citado na pesquisa externa:
+  `Emit(shop_mov32,reg_fpscr,Rn)` (ou `shop_readm` pra forma `.l`, com
+  `Rn+=4`) + `Emit(shop_sync_fpscr)` + `dec_End(rpc+2,BET_StaticJump,false)`
+  quando não em delay slot. As duas entradas da tabela
+  (`sh4_opcode_list.cpp:240,275`) passaram a ter `rec_oph` apontando pra
+  essas funções, igual a `frchg`/`fschg` (que já usavam esse mecanismo).
+- `make clean` com as flags certas (header compartilhado editado,
+  `decoder_opcodes.h`) — 0→266 objetos confirmado antes do rebuild. Build
+  limpo, sem warning novo nos arquivos tocados.
+- **Sanity check:** 20s sem crash (boot/intro). Depois, **2 rodadas
+  completas de 90s+90s no Shenmue** (protocolo idêntico ao `bench_mine.sh`
+  usado a sessão inteira) — uma com o binário novo, uma com o anterior
+  (backup `flycast_libretro.so.pre-fpscr-native.bak`) — **zero crash nas
+  duas**, exit 0, 2470 e 2475 frames completos. Isso cobre ~484 mil
+  execuções reais de `lds Rn,FPSCR` (o opcode mais comum, medido antes via
+  `FC_IFB_COUNT`) sem nenhum incidente — a parte de correctness/segurança
+  do plano se confirmou na prática, não só na teoria.
+- **Resultado de performance, A/B mesma cena (fps + frame time, p50/p95/p99
+  + média, regra do CLAUDE.md):**
+
+  | Métrica | Antes | Depois | Delta |
+  |---|---|---|---|
+  | fps (`core_frames`/90s) | 27,50 | 27,44 | -0,2% |
+  | `core_average` | 17,759ms | 17,853ms | +0,5% |
+  | `core_p50` | 16,038ms | 15,851ms | -1,2% |
+  | `core_p95` | 32,079ms | 32,121ms | +0,1% |
+  | `core_p99` | 34,247ms | 35,764ms | +4,4% |
+  | `active_frame_p50` | 35,890ms | 35,811ms | -0,2% |
+  | `active_frame_p95` | 50,445ms | 51,476ms | +2,0% |
+  | `active_frame_p99` | 55,731ms | 57,566ms | +3,3% |
+
+  **Sem ganho medido** — sinal misto, dentro do ruído, cauda (p95/p99)
+  levemente pior. Não confirma a expectativa de ganho da investigação
+  anterior.
+- **Explicação em retrospecto, adicionada à síntese
+  (`docs/fpscr_native_translation_plan.md`):** tanto o caminho antigo
+  (`shop_ifb`→`GenCallRuntime(oph)`, chamando o handler do interpretador)
+  quanto o novo (`shop_mov32` nativo + `shop_sync_fpscr`→
+  `GenCallRuntime(UpdateFPSCR)`) pagam a MESMA travessia de fronteira
+  JIT→C++ (push/pop caller-saved + `BLR` + volta) — a mudança elimina só a
+  decodificação de `Rn`/leitura de memória dentro do handler antigo, não a
+  travessia em si, que é o custo real dominante. Nenhum dos dois documentos
+  da investigação tinha identificado essa equivalência antes de medir.
+- **Decisão do usuário: manter implementado mesmo sem ganho isolado**
+  (pergunta feita via `AskUserQuestion`, resposta escolhida: "Manter mesmo
+  sem ganho"). Motivo dado: código correto e validado como seguro (mesmo
+  padrão usado por 2 JITs SH4 maduros e independentes há anos), pode
+  beneficiar algum fix futuro que se aproveite da escrita já ser nativa,
+  mesmo sem ganho próprio hoje. Binário nativo redeployado como ativo no
+  device depois do A/B (`flycast_libretro.so`, backup do estado anterior em
+  `flycast_libretro.so.pre-fpscr-native.bak`).

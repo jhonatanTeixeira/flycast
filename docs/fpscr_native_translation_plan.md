@@ -110,6 +110,32 @@ decodificação/regalloc/SSA.
 
 ## Decisão
 
-Não decidido ainda com o usuário — documento fica pronto pra quando quiser
-seguir. Ver `docs/fpscr_jit_code_audit.md` e `docs/sh4_fpscr_external_research.md`
-pro detalhe completo de cada investigação.
+**Implementado em 2026-09-16.** Build limpo, deploy, zero crash em 2 rodadas
+de 90s+90s no Shenmue (~484k execuções reais do opcode mais comum sem
+incidente) — a parte de correctness/segurança do plano se confirmou.
+
+**Resultado de performance: sem ganho medido.** A/B mesma cena, mesmo
+protocolo (ver `docs/tech_debits.md` item 1.8 pra tabela completa
+frame-time+fps em p50/p95/p99+média): fps -0,2%, `core_average` +0,5%,
+sinal misto em todos os percentis, cauda (p95/p99) levemente pior. Não bate
+com a expectativa de ganho que a investigação (auditoria + pesquisa
+externa) projetava.
+
+**Por quê, em retrospecto:** tanto o caminho antigo (fallback pro
+interpretador via `shop_ifb`) quanto o novo (mov nativo + `shop_sync_fpscr`)
+terminam pagando a MESMA travessia de fronteira JIT→C++ via
+`GenCallRuntime` (push/pop caller-saved + `BLR` + volta) — a mudança troca
+"uma chamada que decodifica `Rn` e lê `r[n]` da memória dentro do handler
+do interpretador" por "mov nativo + uma chamada um pouco mais magra
+(`UpdateFPSCR` sozinho)", mas não elimina a travessia em si, que é o custo
+que realmente domina. O plano não tinha identificado essa equivalência
+antes de medir — é o tipo de coisa que só a medição real revela (ver regra
+de ouro do `CLAUDE.md`).
+
+**Decisão do usuário: manter implementado mesmo sem ganho isolado.**
+Motivo: o código é correto e seguro (mesmo padrão usado há anos em 2 JITs
+SH4 maduros e independentes), e a escrita de FPSCR agora sendo nativa pode
+beneficiar algum fix futuro que se aproveite disso indiretamente, mesmo sem
+ganho próprio hoje. Diferente do skip-Translucent (que era opt-in e foi
+mantido desligado por padrão), esta mudança é incondicional — faz parte do
+comportamento padrão do JIT a partir de agora.
