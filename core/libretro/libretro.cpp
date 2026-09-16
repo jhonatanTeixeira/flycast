@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <math.h>
+#include <chrono>
 #include "types.h"
 #ifndef _WIN32
 #include <sys/time.h>
@@ -166,6 +167,14 @@ enum DreamcastController
 
 struct retro_perf_callback perf_cb;
 retro_get_cpu_features_t perf_get_cpu_features_cb = NULL;
+
+// Real display sync rate (50/59.94/60) -- see extern declaration in
+// core/rend/transform_matrix.h. Defaults to 60 until retro_get_system_av_info()
+// runs at least once.
+float g_declaredFps = 60.0f;
+// Wall-clock duration of the PREVIOUS full retro_run() call -- see extern
+// declaration in core/rend/transform_matrix.h.
+float g_lastFrameTimeMs = 0.0f;
 
 // Callbacks
 retro_log_printf_t         log_cb = NULL;
@@ -900,6 +909,39 @@ static void update_variables(bool first_startup)
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
      	settings.rend.PowerVR2Filter = !strcmp("enabled", var.value);
 
+   var.key = CORE_OPTION_NAME "_frame_budget_skip_translucent";
+
+   settings.rend.FrameBudgetVblankMultiplier = 0.f;
+   settings.rend.FrameBudgetTranslucentFraction = 1.f;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      // Deliberately NOT round vblank multiples (1x/2x/3x): a lot of
+      // Dreamcast/Naomi content natively targets 30fps (updates every
+      // OTHER vblank) by design, not because it's struggling -- a
+      // threshold sitting exactly at 2.0x (33.33ms @ 60Hz) means normal
+      // jitter around that native rate constantly crosses it, triggering
+      // on perfectly correct 30fps content instead of real spikes (found
+      // live in Shenmue, see docs/tech_debits.md item 5.2's v2 addendum).
+      // Offsetting away from whole multiples gives native 30/60fps content
+      // real margin before it's mistaken for a spike.
+      if (!strcmp("low", var.value))
+      {
+         settings.rend.FrameBudgetVblankMultiplier = 4.0f;
+         settings.rend.FrameBudgetTranslucentFraction = 0.75f;
+      }
+      else if (!strcmp("medium", var.value))
+      {
+         settings.rend.FrameBudgetVblankMultiplier = 2.6f;
+         settings.rend.FrameBudgetTranslucentFraction = 0.50f;
+      }
+      else if (!strcmp("high", var.value))
+      {
+         settings.rend.FrameBudgetVblankMultiplier = 1.8f;
+         settings.rend.FrameBudgetTranslucentFraction = 0.25f;
+      }
+      // "disabled" (or unknown) leaves the multiplier at 0.f, i.e. off.
+   }
+
 #ifdef HAVE_TEXUPSCALE
    var.key = CORE_OPTION_NAME "_texupscale";
 
@@ -1248,6 +1290,7 @@ static void update_variables(bool first_startup)
 
 void retro_run (void)
 {
+   auto frameStart = std::chrono::steady_clock::now();
    bool updated     = false;
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
@@ -1293,6 +1336,54 @@ void retro_run (void)
    if (!settings.rend.ThreadedRendering)
 #endif
 	   is_dupe = true;
+
+   g_lastFrameTimeMs = (float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
+
+   // Frame-budget speedhack v2.1 decision for the NEXT retro_run() call.
+   // ABSOLUTE reference (missed vblank periods from g_declaredFps), not a
+   // moving baseline (see docs/tech_debits.md item 5.2 for why v1's
+   // relative EWMA baseline triggered backwards from intent). Reads the
+   // WHOLE previous retro_run() cost (rsWait for the emu thread + Process +
+   // Render + video_cb) instead of just RenderFrame()'s own GPU-submission
+   // time, which missed CPU-bound spikes entirely (v2's own postmortem,
+   // same doc). extern declarations for the render-side flag/fraction --
+   // defined in core/rend/gles/gles.cpp, declared in gles.h -- avoided
+   // here to not pull GL headers into this file.
+   extern bool render_reduce_translucent_this_frame;
+   extern float render_translucent_draw_fraction;
+   // Hysteresis counter (v2.2): a single over-budget frame is NOT enough to
+   // trigger a reduction anymore -- found live in Shenmue that even the
+   // Sega boot logo (trivial content, ~no translucent geometry to speak
+   // of) occasionally flickered, meaning single-frame excursions over the
+   // absolute vblank threshold are dominated by measurement/scheduling
+   // noise (ThreadedRendering's rsWait jitter), not real rendering cost.
+   // Require 2 CONSECUTIVE over-budget frames before reacting; any frame
+   // back under budget resets the streak to 0. See docs/tech_debits.md
+   // item 5.2's v2.2 addendum.
+   static int overBudgetStreak = 0;
+   if (settings.rend.FrameBudgetVblankMultiplier > 0.f)
+   {
+      float vblankMs = 1000.0f / std::max(1.f, g_declaredFps);
+      float thresholdMs = vblankMs * settings.rend.FrameBudgetVblankMultiplier;
+      if (render_reduce_translucent_this_frame)
+         NOTICE_LOG(RENDERER, "Frame budget result: reduced-translucent frame took %.2fms (vblank budget %.2fms x%.1f = %.2fms)",
+            g_lastFrameTimeMs, vblankMs, settings.rend.FrameBudgetVblankMultiplier, thresholdMs);
+      if (g_lastFrameTimeMs > thresholdMs)
+         overBudgetStreak++;
+      else
+         overBudgetStreak = 0;
+      render_reduce_translucent_this_frame = overBudgetStreak >= 2;
+      render_translucent_draw_fraction = settings.rend.FrameBudgetTranslucentFraction;
+      if (render_reduce_translucent_this_frame)
+         NOTICE_LOG(RENDERER, "Frame budget trigger: %.2fms > %.2fms (vblank %.2fms x%.1f, streak=%d) -- reducing translucent to %.0f%% next frame",
+            g_lastFrameTimeMs, thresholdMs, vblankMs, settings.rend.FrameBudgetVblankMultiplier, overBudgetStreak,
+            render_translucent_draw_fraction * 100.0f);
+   }
+   else
+   {
+      render_reduce_translucent_this_frame = false;
+      overBudgetStreak = 0;
+   }
 }
 
 void retro_reset (void)
@@ -2379,6 +2470,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    }
 
    info->timing.sample_rate = 44100.0;
+   g_declaredFps = (float)info->timing.fps;
 }
 
 unsigned retro_get_region (void)

@@ -34,6 +34,21 @@ struct ShaderUniforms_t ShaderUniforms;
 
 u32 gcflip;
 
+// Speedhack v2 (settings.rend.FrameBudgetVblankMultiplier, opt-in/off by
+// default, see docs/tech_debits.md item 5.2 for the v1 postmortem this
+// replaces): decided at the end of one RenderFrame() call for the NEXT one
+// -- reactive to the immediately preceding frame only. Unlike v1, the
+// reference is ABSOLUTE (missed vblank periods, from g_declaredFps) instead
+// of a moving baseline -- a scene that steadily runs at, say, half the
+// display rate is NOT a spike by this measure, only a frame that blows the
+// vblank budget by FrameBudgetVblankMultiplier is. v2.1: reads
+// g_lastFrameTimeMs (the whole previous retro_run() -- rsWait for the emu
+// thread + Process + Render + video_cb) instead of timing RenderFrame()
+// alone -- RenderFrame()-only missed CPU-bound spikes entirely (see
+// tech_debits.md item 5.2's v2 addendum).
+bool render_reduce_translucent_this_frame = false;
+float render_translucent_draw_fraction = 1.f;
+
 float fb_scale_x, fb_scale_y;
 
 //Fragment and vertex shaders code
@@ -1086,6 +1101,12 @@ static bool RenderFrame(void)
 		GLenum attachments[] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
 		glInvalidateFramebuffer_(GL_FRAMEBUFFER, 2, attachments);
 	}
+
+	// Frame-budget speedhack v2 decision -- moved to retro_run() in
+	// libretro.cpp (right after g_lastFrameTimeMs is computed) so it reads
+	// the WHOLE previous frame's cost (rsWait + Process + Render + video_cb)
+	// with a clean 1-frame lag, not RenderFrame()'s own narrower duration
+	// with an extra frame of lag on top. See docs/tech_debits.md item 5.2.
 
 	return !is_rtt;
 }

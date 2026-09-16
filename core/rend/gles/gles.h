@@ -41,6 +41,17 @@
 extern u32 gcflip;
 extern glm::mat4 ViewportMatrix;
 
+// Speedhack v2 (opt-in, settings.rend.FrameBudgetVblankMultiplier): decided
+// at the end of the PREVIOUS RenderFrame() call against an ABSOLUTE
+// reference (missed vblanks, not a moving baseline -- see gles.cpp). When
+// render_reduce_translucent_this_frame is true, DrawStrips() (gldraw.cpp)
+// draws only render_translucent_draw_fraction of the Translucent list's
+// strips for THIS frame -- sorting and all per-strip state setup/teardown
+// still run normally on the full list, only the count passed to DrawList()
+// shrinks. Opaque/Punch-Through/Modifier-Volumes are never affected.
+extern bool render_reduce_translucent_this_frame;
+extern float render_translucent_draw_fraction;
+
 void DrawStrips(void);
 
 struct PipelineShader

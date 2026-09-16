@@ -25,6 +25,18 @@
 
 extern float fb_scale_x, fb_scale_y;
 extern int screen_width, screen_height;
+// Real display sync rate reported to the frontend (50/59.94/60, derived from
+// the PVR's own SPG_CONTROL register in retro_get_system_av_info()) -- NOT a
+// per-game "internal" fps. Used as an absolute (non-adaptive) reference for
+// the frame-budget speedhack, see gles.cpp.
+extern float g_declaredFps;
+// Wall-clock duration of the PREVIOUS full retro_run() call (set at the end
+// of retro_run() in libretro.cpp), in milliseconds -- this is what actually
+// matches the frontend's own "core_average"/core_p50/p95/p99 (rsWait for the
+// emu thread + Process + Render + video_cb), NOT just the GPU-submission
+// portion. See docs/tech_debits.md item 5.2's postmortem for why watching
+// only RenderFrame()'s own duration missed CPU-bound frame-time spikes.
+extern float g_lastFrameTimeMs;
 
 template<bool invertY>
 class TransformMatrix

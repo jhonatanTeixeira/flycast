@@ -307,6 +307,22 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "1x",
    },
    {
+      CORE_OPTION_NAME "_frame_budget_skip_translucent",
+      "Reduce Translucent Draws On Frame Time Spikes (Speedhack, v2)",
+      NULL,
+      "When a frame takes noticeably more than one display refresh period to render (an absolute reference: 1000/display_fps, not a moving average), draw fewer of the translucent/transparency strips on the NEXT frame to help catch back up -- opaque geometry, sorting order and per-strip state handling are untouched, only how many of the already-sorted translucent strips get submitted. Trades a partial visual reduction of transparency effects for staying on pace. Higher aggressiveness triggers on smaller spikes and cuts more strips; lower aggressiveness only reacts to bigger spikes and cuts fewer.",
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "low",      "Low (only big spikes, keep 75% of strips)" },
+         { "medium",   "Medium (keep 50% of strips)" },
+         { "high",     "High (triggers often, keep 25% of strips)" },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+   {
       CORE_OPTION_NAME "_widescreen_hack",
       "Widescreen Hack (Restart Required)",
       NULL,

@@ -689,22 +689,43 @@ void DrawStrips()
 			DrawModVols(previous_pass.mvo_count, current_pass.mvo_count - previous_pass.mvo_count);
 
 		//Alpha blended
+		// Frame-budget speedhack v2 (settings.rend.FrameBudgetVblankMultiplier):
+		// when active, draw only a FRACTION of this pass's Translucent
+		// strips -- sorting (SortPParams) still runs on the FULL range
+		// either way, so depth ordering of whatever we do draw stays
+		// correct, and DrawList()'s own per-strip state handling is
+		// untouched (we're not skipping a block, just iterating less of an
+		// already-per-strip loop). See render_reduce_translucent_this_frame
+		// in gles.h and docs/tech_debits.md item 5.2 for why v1 (skipping
+		// the whole block, including SortTriangles/DrawSorted's per-triangle
+		// path) caused real visual corruption instead of just a smaller
+		// effect. The per-triangle path (AlphaSortMode==0) is left
+		// completely untouched here -- confirmed inactive in this project's
+		// config (tech_debits.md item 4.1), so there's no value in adding
+		// risk to a dead path.
 		{
+			int trCount = current_pass.tr_count - previous_pass.tr_count;
 			if (current_pass.autosort)
 			{
 				if (settings.pvr.Emulation.AlphaSortMode == 0)
 				{
-					SortTriangles(previous_pass.tr_count, current_pass.tr_count - previous_pass.tr_count);
+					SortTriangles(previous_pass.tr_count, trCount);
 					DrawSorted(render_pass < pvrrc.render_passes.used() - 1);
 				}
 				else
 				{
-					SortPParams(previous_pass.tr_count, current_pass.tr_count - previous_pass.tr_count);
-					DrawList<ListType_Translucent, true>(pvrrc.global_param_tr, previous_pass.tr_count, current_pass.tr_count - previous_pass.tr_count );
+					SortPParams(previous_pass.tr_count, trCount);
+					int drawCount = render_reduce_translucent_this_frame
+						? (int)(trCount * render_translucent_draw_fraction) : trCount;
+					DrawList<ListType_Translucent, true>(pvrrc.global_param_tr, previous_pass.tr_count, drawCount);
 				}
 			}
 			else
-				DrawList<ListType_Translucent, false>(pvrrc.global_param_tr, previous_pass.tr_count, current_pass.tr_count - previous_pass.tr_count);
+			{
+				int drawCount = render_reduce_translucent_this_frame
+					? (int)(trCount * render_translucent_draw_fraction) : trCount;
+				DrawList<ListType_Translucent, false>(pvrrc.global_param_tr, previous_pass.tr_count, drawCount);
+			}
 		}
 
 		previous_pass = current_pass;

@@ -552,6 +552,16 @@ struct settings_t
 		bool WidescreenGameHacks;
 		int AnisotropicFiltering;
 		bool PowerVR2Filter;
+		// Frame-budget speedhack (v2, absolute vblank-based -- see gles.cpp).
+		// FrameBudgetVblankMultiplier: 0 = disabled. Otherwise, how many
+		// vblank periods (1000/g_declaredFps) a frame has to exceed before
+		// the NEXT frame reduces the Translucent list's draw count.
+		// FrameBudgetTranslucentFraction: fraction (0-1] of the Translucent
+		// list's strips to actually draw on a reduced frame -- the rest of
+		// the pipeline (sort, state setup/teardown) runs normally either
+		// way, only the strip count passed to DrawList() shrinks.
+		float FrameBudgetVblankMultiplier;
+		float FrameBudgetTranslucentFraction;
 	} rend;
 
 	struct
