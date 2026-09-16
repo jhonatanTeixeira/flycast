@@ -67,20 +67,6 @@ dois é uma ferramenta de investigação legítima.
   antes do rebuild pra não deixar objetos da arquitetura errada parados.) Falta
   `-lGLESv2` pro linker aarch64 local — copiar `libGLESv2.so` do device pra dentro
   deste diretório e passar `LDFLAGS="-L."`.
-- **O rastreamento de dependência de header do Makefile deste fork não é
-  confiável — depois de editar QUALQUER header amplamente incluído (`types.h`
-  em especial, mas vale pra qualquer `.h` compartilhado), rode `make clean`
-  antes do rebuild, mesmo que o build incremental "funcione" sem erro.**
-  Descoberto em 2026-09-16: mudar o TIPO de um campo dentro do struct global
-  `settings_t` (`bool`→`float` em `core/types.h`) com rebuild incremental
-  recompilou só 1-3 `.cpp` (os editados diretamente), não os ~100+ que também
-  incluem `types.h` — build limpo (sem erro, sem warning), mas o binário
-  ficou com `.o`s discordando sobre o layout de `settings` (uns viram o campo
-  novo, outros ainda veem o antigo, cada um com offsets diferentes pros
-  campos seguintes na struct) → corrupção de memória silenciosa, sem crash,
-  manifestando como regressão de performance catastrófica e sem relação
-  lógica com a mudança feita (~9x mais lento, 9fps). `make clean` + rebuild
-  completo (111 arquivos) resolveu por completo. Ver `docs/tech_debits.md`.
 - **Não use `-j$(nproc)` nesta máquina.** É compartilhada com várias outras sessões
   de Claude Code + Docker + Grafana/Tempo rodando ao mesmo tempo; builds grandes
   são derrubados por um watchdog de baixa-memória do sistema (não é o build en si

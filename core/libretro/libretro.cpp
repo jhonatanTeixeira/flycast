@@ -900,20 +900,6 @@ static void update_variables(bool first_startup)
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
      	settings.rend.PowerVR2Filter = !strcmp("enabled", var.value);
 
-   var.key = CORE_OPTION_NAME "_frame_budget_skip_translucent";
-
-   settings.rend.FrameBudgetSkipTranslucentThreshold = 0.f;
-   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-   {
-      if (!strcmp("low", var.value))
-         settings.rend.FrameBudgetSkipTranslucentThreshold = 2.2f;
-      else if (!strcmp("medium", var.value))
-         settings.rend.FrameBudgetSkipTranslucentThreshold = 1.4f;
-      else if (!strcmp("high", var.value))
-         settings.rend.FrameBudgetSkipTranslucentThreshold = 1.15f;
-      // "disabled" (or unknown) leaves it at 0.f, i.e. off.
-   }
-
 #ifdef HAVE_TEXUPSCALE
    var.key = CORE_OPTION_NAME "_texupscale";
 

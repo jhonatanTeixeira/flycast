@@ -1,6 +1,5 @@
 #include <math.h>
 #include <string.h>
-#include <chrono>
 
 #include <libretro.h>
 
@@ -34,22 +33,6 @@ gl_ctx gl;
 struct ShaderUniforms_t ShaderUniforms;
 
 u32 gcflip;
-
-// Speedhack (settings.rend.FrameBudgetSkipTranslucentThreshold, opt-in/off by
-// default -- 0.f means off, otherwise the aggressiveness multiplier chosen
-// via the "low"/"medium"/"high" core option; see docs/tech_debits.md):
-// decided at the end of one RenderFrame() call for
-// the NEXT one -- reactive to the immediately preceding frame only, there's
-// no way to see this frame's own cost before it's already drawn. The
-// baseline is a slow-moving average of "full" (non-skipped) frame render
-// time; a frame is flagged for skip when it ran well over that baseline,
-// which is meant to catch bursts (many particles/effects during a special
-// move) without tripping on normal frame-to-frame variance. The baseline
-// only learns from full frames -- if skipped frames fed it too, it would
-// ratchet down over time and make ordinary frames look "slow" by comparison.
-bool render_skip_translucent_this_frame = false;
-static double s_frameRenderBaselineMs = 0.0;
-static std::chrono::steady_clock::time_point s_frameRenderStart;
 
 float fb_scale_x, fb_scale_y;
 
@@ -822,9 +805,6 @@ static void upload_vertex_indices()
 
 static bool RenderFrame(void)
 {
-	if (settings.rend.FrameBudgetSkipTranslucentThreshold > 0.f)
-		s_frameRenderStart = std::chrono::steady_clock::now();
-
 	int vmu_screen_number = 0 ;
 	int lightgun_port = 0 ;
 
@@ -1105,40 +1085,6 @@ static bool RenderFrame(void)
 	{
 		GLenum attachments[] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
 		glInvalidateFramebuffer_(GL_FRAMEBUFFER, 2, attachments);
-	}
-
-	// Frame-budget speedhack decision for the NEXT RenderFrame() call -- see
-	// declaration of render_skip_translucent_this_frame in gles.h and the
-	// state variables at the top of this file. Excludes RTT sub-renders
-	// (is_rtt): those are typically small/cheap (mirrors, portraits) and
-	// mixing their cost into the same baseline as the main frame would make
-	// the baseline swing wildly and trigger spurious skips on normal frames.
-	if (settings.rend.FrameBudgetSkipTranslucentThreshold > 0.f && !is_rtt)
-	{
-		double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s_frameRenderStart).count();
-		// Was THIS frame itself one where translucent got skipped? (decided
-		// by the previous call, read at DrawStrips() time.) If so, its cost
-		// isn't representative of a "full" frame -- don't let it pull the
-		// baseline down, or the baseline would ratchet lower over time and
-		// make ordinary frames look slow by comparison.
-		bool wasSkipped = render_skip_translucent_this_frame;
-		if (!wasSkipped)
-		{
-			if (s_frameRenderBaselineMs <= 0.0)
-				s_frameRenderBaselineMs = ms;
-			else
-				s_frameRenderBaselineMs = s_frameRenderBaselineMs * 0.9 + ms * 0.1;
-		}
-		render_skip_translucent_this_frame = s_frameRenderBaselineMs > 0.0
-			&& ms > s_frameRenderBaselineMs * settings.rend.FrameBudgetSkipTranslucentThreshold;
-		if (render_skip_translucent_this_frame)
-			NOTICE_LOG(RENDERER, "Frame budget skip: %.2fms vs baseline %.2fms (threshold %.2fx) -- skipping translucent next frame",
-				ms, s_frameRenderBaselineMs, settings.rend.FrameBudgetSkipTranslucentThreshold);
-	}
-	else
-	{
-		render_skip_translucent_this_frame = false;
-		s_frameRenderBaselineMs = 0.0;
 	}
 
 	return !is_rtt;
