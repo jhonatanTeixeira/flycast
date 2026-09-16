@@ -76,6 +76,35 @@ static void *sq_write_stub;
 
 static bool restarting;
 
+// Opt-in JIT symbol map for perf/Hotspot/speedscope: none of them can name
+// individual compiled SH4 blocks on their own, since the blocks are raw
+// machine code written straight into the SH4_TCB buffer at runtime -- they
+// never pass through the linker, so there's no ELF symbol table entry for
+// any of them (see docs/tech_debits.md item 4.10/4.11 for how much manual
+// gdb archaeology that cost this session). `perf script`/`perf report`
+// already know to look for a "/tmp/perf-<pid>.map" file (one "addr size
+// name" line per symbol) and use it to resolve otherwise-anonymous regions
+// -- this is the same mechanism V8/JVM JITs use. Off by default (only
+// enabled by setting FC_PERF_MAP in the environment before launching) since
+// it's a debug/profiling aid, not something a normal player's session needs.
+static void EmitPerfMapEntry(void *code, u32 size, u32 vaddr)
+{
+	static int enabled = -1; // -1: not checked yet, 0: disabled, 1: enabled
+	static FILE *perf_map_file = nullptr;
+	if (enabled == -1)
+	{
+		enabled = getenv("FC_PERF_MAP") != nullptr ? 1 : 0;
+		if (enabled)
+		{
+			char path[64];
+			snprintf(path, sizeof(path), "/tmp/perf-%d.map", (int)getpid());
+			perf_map_file = fopen(path, "a");
+		}
+	}
+	if (perf_map_file != nullptr)
+		fprintf(perf_map_file, "%llx %x SH4_%08x\n", (unsigned long long)(uintptr_t)code, size, vaddr);
+}
+
 void ngen_mainloop(void* v_cntx)
 {
 	do {
@@ -1314,6 +1343,8 @@ public:
 			block->code = GetBuffer()->GetStartAddress<DynarecCodeEntryPtr>();
 			block->host_code_size = GetBuffer()->GetSizeInBytes();
 			block->host_opcodes = GetLabelAddress<u32*>(&code_end) - GetBuffer()->GetStartAddress<u32*>();
+
+			EmitPerfMapEntry(block->code, block->host_code_size, block->vaddr);
 
 			emit_Skip(block->host_code_size);
 		}
