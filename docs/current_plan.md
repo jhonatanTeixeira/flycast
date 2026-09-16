@@ -326,3 +326,48 @@ opt-in mas desligada por padrão, não recomendada.** Ver item 5.3 em
 `tech_debits.md` pro registro completo (inclui um incidente de crash
 intermitente investigado e não confirmado como relacionado). Não
 retomar a menos que pedido explicitamente.
+
+## Versão fechada — 2026-09-16 (JIT: fallbacks de interpretador)
+
+Tag: `r36-jit-2026-09-16`. Binário no device:
+`flycast_libretro.so` (md5 `e462a796075768e85029dce92bb915c2`), backup do
+anterior em `flycast_libretro.so.pre-srfix.bak`.
+
+O que entrou nesta versão (todos medidos com savestate, 2 rodadas por lado,
+frame time + fps em p50/p95/p99 + média):
+
+1. **`lds Rn,FPSCR` / `lds.l @Rn+,FPSCR` nativos, com dois guards**
+   (`8e8b3c80c`). Guard inline de no-op (pula a chamada quando nada mudou:
+   no-ops caíram de 7.166.131 → 2) + guard de PR/SZ em runtime, que eliminou
+   o fim de bloco incondicional que este fork fazia desde 2015 e que a
+   medição provou desnecessário (PR/SZ não muda em 0 de 11,9M escritas no
+   kofnw). **kofnw: fps +1,40%, `core_average` -2,63%, `core_p99` -2,31%.**
+2. **`stc.l SR,@-Rn` nativo** (`8e039f6c6`), via `DecMode` novo
+   `DM_WriteMSRF` com fallthrough pro `DM_WriteM` existente. Era o maior
+   fallback restante (~2.375 chamadas/frame no mbaa). **mbaa: fps +3,19%,
+   `core_average` -4,31%, `core_p95` -5,97%, `core_p99` -6,15%** — o primeiro
+   fix da sessão que melhora a cauda.
+3. Instrumentação opt-in permanente: `FC_IFB_COUNT` (fallbacks por opcode) e
+   `FC_FPSCR_STATS` (escritas de FPSCR, no-ops, falhas do guard). Sem custo
+   quando as env vars não estão setadas.
+
+**Estado dos fallbacks pro interpretador depois desta versão** (mbaa, 30s):
+só sobraram `div1` (~29k) e `tas.b` (~3k) — ordens de grandeza abaixo dos
+3,4M do `stc.l SR` eliminado.
+
+### Aberto / próximos candidatos
+
+- **Hicups do mbaa não são de CPU.** Razão `p99/p50` do mbaa é **1,4x**
+  (kofnw 3,8x, neve do Shenmue 2,4x) — distribuição quase plana. O que o
+  usuário sente ali provavelmente vem de apresentação/áudio/pacing, não da
+  simulação. Frente diferente, ainda não investigada.
+- **Regressão observada pelo usuário na cena da neve** (~15→13 fps) **não
+  reproduziu** em medição controlada (A/B com New Game manual nas duas
+  rodadas: tudo dentro de ±1,8%). Causa segue em aberto e **não é** a
+  mudança de FPSCR — os contadores mostram só ~50 saídas de bloco por frame
+  ali, 0,004% do frame.
+- **Falta savestate do Shenmue** num ponto fixo. Sem isso, qualquer número
+  de cauda do Shenmue é ruído (o `core_p99` do mesmo binário variou 34→62ms
+  entre rodadas).
+- `div1` e `mac.l`/`mac.w` seguem sem caminho nativo — candidatos, mas com
+  volume bem menor que os já resolvidos.
