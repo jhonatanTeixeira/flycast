@@ -91,6 +91,10 @@ u64 dec_LDM(DecParam d) { return dec_Fill(DM_ReadM,d,PRM_RN,shop_readm,-4); }
 u64 dec_ST(DecParam d)  { return dec_Fill(DM_UnaryOp,PRM_RN,d,shop_mov32); }
 u64 dec_STSRF(DecParam d)   { return dec_Fill(DM_ReadSRF,PRM_RN,d,shop_mov32); }
 u64 dec_STM(DecParam d) { return dec_Fill(DM_WriteM,PRM_RN,d,shop_writem,-4); }
+// stc.l SR,@-Rn: same store shape as dec_STM, but the source is the full SR,
+// which this fork keeps split (sr.status + sr.T) -- the source param is a
+// placeholder, DM_WriteMSRF overrides it with the rebuilt value. See decoder.cpp.
+u64 dec_STMSRF()        { return dec_Fill(DM_WriteMSRF,PRM_RN,PRM_RN,shop_writem,-4); }
 
 //d=reg to read into
 u64 dec_MRd(DecParam d,DecParam s,u32 sz) { return dec_Fill(DM_ReadM,d,s,shop_readm,sz); }
@@ -224,7 +228,7 @@ sh4_opcodelistentry opcodes[]=
 	{0                          ,i0100_nnnn_0011_0010   ,Mask_n         ,0x4032 ,Normal         ,"stc.l SGR,@-<REG_N>"                  ,3,3,CO,rn_4        ,dec_STM(PRM_SREG)},    //sts.l SGR,@-<REG_N>
 
 	//stc : @-rn
-	{0                          ,i0100_nnnn_0000_0011   ,Mask_n         ,0x4003 ,Normal         ,"stc.l SR,@-<REG_N>"                   ,1,1,CO,rn_4},      //stc.l SR,@-<REG_N>
+	{0                          ,i0100_nnnn_0000_0011   ,Mask_n         ,0x4003 ,Normal         ,"stc.l SR,@-<REG_N>"                   ,1,1,CO,rn_4        ,dec_STMSRF()},     //stc.l SR,@-<REG_N>
 	{0                          ,i0100_nnnn_0001_0011   ,Mask_n         ,0x4013 ,Normal         ,"stc.l GBR,@-<REG_N>"                  ,1,1,CO,rn_4        ,dec_STM(PRM_CREG)},    //stc.l GBR,@-<REG_N>
 	{0                          ,i0100_nnnn_0010_0011   ,Mask_n         ,0x4023 ,Normal         ,"stc.l VBR,@-<REG_N>"                  ,1,1,CO,rn_4        ,dec_STM(PRM_CREG)},    //stc.l VBR,@-<REG_N>
 	{0                          ,i0100_nnnn_0011_0011   ,Mask_n         ,0x4033 ,Normal         ,"stc.l SSR,@-<REG_N>"                  ,1,1,CO,rn_4        ,dec_STM(PRM_CREG)},    //stc.l SSR,@-<REG_N>

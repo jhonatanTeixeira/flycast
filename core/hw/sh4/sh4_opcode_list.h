@@ -120,6 +120,7 @@ enum DecMode
 	DM_UnaryOp,     //d= op s
 	DM_ReadM,       //d=readm(s);s+=e
 	DM_WriteM,      //s-=e;writem(s,d);
+	DM_WriteMSRF,   //like DM_WriteM, but the value stored is the full SR (status|T), rebuilt into reg_temp first
 	DM_fiprOp,
 	DM_WriteTOp,    //T=d op s
 	DM_DT,          //special case for dt

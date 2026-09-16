@@ -835,6 +835,21 @@ static bool dec_generic(u32 op)
 			Emit(natop,rs1,rs2);
 		break;
 
+	case DM_WriteMSRF:
+		// stc.l SR,@-Rn. SR is kept split in this fork (sr.status + sr.T, see
+		// sh4_sr_GetFull()), which is the only reason this opcode had no native
+		// path while every sibling (GBR/VBR/SSR/SPC/DBR/SGR) uses dec_STM --
+		// it was the top interpreter fallback left in the 2D fighters (~2.4k
+		// calls/frame in mbaa, ~1.9k in kofnw). Rebuild the full value into the
+		// scratch reg with the same two ops DM_ReadSRF already uses for the
+		// non-.l `stc SR,Rn`, then fall through so the pre-decrement store --
+		// including its MMU / exception-fixup handling -- stays shared with
+		// every other stc.l instead of being duplicated here.
+		Emit(shop_mov32,mk_reg(reg_temp),mk_reg(reg_sr_status));
+		Emit(shop_or,mk_reg(reg_temp),mk_reg(reg_temp),mk_reg(reg_sr_T));
+		rs2=mk_reg(reg_temp);
+		// fall through
+
 	case DM_WriteM: //write(d,s)
 		{
 			//0 has no effect, so get rid of it

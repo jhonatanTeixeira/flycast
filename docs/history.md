@@ -1677,3 +1677,50 @@ decidir atacar.
   mesmo sem ganho próprio hoje. Binário nativo redeployado como ativo no
   device depois do A/B (`flycast_libretro.so`, backup do estado anterior em
   `flycast_libretro.so.pre-fpscr-native.bak`).
+
+## 2026-09-16 (continuação 5) — MBAA instrumentado e `stc.l SR,@-Rn` nativizado
+
+- A pedido do usuário ("vamos instrumentar o mbaa entender os numeros dele"),
+  rodado MBAA (`/roms2/naomi/mbaa.zip`, savestate `mbaa.fc2021-rrstate.auto`,
+  cena idêntica garantida) com `FC_IFB_COUNT` + `FC_FPSCR_STATS` juntos.
+- **Perfil do MBAA — é o mais ESTÁVEL dos três jogos testados:** `core_p50`
+  14,07ms → `core_p99` 19,29ms, razão **1,4x** (kofnw: 3,8x; neve do
+  Shenmue: 2,4x). Ou seja, praticamente não tem cauda — os "hicups" que o
+  usuário sente não vêm de variação no tempo de CPU, o que aponta pra
+  apresentação/áudio/pacing e não pra simulação.
+- **FPSCR no MBAA: 11.866 escritas/frame** (mais que o kofnw, 9.628), com o
+  guard de PR/SZ falhando só 579 vezes no total (0,003%) e 60,1% de no-ops
+  pulados inline — mesmo padrão do kofnw, então o fix de FPSCR da rodada
+  anterior é tão ou mais útil aqui.
+- **Achado principal:** com os dois `lds ...,FPSCR` já nativos, sobrou **um
+  único** fallback pro interpretador dominante — `stc.l SR,@-<REG_N>`, com
+  3.399.262 hits em 1431 frames (**~2.375/frame**), e ~1.935/frame no kofnw.
+  É padrão dos jogos 2D (salvar SR na pilha em prólogo de função/interrupção).
+- **Por que só ele não tinha caminho nativo:** todos os irmãos da família
+  (`GBR`/`VBR`/`SSR`/`SPC`/`DBR`/`SGR`) usam `dec_STM(...)`, mas o SR neste
+  fork é guardado **partido** em `sr.status` + `sr.T` (`sh4_sr_GetFull()`,
+  `sh4_if.h:385`), então não dá pra ler com um mov só. A versão NÃO-`.l`
+  (`stc SR,<REG_N>`) já era nativa via `dec_STSRF`/`DM_ReadSRF`, que monta o
+  valor completo com `mov`+`or` — metade da solução já existia no código.
+- **Correção (~10 linhas, reusando o que já existe):** `DecMode` novo
+  `DM_WriteMSRF` que emite as mesmas duas ops do `DM_ReadSRF` pro `reg_temp`
+  (scratch que o próprio decoder já usa no caminho nativo do `div1`) e **cai
+  por fallthrough no `DM_WriteM`** — assim o store com pré-decremento,
+  incluindo tratamento de MMU e o fixup de exceção `rn_4`, continua
+  compartilhado com os outros `stc.l` em vez de ser duplicado à mão.
+- **Verificado:** o opcode sumiu da contagem de fallback (3.399.262 → **0**);
+  sobraram só `div1` (~29k) e `tas.b` (~3k).
+- **Medido (mbaa, savestate, 2 rodadas por lado, sem instrumentação):**
+
+  | | base r1 | base r2 | srfix r1 | srfix r2 | média |
+  |---|---|---|---|---|---|
+  | fps | 49,08 | 48,73 | 50,38 | 50,55 | **+3,19%** |
+  | `core_average` | 13,56 | 13,63 | 13,04 | 12,98 | **-4,31%** |
+  | `core_p95` | 14,92 | 15,06 | 14,20 | 13,99 | **-5,97%** |
+  | `core_p99` | 17,95 | 19,01 | 17,52 | 17,16 | **-6,15%** |
+
+  As 7 métricas melhoraram e **as duas rodadas do fix ficaram acima das duas
+  do baseline em fps, sem sobreposição** — separação limpa, não é ruído.
+  Sanity no kofnw sem crash e também melhor (51,66 fps).
+- **Diferente do fix de FPSCR, este melhora a CAUDA** (p95/p99 ~6%), que é
+  onde os hicups aparecem. Maior ganho isolado da sessão.
