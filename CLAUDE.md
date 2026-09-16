@@ -67,6 +67,29 @@ dois é uma ferramenta de investigação legítima.
   antes do rebuild pra não deixar objetos da arquitetura errada parados.) Falta
   `-lGLESv2` pro linker aarch64 local — copiar `libGLESv2.so` do device pra dentro
   deste diretório e passar `LDFLAGS="-L."`.
+- **`make clean` sozinho (sem os mesmos argumentos do build) NÃO limpa os objetos
+  arm64 — limpa a lista de objetos de outro platform default, deixando os `.o`
+  arm64 antigos parados.** `clean:` no Makefile é `rm -f $(OBJECTS) $(TARGET)`, e
+  `$(OBJECTS)` é calculado condicionalmente a partir de `platform=`/flags — se
+  você rodar só `make clean`, ele limpa a lista errada. **Sempre rode `make clean`
+  com EXATAMENTE os mesmos argumentos do comando de build** (`platform=arm64
+  CC_PREFIX=... CXX=... CC=... CC_AS=... HAVE_OPENMP=0 LDFLAGS="-L."`), e depois
+  do clean confirme com `find . -name "*.o" | wc -l` (deve dar 0) antes de
+  reconstruir. Isso já causou duas regressões de performance catastróficas
+  nesta sessão (~9x mais lento) por objetos desatualizados discordando do layout
+  de `settings_t`/`types.h` — sem erro nem warning no build, só regressão
+  silenciosa. O rastreamento de dependência de header deste Makefile também não é
+  confiável em geral — depois de editar QUALQUER header amplamente incluído
+  (`types.h` em especial), sempre passe pelo `make clean` completo acima, mesmo
+  que o build incremental "funcione" sem erro.
+- **Métrica de performance é frame time + fps, sempre os dois, sempre em
+  p50/p95/p99 E média geral — nunca só um número.** Olhar só a média (de fps ou
+  de frame time) já escondeu ganho real mais de uma vez neste projeto, e olhar só
+  um dos dois (só fps ou só frame time) também esconde coisas — a cauda (p95/p99)
+  pode contar uma história diferente da média, e frame time real (`active_frame_*`
+  do benchmark JSON, core+vídeo combinados) é mais fiel ao que se sente na tela
+  do que `core_*` isolado. Ao comparar A/B, sempre puxar a tabela completa dos
+  dois lados antes de concluir qualquer coisa.
 - **Não use `-j$(nproc)` nesta máquina.** É compartilhada com várias outras sessões
   de Claude Code + Docker + Grafana/Tempo rodando ao mesmo tempo; builds grandes
   são derrubados por um watchdog de baixa-memória do sistema (não é o build en si
