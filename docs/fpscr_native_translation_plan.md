@@ -230,12 +230,46 @@ fps +0,7%, `core_average` -1,5%, `core_p50` -4,7%, `core_p95` -0,9%,
 `active_frame_p50` -1,2%, `active_frame_p95` -0,2% — mas `core_p99` +21,3%
 e `active_frame_p99` +15,9%.
 
-**A cauda do Shenmue não é medível neste setup.** O `core_p99` do MESMO
-binário baseline deu 34,247ms numa rodada e 61,936ms noutra no mesmo dia
-(+81%), porque o Shenmue boota do zero e, rodando mais rápido, avança mais
-durante os 90s de warmup e cai numa cena diferente (a cutscene de neve, bem
-mais pesada). Um delta de +21% está dentro desse ruído. Por isso o número
-que vale é o do kofnw, que usa savestate e garante cena idêntica.
+**CORREÇÃO a uma conclusão apressada que estava escrita aqui:** a primeira
+versão deste parágrafo descartou o +21% de `core_p99` como deriva de cena.
+Isso está errado, e o usuário apontou. A deriva existe de fato, mas **entre
+a rodada da manhã (2475 frames) e as da tarde (~2590)** — não DENTRO do par
+back-to-back, onde os frame counts ficaram em 2585 vs 2603 (0,7% de
+diferença, ou seja, essencialmente a mesma cena). Então o delta de p99 do
+par é um sinal que precisa de explicação, não de descarte.
+
+Mecanismo plausível, mas que não fecha em magnitude: quando o guard falha
+(88,9% das escritas no Shenmue), a saída vai pro dispatcher genérico
+(`arm64_no_update`: lê `CpuRunning`, indexa a tabela de blocos, `Br`),
+enquanto o fim de bloco antigo usava **block linking** — `GenBranch(
+block->pBranchBlock->code)`, um branch direto pro bloco já compilado. Ou
+seja, no caminho que no Shenmue é o comum, trocamos um branch barato por um
+round-trip de dispatcher. **Mas são só 92 escritas/frame nesse jogo**, o que
+dá microssegundos — não os ~13ms de diferença observados no p99. Então ou o
+mecanismo é outro, ou o p99 (1% de ~2600 frames = ~26 frames) é dominado por
+um punhado de frames pesados que variam entre rodadas.
+
+**Dado da 2ª rodada (só do lado guard — a rodada de baseline foi
+interrompida e, por decisão do usuário de encerrar a fase de medição, não
+foi repetida):**
+
+| run | frames | fps | `core_average` | `core_p50` | `core_p99` |
+|---|---|---|---|---|---|
+| BASE r1 | 2585 | 28,72 | 24,483 | 23,663 | 61,9 |
+| GUARD r1 | 2603 | 28,92 | 24,112 | 22,543 | 75,1 |
+| GUARD r2 | 2596 | 28,84 | 24,189 | 23,099 | 69,5 |
+
+Duas rodadas do MESMO binário (guard) dão p99 de 75,1 e 69,5 — **8% de
+variação run-to-run com cena praticamente idêntica** (0,27% de diferença em
+frames). O delta guard-vs-base observado foi 21%, maior que essa variação,
+mas com n=1 de cada lado **não dá pra cravar se é efeito real ou cauda
+ruidosa**. Fica registrado como questão em aberto, não como conclusão.
+
+O que É consistente no Shenmue, nas duas rodadas do guard: `fps` (28,92 e
+28,84 vs 28,72), `core_average` (24,112 e 24,189 vs 24,483, -1,2% a -1,5%) e
+`core_p50` (22,543 e 23,099 vs 23,663, -2,4% a -4,7%) — todos melhores que o
+baseline. Ou seja, frame típico melhora também no 3D; só a cauda fica
+indefinida.
 
 Registrado como pendência honesta: **para medir Shenmue de forma confiável
 falta um savestate** (como o que o kofnw já tem), salvo num ponto fixo de
