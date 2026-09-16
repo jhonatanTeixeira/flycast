@@ -287,3 +287,73 @@ Também vale investigar fazer a saída fria do guard usar block linking
 (`arm64_no_update`), que é o que o fim de bloco antigo usava e é mais barato
 — relevante para jogos como o Shenmue, onde PR/SZ muda de verdade em 88,9%
 das escritas e portanto o caminho frio é o comum.
+
+## Validação final na cena da NEVE (2026-09-16) — e correção de duas premissas minhas
+
+**Correção do usuário, que invalida a explicação de "deriva de cena" usada
+acima:** a cena de abertura do Shenmue **não tem neve**. A neve é o prólogo
+que só aparece depois de "New Game". Ou seja, todas as rodadas de 90s+90s
+feitas antes (inclusive as que comparei baseline vs guard) mediram **sempre a
+abertura**, nunca a neve — a "deriva pra cena mais pesada" que usei pra
+explicar o `core_average` maior simplesmente não acontecia.
+
+O usuário também reportou, jogando, uma regressão real **na neve**: de ~15
+para ~13 fps, com picos que antes passavam disso travando em 22. Por isso a
+medição foi refeita com ele dando New Game manualmente nas duas rodadas
+(warmup 20s, 90s medidos, mesma cfg, só trocando o `.so`).
+
+### Resultado: a regressão NÃO reproduziu
+
+| | BASE | GUARD | delta |
+|---|---|---|---|
+| fps | 23,588 | 23,522 | -0,28% |
+| `core_average` | 20,641 | 20,709 | +0,33% |
+| `core_p50` | 19,397 | 19,190 | -1,07% |
+| `core_p95` | 37,219 | 37,878 | +1,77% |
+| `core_p99` | 45,171 | 45,849 | +1,50% |
+| `active_frame_p99` | 71,225 | 71,471 | +0,35% |
+
+Tudo dentro de ±1,8%, e o lado GUARD ainda rodava **com a instrumentação
+ligada** (4 instruções emitidas a cada escrita de FPSCR, mais o contador do
+caminho frio). Observação ao vivo do usuário na mesma sessão: "as duas
+rodadas mantiveram performance semelhante".
+
+### Contadores novos (`FC_FPSCR_STATS`, agora contando também dentro do JIT)
+
+`g_fpscrWrites` conta toda escrita de FPSCR executada e `g_fpscrGuardExit`
+conta quantas vezes o guard de PR/SZ falhou e saiu pro dispatcher — ambos
+emitidos inline (`GenCounterIncrement`), não por chamada, pra não inflar o
+que medem.
+
+| | cena da neve | kofnw |
+|---|---|---|
+| Escritas de FPSCR / frame | **114** | 9.628 |
+| Guard falhou (→ dispatcher) | 43,6% = **49,8/frame** | 0% |
+| No-op pulado inline | 52,1% | 60,1% |
+
+**São ~50 saídas de bloco por frame num frame de ~42ms.** Mesmo a 50 ciclos
+cada, dá ~2.500 de ~63 milhões de ciclos por frame — 0,004%. Ou seja: o
+mecanismo que eu tinha levantado (perda do block linking na saída fria) é
+real, mas **matematicamente incapaz** de explicar 15→13 fps. A causa do que
+o usuário observou é outra e segue **em aberto** — não é esta mudança.
+
+Isso também reforça por que o kofnw é o caso onde a otimização importa: lá
+são 9.628 escritas/frame com 0% de falha no guard; aqui são 114 com 43,6% de
+falha. O ganho medido (2 rodadas, savestate) segue valendo pro kofnw, e a
+neve fica neutra.
+
+## Comparação com o binário original do fork (pedido do usuário)
+
+Binário `flycast2021_libretro.so` (commit base `603814c9f`, pré-projeto) vs
+build atual, **cena de abertura**, mesmo protocolo (90s+90s):
+
+| | ORIGINAL | HOJE | |
+|---|---|---|---|
+| fps | 23,64 | **28,92** | **+22,3%** |
+| `video_average` | 21,94 ms | **10,45 ms** | **-52,4%** |
+| frames em 90s | 2128 | 2603 | +475 |
+
+Ressalva honesta: o `core_average` aparece "pior" (20,3 → 24,1 ms) e isso é
+artefato de cobertura de cena — rodando 22% mais rápido, a build atual avança
+mais dentro dos mesmos 90s. `fps` e `video_average` são os números limpos
+aqui, porque medem trabalho entregue no mesmo tempo de parede.

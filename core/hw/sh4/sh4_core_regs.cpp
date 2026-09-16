@@ -153,6 +153,8 @@ static void setHostRoundingMode()
 // so the no-op rate decides whether an inline guard is worth emitting, and
 // the PR/SZ-unchanged rate decides whether the forced block end can be
 // made conditional. See docs/fpscr_native_translation_plan.md.
+u64 g_fpscrWrites;      // every FPSCR write the JIT executes (counted in emitted code)
+u64 g_fpscrGuardExit;   // ...of which bailed out of the block (PR/SZ guard failed)
 u64 g_fpscrTotal;
 u64 g_fpscrNoOp;        // nothing changed at all
 u64 g_fpscrPrSzSame;    // PR/SZ unchanged (block end would be avoidable)
@@ -201,6 +203,8 @@ void DumpFpscrStats()
 	FILE *f = fopen(path, "w");
 	if (f == nullptr)
 		return;
+	fprintf(f, "writes\t%llu\n", (unsigned long long)g_fpscrWrites);
+	fprintf(f, "guard_exit\t%llu\n", (unsigned long long)g_fpscrGuardExit);
 	fprintf(f, "total\t%llu\n", (unsigned long long)g_fpscrTotal);
 	fprintf(f, "noop\t%llu\n", (unsigned long long)g_fpscrNoOp);
 	fprintf(f, "prsz_same\t%llu\n", (unsigned long long)g_fpscrPrSzSame);

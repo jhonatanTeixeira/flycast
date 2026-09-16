@@ -42,6 +42,17 @@ using namespace vixl::aarch64;
 // (if any) actually hit the interpreter fallback in real gameplay,
 // since ~17 opcodes in the table have neither a hand-written recompiler
 // handler nor a generic-decode descriptor and always fall here.
+// Opt-in FPSCR counters, defined in sh4_core_regs.cpp next to UpdateFPSCR().
+extern u64 g_fpscrWrites;
+extern u64 g_fpscrGuardExit;
+static bool FpscrStatsEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_FPSCR_STATS") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+
 static bool IfbCountEnabled()
 {
 	static int enabled = -1; // -1: not checked yet, 0: disabled, 1: enabled
@@ -520,6 +531,14 @@ public:
 				break;
 			case shop_sync_fpscr:
 				{
+					// Opt-in (FC_FPSCR_STATS): count every FPSCR write the JIT
+					// executes, so the no-op and guard-exit rates below can be
+					// read as a fraction of the real total. Emitted inline rather
+					// than as a call, to distort what it measures as little as
+					// possible.
+					if (FpscrStatsEnabled())
+						GenCounterIncrement(&g_fpscrWrites);
+
 					// Fast path 1 -- skip the call when the write changed nothing.
 					// UpdateFPSCR() is already a no-op in that case (it only acts
 					// if FR flipped, and setHostRoundingMode() has its own RM/DN
@@ -553,6 +572,8 @@ public:
 						And(w9, w9, (1 << 20) | (1 << 19));		// SZ | PR
 						Cmp(w9, op.rs1._imm);
 						B(eq, &prsz_ok);
+						if (FpscrStatsEnabled())
+							GenCounterIncrement(&g_fpscrGuardExit);
 						Mov(w29, op.rs2._imm);
 						Str(w29, sh4_context_mem_operand(&next_pc));
 						GenBranch(*arm64_no_update);
@@ -1208,6 +1229,18 @@ public:
 			}
 		}
 		GenCallRuntime((void (*)())function);
+	}
+
+	// Opt-in (FC_FPSCR_STATS) inline 64-bit counter bump, for counting things
+	// that happen inside generated code without paying a runtime call that
+	// would swamp what's being measured. x9/x10 are the backend's hardcoded
+	// scratch pair, same as everywhere else here.
+	void GenCounterIncrement(u64 *counter)
+	{
+		Mov(x9, reinterpret_cast<uintptr_t>(counter));
+		Ldr(x10, MemOperand(x9));
+		Add(x10, x10, 1);
+		Str(x10, MemOperand(x9));
 	}
 
 	MemOperand sh4_context_mem_operand(void *p)
