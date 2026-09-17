@@ -68,9 +68,21 @@ Mesmo protocolo já estabelecido (`retrorun3 --benchmark`, savestate de Metal Sl
 
 ---
 
-## Item 2 — Fila de render de slot único (`rqueue`) e frameskip
+## Item 2 — Fila de render de slot único (`rqueue`) e frameskip — **ENFRAQUECIDO em 2026-09-16**
 
-### O achado
+### Atualização: o descarte temido não está acontecendo nas cenas medidas
+
+Todos os benchmarks desta sessão (mslug6 savestate pesado, kofnw, mbaa)
+reportaram `skipped_frames: 0`, `duplicated_frames: 0` e
+`missed_deadlines: 0`, e o `rsWait` medido (`FC_REND_SPLIT`) é de apenas
+**8,7-12,7 ms/frame** — a thread de emulação termina antes e espera, em vez de
+produzir frames que seriam descartados. O gargalo real estava na main thread
+(`Process()` = 57ms de um frame de 63ms), não na fila.
+
+Continua sendo um risco arquitetural válido em cenas que não medimos, mas
+desce de prioridade: não há evidência de descarte nas três cenas de referência.
+
+### O achado (texto original)
 
 Achado só do `docs/gles_code_audit.md` (§5.2/§5.3) — não tem correspondente na pesquisa externa porque é arquitetura própria do flycast, não um padrão genérico de GL. `QueueRender()` (`core/hw/pvr/ta_ctx.cpp:113-166`) descarta (nunca enfileira) um novo `TA_context` se já existe um `rqueue` pendente, e esse slot só é liberado por `FinishRender()`, chamado só depois que `Render()` (a submissão GL inteira, ~500-600 draw calls numa cena pesada) termina — não depois só do parsing do TA. Combinado com a thread de emulação sendo liberada pra simular o próximo frame **antes** de `Render()` começar (`rend_frame()`, `Renderer_if.cpp:159-179`), isso significa: numa cena pesada, se a thread de emulação terminar de simular um novo frame enquanto a thread de render ainda está no meio de `Render()` do frame anterior, o novo frame é **descartado**, não esperado.
 
@@ -104,9 +116,39 @@ Baixo-médio — adicionar uma checagem de tamanho antes de destruir/recriar é 
 
 ---
 
-## Item 4 — Upload de textura em recurso ainda em uso (investigação, não correção ainda)
+## Item 4 — Upload de textura em recurso ainda em uso (investigação) — **REFORÇADO em 2026-09-16, agora é o item nº1**
 
-### O achado
+### Atualização 2026-09-16: a metade que faltava está confirmada
+
+O texto original dizia que o audit "não confirmou nem refutou se o flycast faz
+round-robin de texture objects". **Agora está confirmado que NÃO faz**:
+`TextureCacheData::UploadToGPU` (`core/rend/gles/gltex.cpp`) escreve sempre no
+mesmo `texID` do `TextureCacheData`, sem nenhuma proteção contra reescrever
+uma textura que a GPU ainda pode estar consumindo.
+
+E a medição (`FC_TA_SPLIT`, mslug6 savestate pesado) é consistente com o
+mecanismo que a ARM descreve:
+
+| | |
+|---|---|
+| upload | **13,1 ms/frame** (era 34,6 antes do fix do item 4.12 do tech_debits) |
+| chamadas | ~166 mil em 30s |
+| custo por chamada | **~83 µs** |
+| dados por textura | **~134 bytes** (sprites 8x8/16x16 paletizados) |
+| dados totais | 21,2 MB em 30s = 0,7 MB/s |
+
+83µs para transferir 134 bytes **não é largura de banda**. E **não é
+realocação**: trocar `glTexImage2D` por `glTexSubImage2D` quando o layout não
+muda (`FC_TEX_SUBIMAGE`, opt-in, implementado) rendeu apenas **-4%**. Sobra
+exatamente a hipótese deste item — dreno de pipeline / cópia-fantasma por
+escrever em recurso em voo.
+
+**Próximo passo concreto:** testar round-robin de N texture objects por
+`TextureCacheData` (escrever no slot que a GPU menos provavelmente está
+lendo), ou PBO para upload assíncrono. Medir com os contadores que já existem
+(`upload_us_total`).
+
+### O achado (texto original)
 
 Puramente da pesquisa externa (`docs/mali_gles_best_practices.md` §3a, hipótese #1 da seção final) — a lista de "evitar" da própria ARM cita explicitamente `glTexSubImage2D`/`glCopyTexImage2D` numa textura ainda referenciada por um draw call em andamento como gatilho de dreno de pipeline ou cópia-fantasma. **O `docs/gles_code_audit.md` não confirmou nem refutou isso no nosso código** — não foi verificado se o flycast faz round-robin de texture objects ou se pode reescrever uma textura que a GPU ainda está consumindo.
 
@@ -116,9 +158,35 @@ Diferente dos itens 1 e 3, aqui não temos confirmação de código de que o pad
 
 ---
 
-## Item 5 — Busca de paleta via shader (revisita item 4.7 do tech_debits)
+## Item 5 — Busca de paleta via shader — **RESOLVIDO em 2026-09-16 (e a premissa deste item estava errada)**
 
-### O achado cruzado
+### Atualização: a técnica já existia no código, morta por um default
+
+Este item classificava a busca de paleta no shader como **esforço alto**
+("mudar o pipeline de shader e o formato de textura enviado à GPU"), a
+revisitar com tempo dedicado. **A premissa estava errada:** a técnica já
+estava implementada neste fork inteira — `IsGpuHandledPaletted()`
+(`TexCache.h`) + o caminho de shader correspondente.
+
+Ela nunca rodava porque `settings.rend.TextureUpscale` ficava **0** numa build
+libretro (o único lugar que atribui o campo está sob `#ifdef HAVE_TEXUPSCALE`,
+que o Makefile deste fork desliga; o outro candidato estava sob
+`#ifndef __LIBRETRO__`). Todo o código lê esse campo com `> 1` e tolera o 0 —
+só `IsGpuHandledPaletted()` usa `== 1`, e com 0 retorna sempre falso. Medido
+antes do fix: **0 de 166.285** texturas paletizadas usavam o caminho GPU.
+
+**Esforço real da correção: uma linha** (inicializar `TextureUpscale = 1` em
+`LoadSettings()`, fora do `#ifndef`). Resultado: mslug6 **+35% fps**,
+`core_p99` **-57%**; kofnw +7% fps, `core_p99` -54%; e **corrigiu glitches
+visuais** (a paleta deixou de ser assada na textura no momento do upload).
+Ver `docs/tech_debits.md` item 4.12 e
+`docs/texcache_vram_invalidation_plan.md`.
+
+**Lição para este documento:** antes de estimar esforço de uma técnica, checar
+se ela já não está no código desligada. Esta é a segunda vez na sessão — o
+`shop_sync_fpscr` também estava implementado e nunca emitido.
+
+### O achado cruzado (texto original)
 
 `docs/tech_debits.md` item 4.7 já tinha catalogado o custo de conversão de textura CPU-side (`texconv*()`, O(texel count) por atualização) e o marcou como "esperado/inevitável, baixa prioridade" — uma conclusão razoável **se a única alternativa fosse não converter**. `docs/mali_gles_best_practices.md` §5a/5b encontrou que essa suposição pode estar incompleta: existe uma técnica estabelecida (enviar índices de paleta crus como textura + uma textura de paleta pequena, fazer a busca no fragment shader) que elimina a conversão CPU-side inteiramente, com precedente direto num emulador real na mesma categoria de problema (Dolphin, GameCube/Wii, formatos de textura igualmente hostis à CPU).
 
