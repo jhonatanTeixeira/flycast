@@ -1426,6 +1426,24 @@ void retro_run (void)
                extern u32 g_vramReprotects, g_vramSurvivors;
                fprintf(tf, "vram_pages_with_survivors\t%u\n", g_vramSurvivors);
                fprintf(tf, "vram_reprotects\t%u\n", g_vramReprotects);
+               extern u32 g_texSkippedUploads;
+               fprintf(tf, "tex_skipped_uploads\t%u\n", g_texSkippedUploads);
+               extern u64 g_texConvUs, g_texUploadUs, g_texBytes;
+               extern u32 g_texUpdates, g_texPaletted, g_texGpuHandled;
+               extern u32 g_texDq_notPal, g_texDq_filter, g_texDq_mipmap, g_texDq_vq;
+               fprintf(tf, "conv_us_total\t%llu\n", (unsigned long long)g_texConvUs);
+               fprintf(tf, "upload_us_total\t%llu\n", (unsigned long long)g_texUploadUs);
+               fprintf(tf, "updates\t%u\n", g_texUpdates);
+               fprintf(tf, "src_mb_total\t%.1f\n", g_texBytes / 1048576.0);
+               fprintf(tf, "paletted\t%u\n", g_texPaletted);
+               fprintf(tf, "gpu_handled\t%u\n", g_texGpuHandled);
+               fprintf(tf, "dq_not_paletted\t%u\n", g_texDq_notPal);
+               fprintf(tf, "dq_filter\t%u\n", g_texDq_filter);
+               fprintf(tf, "dq_mipmap\t%u\n", g_texDq_mipmap);
+               fprintf(tf, "dq_vq\t%u\n", g_texDq_vq);
+               extern u32 g_texDq_upscale, g_texDq_dump, g_texUpscaleVal;
+               fprintf(tf, "dq_upscale\t%u (TextureUpscale=%u)\n", g_texDq_upscale, g_texUpscaleVal);
+               fprintf(tf, "dq_dump\t%u\n", g_texDq_dump);
                fclose(tf);
             }
          }

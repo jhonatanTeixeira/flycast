@@ -230,6 +230,11 @@ class TextureCacheData : public BaseTextureCacheData
 {
 public:
 	GLuint texID;   //gl texture
+	// Layout atualmente alocado na GL para este texID. Se o proximo upload tem
+	// o mesmo formato e dimensoes, da pra atualizar no lugar com
+	// glTexSubImage2D em vez de realocar tudo com glTexImage2D. Zerado quando
+	// o texID e recriado. Ver FC_TEX_SUBIMAGE em gltex.cpp.
+	GLuint gl_w = 0, gl_h = 0, gl_comps = 0, gl_type = 0;
 	virtual std::string GetId() override { return std::to_string(texID); }
 	virtual void UploadToGPU(int width, int height, u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded = false) override;
 	virtual bool Delete() override;

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <mutex>
 #include <deps/xxhash/xxhash.h>
+#include <chrono>
 
 #if defined(HAVE_TEXUPSCALE) && !defined(TARGET_NO_OPENMP)
 #include <omp.h>
@@ -58,6 +59,35 @@ static bool TexPreciseInvlEnabled()
 }
 static std::vector<u32> pending_reprotect;	// page indices, guarded by vramlist_lock
 u32 g_vramReprotects, g_vramSurvivors;
+
+// FC_TEX_SKIP_UNCHANGED: skip convert+upload when the VRAM bytes behind a
+// texture are unchanged since the last upload. Safe by construction --
+// invalidation is untouched, only redundant work is avoided.
+static bool TexSkipUnchangedEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_TEX_SKIP_UNCHANGED") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+u32 g_texSkippedUploads;
+// Split do custo real de Update(): a conversao de formato na CPU (twiddled/
+// VQ/paletizado -> algo que a GL entenda) versus a transferencia pra GPU.
+// Nenhum dos dois existe no hardware real -- o PowerVR le a textura direto da
+// VRAM no formato nativo -- entao os dois sao imposto de emulacao, e o split
+// decide qual atacar. Tambem perfila POR QUE cada textura nao usa o caminho
+// GPU que ja existe (IsGpuHandledPaletted).
+extern bool g_taSplitEnabled;
+static inline u64 ta_split_now_us()
+{
+	return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+u64 g_texConvUs, g_texUploadUs;
+u32 g_texUpdates, g_texPaletted, g_texGpuHandled;
+u32 g_texDq_notPal, g_texDq_filter, g_texDq_mipmap, g_texDq_vq, g_texDq_upscale, g_texDq_dump;
+u32 g_texUpscaleVal;
+u64 g_texBytes;
 
 u8* vq_codebook;
 u32 palette_index;
@@ -535,6 +565,11 @@ void BaseTextureCacheData::Create()
 	lock_block = nullptr;
 	custom_image_data = nullptr;
 	custom_load_in_progress = 0;
+	// Must start invalid: a fresh entry has never been uploaded, so there is
+	// nothing to compare against. Leaving it uninitialized would let a brand
+	// new texture match garbage and skip its first upload.
+	content_hash = 0;
+	content_hash_valid = false;
 
 	//decode info from tsp/tcw into the texture struct
 	tex = &format[tcw.PixelFmt == PixelReserved ? Pixel1555 : tcw.PixelFmt];	//texture format table entry
@@ -673,6 +708,71 @@ void BaseTextureCacheData::Update()
 	}
 	if (settings.rend.CustomTextures)
 		custom_texture.LoadCustomTextureAsync(this);
+
+	// FC_TEX_SKIP_UNCHANGED (opt-in): a texture gets marked dirty whenever ANY
+	// write lands in its 4KB VRAM page, so in a 2D sprite game ~30 textures are
+	// invalidated per write and ~394 are re-uploaded per frame -- but only ~13
+	// writes actually happened. Measured on Metal Slug 6, that redundant
+	// convert+upload is ~40ms of a ~63ms frame.
+	//
+	// Unlike making the invalidation itself precise (tried, see
+	// docs/texcache_vram_invalidation_plan.md -- huge win but shows stale
+	// textures, because the page must be unprotected for the faulting write to
+	// complete and survivors then go unwatched), this never skips DETECTING a
+	// change: every texture is still invalidated exactly as before. It only
+	// skips redoing identical work, by hashing the same VRAM range the lock
+	// watches. If the bytes are the same, the converted texture would be too.
+	if (TexSkipUnchangedEnabled() && !settings.rend.CustomTextures)
+	{
+		u32 hash_start = sa_tex;
+		u32 hash_end = sa + size;	// exclusive; same span the vram lock covers
+		if (hash_start < hash_end && hash_end <= VRAM_SIZE)
+		{
+			u32 h32 = XXH32(&vram[hash_start], hash_end - hash_start, 7);
+			if (IsPaletted())
+				h32 ^= palette_hash;	// palette is part of the output
+			if (content_hash_valid && h32 == content_hash)
+			{
+				// Nothing changed. Re-arm the VRAM lock (the old block was
+				// freed by the invalidation that sent us here) and skip the
+				// conversion and the GPU upload entirely.
+				libCore_vramlock_Lock(sa_tex, sa + size - 1, this);
+				g_texSkippedUploads++;
+				return;
+			}
+			content_hash = h32;
+			content_hash_valid = true;
+		}
+	}
+
+	u64 _conv_t0 = 0;
+	if (g_taSplitEnabled)
+	{
+		_conv_t0 = ta_split_now_us();
+		g_texUpdates++;
+		g_texBytes += size;
+		if (IsPaletted())
+		{
+			g_texPaletted++;
+			if (IsGpuHandledPaletted(tsp, tcw))
+				g_texGpuHandled++;
+			else if (tsp.FilterMode != 0)
+				g_texDq_filter++;	// filtro bilinear desqualifica
+			else if (tcw.MipMapped)
+				g_texDq_mipmap++;
+			else if (tcw.VQ_Comp)
+				g_texDq_vq++;
+			else if (settings.rend.TextureUpscale != 1)
+			{
+				g_texDq_upscale++;
+				g_texUpscaleVal = (u32)settings.rend.TextureUpscale;
+			}
+			else if (settings.rend.DumpTextures)
+				g_texDq_dump++;
+		}
+		else
+			g_texDq_notPal++;		// nem e paletizada: caminho GPU nao se aplica
+	}
 
 	void *temp_tex_buffer = NULL;
 	u32 upscaled_w = w;
@@ -829,7 +929,12 @@ void BaseTextureCacheData::Update()
 	//lock the texture to detect changes in it
    libCore_vramlock_Lock(sa_tex, sa + size - 1, this);
 
+	if (g_taSplitEnabled)
+		g_texConvUs += ta_split_now_us() - _conv_t0;
+	u64 _up_t0 = g_taSplitEnabled ? ta_split_now_us() : 0;
 	UploadToGPU(upscaled_w, upscaled_h, (u8*)temp_tex_buffer, IsMipmapped(), mipmapped);
+	if (g_taSplitEnabled)
+		g_texUploadUs += ta_split_now_us() - _up_t0;
 	if (settings.rend.DumpTextures)
 	{
 		ComputeHash();

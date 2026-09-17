@@ -6,6 +6,15 @@
 
 #include "gles.h"
 
+static bool TexSubImageEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_TEX_SUBIMAGE") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+
+
 #ifndef GL_IMPLEMENTATION_COLOR_READ_TYPE
 #define GL_IMPLEMENTATION_COLOR_READ_TYPE 0x8B9A
 #endif
@@ -134,7 +143,28 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 		}
 		else
 		{
-			glTexImage2D(GL_TEXTURE_2D, 0,comps, width, height, 0, comps, gltype, temp_tex_buffer);
+			// FC_TEX_SUBIMAGE (opt-in): glTexImage2D REALOCA o armazenamento a
+			// cada chamada -- o driver descarta a alocacao antiga e cria outra,
+			// podendo sincronizar se a textura ainda estiver em uso por um draw
+			// pendente. Medido no Metal Slug 6: 166 mil uploads em 30s custando
+			// 15,49s (~93us cada, 35ms por frame) com apenas 21,2MB de dados no
+			// total -- ou seja, custo de chamada, nao de largura de banda.
+			//
+			// Quando formato e dimensoes nao mudaram, glTexSubImage2D atualiza
+			// no lugar sem realocar. E exatamente o padrao que o caminho
+			// mipmapped logo acima ja usa (glTexStorage2D uma vez +
+			// glTexSubImage2D); o caminho nao-mipmapped ficou sem ele.
+			if (TexSubImageEnabled()
+					&& gl_w == (GLuint)width && gl_h == (GLuint)height
+					&& gl_comps == comps && gl_type == gltype)
+			{
+				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, comps, gltype, temp_tex_buffer);
+			}
+			else
+			{
+				glTexImage2D(GL_TEXTURE_2D, 0,comps, width, height, 0, comps, gltype, temp_tex_buffer);
+				gl_w = width; gl_h = height; gl_comps = comps; gl_type = gltype;
+			}
 			if (mipmapped)
 				glGenerateMipmap(GL_TEXTURE_2D);
 	}
@@ -375,6 +405,7 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
    {
 		tf->Create();
 		tf->texID = glcache.GenTexture();
+		tf->gl_w = tf->gl_h = tf->gl_comps = tf->gl_type = 0;	// alocacao nova
 	}
 
 	//update if needed
@@ -392,6 +423,7 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
       {
       	glcache.DeleteTextures(1, &tf->texID);
       	tf->texID = glcache.GenTexture();
+      	tf->gl_w = tf->gl_h = tf->gl_comps = tf->gl_type = 0;	// alocacao nova
       	tf->CheckCustomTexture();
       }
       TexCacheHits++;

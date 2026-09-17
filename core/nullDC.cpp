@@ -539,6 +539,14 @@ void LoadSettings(void)
 	settings.rend.MaxFilteredTextureSize = 256;
 	settings.pvr.SynchronousRendering	 = 0;
 #endif
+	// 1 = sem upscaling. Tem de ficar FORA do #ifndef __LIBRETRO__ acima: numa
+	// build libretro o unico outro lugar que atribui esse campo (libretro.cpp)
+	// esta dentro de #ifdef HAVE_TEXUPSCALE, e o Makefile deste fork usa
+	// HAVE_TEXUPSCALE := 0 -- entao o campo ficava 0. Todo mundo le com `> 1`
+	// e tolera o 0, menos IsGpuHandledPaletted(), que exige `== 1`: com 0 o
+	// caminho de paleta na GPU ficava permanentemente desativado (medido: 0 de
+	// 166.285 texturas paletizadas o usavam no mslug6).
+	settings.rend.TextureUpscale = 1;
 	settings.rend.Fog				= true;
 	settings.rend.AutoExtraDepthScale    = true;
 	settings.rend.ExtraDepthScale        = 1.f;
