@@ -39,6 +39,11 @@ dois é uma ferramenta de investigação legítima.
    (`pendente` / `in progress` / `done` / `bloqueado`).
 4. **`docs/history.md`** — log cronológico com timestamp de tudo que foi feito.
    Adicionar uma entrada por sessão/marco relevante.
+5. **`docs/game_status.md`** — estado por jogo do ponto de vista de quem JOGA
+   (fps sentido, cauda longa, hicups, glitches), avaliado pelo usuário no
+   device. É o contraponto ao benchmark: já apareceu jogo com distribuição de
+   CPU plana no benchmark e hicup claro jogando (MBAA). Atualizar quando o
+   usuário reavaliar.
 
 ## Regras de ouro
 
