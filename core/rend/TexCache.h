@@ -639,6 +639,9 @@ void texture_VQ(PixelBuffer<pixel_type>* pb,u8* p_in,u32 Width,u32 Height)
 class BaseTextureCacheData;
 
 bool VramLockedWriteOffset(size_t offset);
+// Re-arms VRAM pages that kept live textures after a precise invalidation.
+// Must be called once per frame from the render path. See TexCache.cpp.
+void vramlock_ReprotectPending();
 void libCore_vramlock_Lock(u32 start_offset, u32 end_offset, BaseTextureCacheData *texture);
 
 #ifdef HAVE_TEXUPSCALE

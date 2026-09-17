@@ -33,6 +33,32 @@ u32 g_texMissDirty, g_texMissPalette, g_texMissBoth;
 // protection granularity being too coarse (ratio >> 1).
 u32 g_vramWriteFaults, g_vramInvalidations;
 
+// FC_TEX_PRECISE_INVL (opt-in): invalidate only the textures the write really
+// landed in, instead of every texture sharing the 4KB page.
+//
+// VRAM is protected a whole page at a time, and the old behaviour invalidated
+// every block registered in that page. Measured on Metal Slug 6's heavy
+// savestate: 13 write faults/frame turning into ~398 invalidations -- 29.88
+// textures killed per write, nearly all of them untouched -- which cost ~40ms
+// of a ~63ms frame in needless re-conversion and re-upload. See
+// docs/texcache_vram_invalidation_plan.md.
+//
+// The catch, and the reason this is two parts and not a three-line change:
+// after a fault the page MUST be unprotected or the faulting write can never
+// complete. Leaving survivors alive in a now-unprotected page means a later
+// write to them raises no fault at all and the game draws a stale texture.
+// So every page that keeps survivors is queued here and re-protected at the
+// next frame boundary, once the faulting write has long completed.
+static bool TexPreciseInvlEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_TEX_PRECISE_INVL") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+static std::vector<u32> pending_reprotect;	// page indices, guarded by vramlist_lock
+u32 g_vramReprotects, g_vramSurvivors;
+
 u8* vq_codebook;
 u32 palette_index;
 bool KillTex=false;
@@ -243,10 +269,21 @@ bool VramLockedWriteOffset(size_t offset)
 		std::lock_guard<cMutex> lockguard(vramlist_lock);
 
 		g_vramWriteFaults++;
+		const bool precise = TexPreciseInvlEnabled();
+		bool survivors = false;
 		for (auto& lock : list)
 		{
 			if (lock != nullptr)
 			{
+				// Precise mode: this block only dies if the write actually
+				// landed inside its own range. rend_text_invl() nulls the
+				// entry out for us (via vramlock_list_remove), so survivors
+				// are simply the ones we skip.
+				if (precise && !(offset >= lock->start && offset <= lock->end))
+				{
+					survivors = true;
+					continue;
+				}
             g_vramInvalidations++;
             rend_text_invl(lock);
 
@@ -257,12 +294,44 @@ bool VramLockedWriteOffset(size_t offset)
 				}
 			}
 		}
-		list.clear();
+		if (!survivors)
+			list.clear();
 
 		_vmem_unprotect_vram((u32)(offset & ~PAGE_MASK), PAGE_SIZE);
+
+		// Part 2: the page is now unprotected but still holds live textures.
+		// Queue it so the next frame boundary puts the guard back; without
+		// this the survivors silently stop being watched.
+		if (survivors)
+		{
+			g_vramSurvivors++;
+			pending_reprotect.push_back((u32)addr_hash);
+		}
 	}
 
 	return true;
+}
+
+// Called once per frame from the render path (ta_parse_vdrc). Safe point: any
+// faulting write that caused the unprotect has long since completed by now.
+void vramlock_ReprotectPending()
+{
+	if (!TexPreciseInvlEnabled())
+		return;
+	std::lock_guard<cMutex> lockguard(vramlist_lock);
+	for (u32 page : pending_reprotect)
+	{
+		std::vector<vram_block *>& list = VramLocks[page];
+		// Only re-protect if something is actually still live in there --
+		// otherwise a later vramlock_list_add() will protect it anyway.
+		if (!list.empty() && !std::all_of(list.begin(), list.end(),
+				[](vram_block *block) { return block == nullptr; }))
+		{
+			_vmem_protect_vram(page * PAGE_SIZE, PAGE_SIZE);
+			g_vramReprotects++;
+		}
+	}
+	pending_reprotect.clear();
 }
 
 bool VramLockedWrite(u8* address)

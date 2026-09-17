@@ -1423,6 +1423,9 @@ void retro_run (void)
                fprintf(tf, "vram_write_faults\t%u\n", g_vramWriteFaults);
                fprintf(tf, "vram_invalidations\t%u\n", g_vramInvalidations);
                fprintf(tf, "tex_killed_per_write\t%.2f\n", g_vramWriteFaults ? (double)g_vramInvalidations/g_vramWriteFaults : 0);
+               extern u32 g_vramReprotects, g_vramSurvivors;
+               fprintf(tf, "vram_pages_with_survivors\t%u\n", g_vramSurvivors);
+               fprintf(tf, "vram_reprotects\t%u\n", g_vramReprotects);
                fclose(tf);
             }
          }

@@ -6,6 +6,7 @@
 #include "ta.h"
 #include <chrono>	// FC_TA_SPLIT timing
 #include "ta_ctx.h"
+#include "rend/TexCache.h"	// vramlock_ReprotectPending()
 #include "pvr_mem.h"
 #include "Renderer_if.h"
 
@@ -1594,6 +1595,11 @@ static bool UsingAutoSort(int pass_number);
 
 bool ta_parse_vdrc(TA_context* ctx)
 {
+	// Re-protect VRAM pages that survived a precise invalidation last frame.
+	// Done here because it runs exactly once per frame on the render path, and
+	// by now any write that triggered the unprotect has completed.
+	vramlock_ReprotectPending();
+
 	bool rv=false;
 	vd_ctx = ctx;
 	vd_rc = vd_ctx->rend;

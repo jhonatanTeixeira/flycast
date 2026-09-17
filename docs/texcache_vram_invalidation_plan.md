@@ -140,3 +140,68 @@ quem só ler o resumo.
 Diagnóstico completo e commitado (`b509c7ee7`). Implementação **não iniciada**
 — aguardando decisão. Toda a instrumentação necessária pra validar já está no
 código e é opt-in.
+
+---
+
+## Tentativa 1 (2026-09-16): precisa + reproteção no frame seguinte — GANHO ENORME, MAS QUEBRA VISUALMENTE
+
+Implementada como opt-in (`FC_TEX_PRECISE_INVL`, **default OFF**), exatamente
+as duas partes do plano acima.
+
+### Os números confirmam o diagnóstico e o tamanho do prêmio
+
+| | OFF | ON |
+|---|---|---|
+| texturas mortas por escrita | 29,83 | **1,01** |
+| miss rate | 76,7% | **5,1%** |
+| invalidações (30s) | 158.996 | **10.967** (-93%) |
+| tempo de textura/frame | 58,06 ms | **17,86 ms** |
+| `core_average` | 62,08 ms | **33,63 ms** (-46%) |
+| **fps** | **14,23** | **23,23** (**+63%**) |
+
+Write faults dobraram (5.329→10.819), exatamente o custo previsto, irrelevante
+perto do que economiza. A reproteção rodou (10.816 páginas com sobreviventes,
+10.803 reprotegidas).
+
+### Mas quebra a imagem — e o usuário viu em minutos
+
+Relato: mslug6 virou "sopa de sprites, todos desconexos pela tela"; kofnw com
+"bonecos embaralhados como quebra-cabeça mal montado"; mbaa **não** quebrou os
+sprites. Isso é textura **obsoleta** (o jogo reusa a mesma região de VRAM para
+sprites diferentes e quem não foi invalidado segue mostrando o anterior), não
+corrupção de dados.
+
+### Causa: a Parte 1 está certa, a Parte 2 tem janela grande demais
+
+A razão de **1,01 invalidação por fault** prova que o teste de intervalo
+funciona — quase todo fault acha exatamente a textura certa. O furo é o
+intervalo de tempo:
+
+1. Fault na página P → invalida só a textura A → **desprotege P**
+2. **Ainda no mesmo frame**, o jogo escreve na textura B, também em P →
+   **nenhum fault**, P está desprotegida
+3. No frame seguinte reprotegemos, mas B já está errada e nunca foi marcada suja
+
+O código original não tem esse furo justamente porque mata **tudo** na página:
+nada sobrevive para ficar obsoleto. A lentidão dele é o preço da correção.
+Reprotejer "no próximo frame" deixa uma janela de até um frame inteiro, e num
+jogo que faz streaming de sprites isso é uma eternidade.
+
+### Caminhos possíveis
+
+- **A — verificar por hash na reproteção:** guardar hash dos sobreviventes ao
+  desproteger e recalcular ao reprotejer, invalidando quem mudou. Fecha o furo
+  de forma garantida; custa hashear ~30 texturas por fault, muito mais barato
+  que re-uploadar 30. Incremental sobre o que já está escrito.
+- **B — emular a escrita no handler e nunca desproteger:** elimina a janela por
+  construção; é o que emuladores maduros fazem. Exige decodificar a instrução
+  ARM64 que faltou — o projeto já tem maquinário próximo (`ngen_Rewrite`
+  decodifica acessos de memória para o stub de Store Queue).
+- **C — olhar como o `flyinghead/flycast` atual resolve isso.** São ~10 anos a
+  mais de evolução exatamente neste arquivo, e o `CLAUDE.md` já trata comparação
+  com o upstream como ferramenta legítima de investigação. Antes de inventar,
+  vale ver se já existe solução conhecida.
+
+**Estado:** código presente, opt-in, **desligado por padrão** (sem
+`FC_TEX_PRECISE_INVL` o comportamento é exatamente o original). Não usar em
+build de uso real até o furo ser fechado.
