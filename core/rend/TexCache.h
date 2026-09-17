@@ -684,6 +684,7 @@ public:
 	u32 palette_hash;			// Palette hash at time of last update
 	u32 content_hash;			// FC_TEX_SKIP_UNCHANGED: xxhash of the VRAM source at last upload
 	bool content_hash_valid;	// ...whether content_hash holds anything yet
+	u32 last_update_frame;		// FrameCount do ultimo Update(), p/ detectar re-upload no mesmo frame
 	u32 vq_codebook;            // VQ quantizers table for compressed textures
 	u32 texture_hash;			// xxhash of texture data, used for custom textures
 	u32 old_texture_hash;		// legacy hash

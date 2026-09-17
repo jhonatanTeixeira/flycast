@@ -6,6 +6,18 @@
 
 #include "gles.h"
 
+// Split do custo de UploadToGPU: o bind (que passa pelo state cache do
+// glcache e pelo wrapper glsm do libretro) versus a chamada de transferencia
+// em si. ~25us por upload de uma textura de ~134 bytes nao e banda; isto diz
+// se o custo esta na chamada de dados ou no overhead de estado em volta.
+extern bool g_taSplitEnabled;
+u64 g_texBindUs, g_texCallUs;
+static inline u64 tex_now_us()
+{
+	return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 static bool TexSubImageEnabled()
 {
 	static int enabled = -1;
@@ -52,8 +64,15 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 	if (texID != 0)
 	{
 		//upload to OpenGL !
+		u64 _b0 = g_taSplitEnabled ? tex_now_us() : 0;
 		glcache.BindTexture(GL_TEXTURE_2D, texID);
+		if (g_taSplitEnabled)
+			g_texBindUs += tex_now_us() - _b0;
 		GLuint comps = tex_type == TextureType::_8 ? gl.single_channel_format : GL_RGBA;
+		// GLES3 nao aceita GL_RED como internalformat nao-dimensionado; tem de
+		// ser GL_R8. Para os demais formatos o internalformat segue igual ao
+		// format, como antes.
+		GLuint internalComps = tex_type == TextureType::_8 ? gl.single_channel_internal_format : comps;
 		GLuint gltype;
 		u32 bytes_per_pixel = 2;
 		switch (tex_type)
@@ -154,6 +173,7 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 			// no lugar sem realocar. E exatamente o padrao que o caminho
 			// mipmapped logo acima ja usa (glTexStorage2D uma vez +
 			// glTexSubImage2D); o caminho nao-mipmapped ficou sem ele.
+			u64 _c0 = g_taSplitEnabled ? tex_now_us() : 0;
 			if (TexSubImageEnabled()
 					&& gl_w == (GLuint)width && gl_h == (GLuint)height
 					&& gl_comps == comps && gl_type == gltype)
@@ -162,9 +182,11 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 			}
 			else
 			{
-				glTexImage2D(GL_TEXTURE_2D, 0,comps, width, height, 0, comps, gltype, temp_tex_buffer);
+				glTexImage2D(GL_TEXTURE_2D, 0,internalComps, width, height, 0, comps, gltype, temp_tex_buffer);
 				gl_w = width; gl_h = height; gl_comps = comps; gl_type = gltype;
 			}
+			if (g_taSplitEnabled)
+				g_texCallUs += tex_now_us() - _c0;
 			if (mipmapped)
 				glGenerateMipmap(GL_TEXTURE_2D);
 	}

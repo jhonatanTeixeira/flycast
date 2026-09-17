@@ -143,10 +143,39 @@ muda (`FC_TEX_SUBIMAGE`, opt-in, implementado) rendeu apenas **-4%**. Sobra
 exatamente a hipótese deste item — dreno de pipeline / cópia-fantasma por
 escrever em recurso em voo.
 
-**Próximo passo concreto:** testar round-robin de N texture objects por
-`TextureCacheData` (escrever no slot que a GPU menos provavelmente está
-lendo), ou PBO para upload assíncrono. Medir com os contadores que já existem
-(`upload_us_total`).
+### Sub-hipóteses já testadas e REFUTADAS (2026-09-16)
+
+Antes de construir round-robin, três hipóteses mais baratas foram medidas e
+caíram. Vale registrar porque duas delas são contraintuitivas:
+
+1. **Realocação (`glTexImage2D` vs `glTexSubImage2D`)** — `FC_TEX_SUBIMAGE`,
+   implementado e opt-in: apenas **-4%**. Não é o custo de realocar.
+   Isso também é evidência CONTRA a hipótese de dreno de pipeline: se a GPU
+   estivesse travando numa textura em uso, `glTexImage2D` (que realoca e não
+   trava) deveria ser bem mais rápido que `glTexSubImage2D` (que escreve no
+   lugar e travaria). Medimos praticamente iguais.
+2. **Re-upload redundante da mesma textura no mesmo frame** — contador
+   `reupload_same_frame` = **0**. As ~524 texturas por frame são todas
+   distintas e todas mudaram de verdade.
+3. **Formato legado `GL_ALPHA` caindo em caminho emulado** — `FC_TEX_R8`,
+   implementado e opt-in (troca coordenada de `GL_ALPHA`→`GL_RED`/`GL_R8`
+   mais o swizzle do shader de `.a`→`.r`): **PIOROU 56%** (21,5µs → 33,5µs
+   por chamada; fps 568→553 frames). O formato "moderno e nativo" do GLES3 é
+   mais lento neste driver. O Mali r13p0 é de ~2016, da era em que `GL_ALPHA`
+   era o caminho principal — está otimizado pra ele. **Mantido OFF.**
+
+### Onde isso deixa o item
+
+O custo residual é **21,5µs por chamada** de upload, para texturas de ~134
+bytes, com `glcache.BindTexture` respondendo por outros 3,1µs. Depois de
+descartar realocação, redundância e formato, o que sobra é overhead de
+chamada do driver — e a única alavanca restante é **reduzir a quantidade de
+chamadas** (524/frame), não torná-las mais baratas. Isso significa atlas de
+textura: mudança arquitetural grande, não um ajuste.
+
+Round-robin continua não testado, mas a evidência (1) acima joga contra ele.
+**Prioridade rebaixada** até haver motivo novo para acreditar no mecanismo de
+stall.
 
 ### O achado (texto original)
 

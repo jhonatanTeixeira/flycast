@@ -119,6 +119,7 @@ struct gl_ctx
 	int gl_minor;
 	bool is_gles;
 	GLuint single_channel_format;
+	GLuint single_channel_internal_format;	// sized (GL_R8) quando GL_RED; GLES3 exige sized p/ GL_RED
 	GLenum index_type;
 	bool stencil_present;
 	f32 max_anisotropy;

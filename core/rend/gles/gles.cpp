@@ -25,6 +25,13 @@
 // KMSDRM/EGL platform, independent of whatever windowing toolkit sits on
 // top of it) instead of extending that symbol table for one function.
 #include <EGL/egl.h>
+
+// GL_R8 (GLES 3.0 core / GL 3.0). Os headers de GL deste build (glsym) nao o
+// declaram; os outros formatos dimensionados usados aqui (GL_RGB5_A1 etc.) ja
+// vem de outro caminho. Valor da especificacao.
+#ifndef GL_R8
+#define GL_R8 0x8229
+#endif
 typedef void (*PFN_glInvalidateFramebuffer)(GLenum target, GLsizei numAttachments, const GLenum *attachments);
 static PFN_glInvalidateFramebuffer glInvalidateFramebuffer_;
 
@@ -162,6 +169,14 @@ out highp vec4 FragColor;
 #define in varying
 #define texture texture2D
 #define FOG_CHANNEL a
+#endif
+// FC_TEX_R8: em GLES3 o fork usa GL_ALPHA (formato legado, nao-dimensionado)
+// para texturas de 1 canal -- em drivers Mali modernos isso cai num caminho
+// emulado. GL_RED/GL_R8 e o nativo em GLES3. Quando ligado, o define abaixo
+// e injetado junto com TARGET_GL e o shader passa a amostrar .r em vez de .a.
+#ifdef SINGLE_CHANNEL_R
+#undef FOG_CHANNEL
+#define FOG_CHANNEL r
 #endif
 
 #if TARGET_GL == GL3 || TARGET_GL == GLES3
@@ -455,6 +470,18 @@ void findGLVersion()
 			gl.index_type = GL_UNSIGNED_SHORT;
 		}
 		gl.single_channel_format = GL_ALPHA;
+		gl.single_channel_internal_format = GL_ALPHA;
+		// FC_TEX_R8 (opt-in): ver comentario no shader acima. So faz sentido em
+		// GLES3+, onde GL_R8 existe. O define extra viaja junto do TARGET_GL
+		// (o "%s" do prelude do shader) para manter o swizzle coerente com o
+		// formato -- os dois TEM de mudar juntos, senao a textura le o canal
+		// errado e some da tela.
+		if (gl.gl_major >= 3 && getenv("FC_TEX_R8") != nullptr)
+		{
+			gl.single_channel_format = GL_RED;
+			gl.single_channel_internal_format = GL_R8;
+			gl.gl_version = "GLES3\n#define SINGLE_CHANNEL_R 1";
+		}
 
 		GLint stencilBits = 0;
 		glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
@@ -469,12 +496,14 @@ void findGLVersion()
 			gl.gl_version = "GL3";
 			gl.glsl_version_header = "#version 130";
 			gl.single_channel_format = GL_RED;
+			gl.single_channel_internal_format = GL_R8;
 		}
 		else
 		{
 			gl.gl_version = "GL2";
 			gl.glsl_version_header = "#version 120";
 			gl.single_channel_format = GL_ALPHA;
+			gl.single_channel_internal_format = GL_ALPHA;
 		}
 	}
 	gl.max_anisotropy = 1.f;

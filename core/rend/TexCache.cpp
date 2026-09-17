@@ -71,6 +71,12 @@ static bool TexSkipUnchangedEnabled()
 	return enabled == 1;
 }
 u32 g_texSkippedUploads;
+// Com invalidacao por pagina, uma escrita derruba ~30 texturas. Se o jogo
+// escreve varias vezes por frame em paginas diferentes, a MESMA textura pode
+// ser invalidada e re-uploadada mais de uma vez no mesmo frame -- trabalho
+// puramente redundante, ja que so o ultimo upload e o que a GPU le. Isto mede
+// quanto disso acontece.
+u32 g_texReupSameFrame;
 // Split do custo real de Update(): a conversao de formato na CPU (twiddled/
 // VQ/paletizado -> algo que a GL entenda) versus a transferencia pra GPU.
 // Nenhum dos dois existe no hardware real -- o PowerVR le a textura direto da
@@ -570,6 +576,7 @@ void BaseTextureCacheData::Create()
 	// new texture match garbage and skip its first upload.
 	content_hash = 0;
 	content_hash_valid = false;
+	last_update_frame = 0;
 
 	//decode info from tsp/tcw into the texture struct
 	tex = &format[tcw.PixelFmt == PixelReserved ? Pixel1555 : tcw.PixelFmt];	//texture format table entry
@@ -750,6 +757,9 @@ void BaseTextureCacheData::Update()
 	{
 		_conv_t0 = ta_split_now_us();
 		g_texUpdates++;
+		if (last_update_frame == FrameCount)
+			g_texReupSameFrame++;
+		last_update_frame = FrameCount;
 		g_texBytes += size;
 		if (IsPaletted())
 		{

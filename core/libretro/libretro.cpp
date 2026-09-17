@@ -1444,6 +1444,11 @@ void retro_run (void)
                extern u32 g_texDq_upscale, g_texDq_dump, g_texUpscaleVal;
                fprintf(tf, "dq_upscale\t%u (TextureUpscale=%u)\n", g_texDq_upscale, g_texUpscaleVal);
                fprintf(tf, "dq_dump\t%u\n", g_texDq_dump);
+               extern u64 g_texBindUs, g_texCallUs;
+               fprintf(tf, "bind_us_total\t%llu\n", (unsigned long long)g_texBindUs);
+               fprintf(tf, "glcall_us_total\t%llu\n", (unsigned long long)g_texCallUs);
+               extern u32 g_texReupSameFrame;
+               fprintf(tf, "reupload_same_frame\t%u\n", g_texReupSameFrame);
                fclose(tf);
             }
          }
