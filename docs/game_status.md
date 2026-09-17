@@ -22,6 +22,7 @@
 | **Shenmue** | 18-30 | melhorou muito | neve agora bem consistente a 30 |
 | **mslug6** | 30 (20 em boss) | consistente nos boss | resto do jogo full speed |
 | **Dead or Alive 2** | 25-30 | — | quase lá; só roda bem no fork `flycast_extreme` |
+| **Giga Wing 2** (`gwing2`?) | — | **não é cauda** | **jogável** (antes não era); percebe-se o frameskip |
 
 ## Detalhe
 
@@ -85,6 +86,32 @@ Foi o jogo mais medido da sessão: fps +35% e `core_p99` -57% com o fix da
 paleta. O que sobra nas cenas de boss, pelo último mapa do frame:
 upload de textura ~21,5ms + submissão GL (`render`) ~17,3ms.
 
+### Giga Wing 2 — jogável, mas dá pra perceber o frameskip
+Romset MAME: provavelmente **`gwing2`** — *confirmar no device*, o nome não
+foi verificado (SSH estava fora no momento do registro).
+
+**Antes não era jogável; hoje é.** Mas não está liso, e o sintoma é de um
+tipo diferente do resto da lista: **não são hicups** (picos isolados de frame
+time). O que se percebe é o **frameskip do retrorun3 atuando de forma
+constante** — ou seja, o emulador está consistentemente abaixo do alvo e o
+frontend descarta frames com regularidade para manter o ritmo.
+
+**Por que essa distinção importa:** separa a lista em dois problemas
+diferentes, que pedem soluções diferentes:
+
+- **Limitado por cauda** (MBAA, kofnw): a média é boa, os picos é que
+  estragam. Atacar p95/p99 — e no caso do MBAA a evidência aponta para fora
+  da simulação (ver acima).
+- **Limitado por throughput** (Giga Wing 2, mslug6 nas áreas de boss): o
+  frame inteiro é caro de forma consistente, não há pico a remover. Só
+  melhora tornando o trabalho por frame mais barato.
+
+Giga Wing 2 é um shmup com muita coisa na tela (bullet hell), o que é
+consistente com o perfil do mslug6 nos boss: muitas partículas/sprites ⇒
+muita textura e muito draw call. **Ainda não medido** — vale rodar com
+savestate e o `FC_TA_SPLIT`/`FC_REND_SPLIT` para ver se o mapa do frame bate
+com o do mslug6 (upload de textura + submissão GL) ou se é outra coisa.
+
 ### Dead or Alive 2 — quase lá, e com uma pista de fora
 25-30 fps no nosso branch. **Só roda bem via RetroArch com o fork
 `flycast_extreme`** — não se sabe o que esse fork tem que faz diferença aqui.
@@ -118,6 +145,9 @@ disponível. Sem uma das duas, vira adivinhação.
    Enquanto não existir, o 3D pesado não é medível de forma confiável.
 4. **Skies of Arcadia** — drops localizados, ainda não diagnosticados. Barato
    de investigar justamente por serem localizados.
+4b. **Giga Wing 2** — limitado por throughput, não por cauda. Medir primeiro
+   (savestate + `FC_TA_SPLIT`/`FC_REND_SPLIT`) para ver se o mapa do frame é
+   o mesmo do mslug6; se for, os dois andam juntos com o mesmo trabalho.
 5. **Upload de textura (~21,5ms no mslug6)** — maior item isolado, mas as
    alavancas baratas já foram testadas e refutadas (realocação, redundância,
    formato — ver `rendering_improvement_plan.md` item 4). O que sobra é
