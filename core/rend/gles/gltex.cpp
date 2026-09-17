@@ -69,10 +69,6 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 		if (g_taSplitEnabled)
 			g_texBindUs += tex_now_us() - _b0;
 		GLuint comps = tex_type == TextureType::_8 ? gl.single_channel_format : GL_RGBA;
-		// GLES3 nao aceita GL_RED como internalformat nao-dimensionado; tem de
-		// ser GL_R8. Para os demais formatos o internalformat segue igual ao
-		// format, como antes.
-		GLuint internalComps = tex_type == TextureType::_8 ? gl.single_channel_internal_format : comps;
 		GLuint gltype;
 		u32 bytes_per_pixel = 2;
 		switch (tex_type)
@@ -100,6 +96,17 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 			gltype = 0;
 			break;
 		}
+		// internalformat TEM de ser calculado aqui, depois do switch: o case
+		// _565 reatribui `comps` para GL_RGB. Calcular antes pegava GL_RGBA e
+		// gerava glTexImage2D(internalformat=GL_RGBA, format=GL_RGB,
+		// type=565) -- combinacao invalida, GL_INVALID_OPERATION, textura
+		// nunca sobe. Como 565 e o formato sem alpha, o sintoma era
+		// exatamente os cenarios de fundo dos jogos 2D sumirem enquanto os
+		// sprites continuavam certos. Ver git a2350c567 (regressao) e este fix.
+		// So o caso de 1 canal precisa de internalformat diferente do format
+		// (GLES3 exige GL_R8 dimensionado quando o format e GL_RED).
+		GLuint internalComps = tex_type == TextureType::_8 ? gl.single_channel_internal_format : comps;
+
 		if (mipmapsIncluded)
 		{
 			int mipmapLevels = 0;

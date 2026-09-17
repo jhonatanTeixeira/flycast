@@ -371,3 +371,51 @@ sempre atual. **Mais rápido e mais correto.**
 | `FC_TEX_SUBIMAGE` | opt-in, OFF. Ganho ~4%, não validado visualmente |
 | `FC_TEX_SKIP_UNCHANGED` | opt-in, OFF. Correto mas ~2% de acerto neste jogo |
 | `FC_TEX_PRECISE_INVL` | opt-in, OFF. **Não usar** — quebra a imagem |
+
+---
+
+## REGRESSÃO E FIX (2026-09-16, noite): fundos 2D sumiram por `internalformat` errado
+
+Entre o fix da paleta (validado visualmente pelo usuário, tudo certo) e o
+commit seguinte `a2350c567` (os três experimentos do item 4), os **cenários de
+fundo de jogos 2D sumiram** — kofnw, ggxxsla, gigawing2. Sprites continuavam
+corretos.
+
+### A causa
+
+No `a2350c567` o `internalformat` do `glTexImage2D` passou a vir de uma
+variável nova, calculada **antes** do `switch` que escolhe o tipo GL:
+
+```c
+GLuint comps = tex_type == TextureType::_8 ? gl.single_channel_format : GL_RGBA;
+GLuint internalComps = ... : comps;      // <<< capturado aqui (GL_RGBA)
+switch (tex_type) {
+case TextureType::_565:
+    gltype = GL_UNSIGNED_SHORT_5_6_5;
+    comps = GL_RGB;                      // <<< mas `comps` muda AQUI
+    break;
+```
+
+Para texturas 565 saía `glTexImage2D(internalformat=GL_RGBA, format=GL_RGB,
+type=GL_UNSIGNED_SHORT_5_6_5)` — combinação inválida, `GL_INVALID_OPERATION`,
+a textura nunca subia. Como 565 é o formato **sem alpha**, atingia exatamente
+os fundos opacos e deixava os sprites (1555/4444) intactos.
+
+**Fix:** calcular `internalComps` depois do `switch`, onde `comps` já é final.
+
+### Dois erros de processo meus, além do bug
+
+1. **Declarei o commit "inerte com as flags desligadas" por raciocínio, sem
+   verificar o fluxo da variável.** Li o código procurando confirmar que as
+   flags estavam off e parei; bastava seguir `comps` até o uso para ver que
+   ela muda no `switch`. A conclusão "inerte" foi o que me fez procurar a
+   causa no lugar errado.
+2. **Bissequei para trás quando o usuário já tinha dado a resposta.** Ele
+   disse que validava visualmente e que até o fix da GPU estava bom — isso
+   limitava a um único commit. Mesmo assim fui testar a baseline da manhã.
+
+### Nota sobre o caminho de paleta na GPU
+
+Durante o diagnóstico ele foi temporariamente desligado por suspeita
+infundada, e religado depois que a causa real apareceu. Ele está **correto** e
+validado visualmente pelo usuário em mslug6, kofnw, ggxxsla e gigawing2.
