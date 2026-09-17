@@ -4,11 +4,53 @@
 	Parsing of the TA stream and generation of vertex data !
 */
 #include "ta.h"
+#include <chrono>	// FC_TA_SPLIT timing
 #include "ta_ctx.h"
 #include "pvr_mem.h"
 #include "Renderer_if.h"
 
 #include <algorithm>
+
+// FC_TA_SPLIT (opt-in): break ta_parse_vdrc into its real stages. Measured on
+// Metal Slug 6's heavy savestate, renderer->Process() is ~57ms of a ~63ms
+// frame -- by far the critical path, bigger than the SH4 JIT and than GL
+// submission. This says WHICH stage inside it: the TaCmd decode walk over the
+// display list, the three make_index passes (op/pt/tr), or fix_texture_bleeding.
+// Accumulated, dumped by ta_dump_split() from retro_run().
+bool g_taSplitEnabled;
+u64 g_taDecodeUs, g_taIndexUs, g_taBleedUs;
+u32 g_taSplitFrames, g_taPolysOp, g_taPolysPt, g_taPolysTr;
+// How much of the decode walk is actually texture lookup/upload, and how big
+// the walk really is (passes and bytes of display list) -- 557 polys taking
+// 42ms means the cost isn't per-polygon parsing.
+u64 g_taTexUs; u32 g_taTexCalls, g_taPasses; u64 g_taBytes;
+
+static inline u64 ta_now_us()
+{
+	return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void ta_dump_split(const char *path)
+{
+	FILE *f = fopen(path, "w");
+	if (f == nullptr)
+		return;
+	u32 n = g_taSplitFrames ? g_taSplitFrames : 1;
+	fprintf(f, "frames\t%u\n", g_taSplitFrames);
+	fprintf(f, "decode_ms_avg\t%.3f\n", g_taDecodeUs / 1000.0 / n);
+	fprintf(f, "make_index_ms_avg\t%.3f\n", g_taIndexUs / 1000.0 / n);
+	fprintf(f, "bleeding_ms_avg\t%.3f\n", g_taBleedUs / 1000.0 / n);
+	fprintf(f, "polys_op_avg\t%u\n", g_taPolysOp / n);
+	fprintf(f, "polys_pt_avg\t%u\n", g_taPolysPt / n);
+	fprintf(f, "polys_tr_avg\t%u\n", g_taPolysTr / n);
+	fprintf(f, "tex_ms_avg\t%.3f\n", g_taTexUs / 1000.0 / n);
+	fprintf(f, "tex_calls_avg\t%u\n", g_taTexCalls / n);
+	fprintf(f, "passes_avg\t%.2f\n", (double)g_taPasses / n);
+	fprintf(f, "list_kb_avg\t%.1f\n", g_taBytes / 1024.0 / n);
+	fclose(f);
+}
+
 #include <cmath>
 
 // TODO/FIXME - should be moved later
@@ -709,7 +751,9 @@ private:
 		d_pp->texid = -1;
 
 		if (d_pp->pcw.Texture)
-			d_pp->texid = renderer->GetTexture(d_pp->tsp,d_pp->tcw);
+			{ u64 _tt = g_taSplitEnabled ? ta_now_us() : 0;
+			  d_pp->texid = renderer->GetTexture(d_pp->tsp,d_pp->tcw);
+			  if (g_taSplitEnabled) { g_taTexUs += ta_now_us() - _tt; g_taTexCalls++; } }
 
 		d_pp->tsp1.full = -1;
 		d_pp->tcw1.full = -1;
@@ -777,7 +821,9 @@ private:
 		CurrentPP->tsp1.full = pp->tsp1.full;
 		CurrentPP->tcw1.full = pp->tcw1.full;
 		if (pp->pcw.Texture)
-		   CurrentPP->texid1 = renderer->GetTexture(pp->tsp1, pp->tcw1);
+		   { u64 _tt = g_taSplitEnabled ? ta_now_us() : 0;
+		     CurrentPP->texid1 = renderer->GetTexture(pp->tsp1, pp->tcw1);
+		     if (g_taSplitEnabled) { g_taTexUs += ta_now_us() - _tt; g_taTexCalls++; } }
 	}
 
 	// Intensity, with Two Volumes
@@ -791,7 +837,9 @@ private:
 		CurrentPP->tsp1.full = pp->tsp1.full;
 		CurrentPP->tcw1.full = pp->tcw1.full;
 		if (pp->pcw.Texture)
-		   CurrentPP->texid1 = renderer->GetTexture(pp->tsp1, pp->tcw1);
+		   { u64 _tt = g_taSplitEnabled ? ta_now_us() : 0;
+		     CurrentPP->texid1 = renderer->GetTexture(pp->tsp1, pp->tcw1);
+		     if (g_taSplitEnabled) { g_taTexUs += ta_now_us() - _tt; g_taTexCalls++; } }
 	}
 	__forceinline
 		static void TACALL AppendPolyParam4B(void* vpp)
@@ -1171,7 +1219,9 @@ private:
 		d_pp->texid = -1;
 		
 		if (d_pp->pcw.Texture) {
-			d_pp->texid = renderer->GetTexture(d_pp->tsp,d_pp->tcw);
+			{ u64 _tt = g_taSplitEnabled ? ta_now_us() : 0;
+			  d_pp->texid = renderer->GetTexture(d_pp->tsp,d_pp->tcw);
+			  if (g_taSplitEnabled) { g_taTexUs += ta_now_us() - _tt; g_taTexCalls++; } }
 		}
 		d_pp->tcw1.full = -1;
 		d_pp->tsp1.full = -1;
@@ -1562,7 +1612,9 @@ bool ta_parse_vdrc(TA_context* ctx)
 		PolyParam *bgpp = vd_rc.global_param_op.head();
 		if (bgpp->pcw.Texture)
 		{
-			bgpp->texid = renderer->GetTexture(bgpp->tsp, bgpp->tcw);
+			{ u64 _tt = g_taSplitEnabled ? ta_now_us() : 0;
+			  bgpp->texid = renderer->GetTexture(bgpp->tsp, bgpp->tcw);
+			  if (g_taSplitEnabled) { g_taTexUs += ta_now_us() - _tt; g_taTexCalls++; } }
 			empty_context = false;
 		}
 
@@ -1575,8 +1627,16 @@ bool ta_parse_vdrc(TA_context* ctx)
          Ta_Dma* ta_data     = (Ta_Dma*)vd_rc.proc_start;
          Ta_Dma* ta_data_end = (Ta_Dma*)vd_rc.proc_end - 1;
 
+         u64 tdec = g_taSplitEnabled ? ta_now_us() : 0;
+         if (g_taSplitEnabled)
+         {
+            g_taPasses++;
+            g_taBytes += (u64)((u8*)ta_data_end - (u8*)ta_data);
+         }
          while (ta_data <= ta_data_end)
             ta_data =TaCmd(ta_data,ta_data_end);
+         if (g_taSplitEnabled)
+            g_taDecodeUs += ta_now_us() - tdec;
 
          if (ctx->rend.Overrun)
             break;
@@ -1588,6 +1648,7 @@ bool ta_parse_vdrc(TA_context* ctx)
 
 			if (pass == 0 || !empty_pass)
 			{
+				u64 tidx = g_taSplitEnabled ? ta_now_us() : 0;
 				RenderPass *render_pass = vd_rc.render_passes.Append();
 				render_pass->op_count = vd_rc.global_param_op.used();
 				make_index(&vd_rc.global_param_op, op_poly_count,
@@ -1605,6 +1666,13 @@ bool ta_parse_vdrc(TA_context* ctx)
 				render_pass->mvo_tr_count = vd_rc.global_param_mvo_tr.used();
 				render_pass->autosort = UsingAutoSort(pass);
 				render_pass->z_clear = ClearZBeforePass(pass);
+				if (g_taSplitEnabled)
+				{
+					g_taIndexUs += ta_now_us() - tidx;
+					g_taPolysOp += render_pass->op_count;
+					g_taPolysPt += render_pass->pt_count;
+					g_taPolysTr += render_pass->tr_count;
+				}
 			}
 		}
 		rv = !empty_context;
@@ -1614,9 +1682,12 @@ bool ta_parse_vdrc(TA_context* ctx)
 		WARN_LOG(PVR, "ERROR: TA context overrun");
 	else if (screen_height > 480)
 	{
+		u64 tbl = g_taSplitEnabled ? ta_now_us() : 0;
 		fix_texture_bleeding(&vd_rc.global_param_op);
 		fix_texture_bleeding(&vd_rc.global_param_pt);
 		fix_texture_bleeding(&vd_rc.global_param_tr);
+		if (g_taSplitEnabled)
+			g_taBleedUs += ta_now_us() - tbl;
 	}
    if (rv && !overrun)
    {
@@ -1629,6 +1700,8 @@ bool ta_parse_vdrc(TA_context* ctx)
    }
 
 
+	if (g_taSplitEnabled)
+		g_taSplitFrames++;
 	vd_ctx->rend = vd_rc;
 	vd_ctx = 0;
    ctx->rend_inuse.unlock();

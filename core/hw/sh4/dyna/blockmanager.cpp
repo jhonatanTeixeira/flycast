@@ -12,6 +12,7 @@
 #include "../sh4_core.h"
 #include "hw/sh4/sh4_mem.h"
 #include "hw/sh4/sh4_sched.h"
+#include "hw/sh4/sh4_opcode_list.h"	// DissasembleOpcode(), for bm_DumpHotBlocks()
 
 
 #if defined(__unix__) && defined(DYNA_OPROF)
@@ -383,6 +384,80 @@ void bm_Term()
 	oprofHandle=0;
 #endif
 	bm_Reset();
+}
+
+// Opt-in (FC_BLOCK_PROF) hot-block report. The ARM64 backend emits a bump of
+// block->runs at every block entry when the same env var is set (see
+// rec_arm64.cpp), which is what the x86 backend has always done
+// (rec_x86_driver.cpp) and what this fork's ARM64 side never had -- so until
+// now there was no way to tell WHICH generated code is hot, only that the JIT
+// buffer as a whole was (perf shows one anonymous SH4_TCB blob, and the
+// FC_PERF_MAP symbol map didn't get picked up).
+//
+// Ranked by runs*host_opcodes: host instructions actually executed by that
+// block, which is the closest proxy for time we can get without timing every
+// block individually (which would cost more than it measures). guest addr is
+// printed so the block can be matched against the SH4 code and, with
+// bm_WriteBlockMap(), against its SHIL.
+void bm_DumpHotBlocks(const std::string& file)
+{
+	struct Row { u32 addr, runs, host_ops, guest_ops, guest_cycles, host_bytes; double work; };
+	std::vector<Row> rows;
+	double total_work = 0, total_runs = 0;
+	for (auto& it : blkmap)
+	{
+		RuntimeBlockInfoPtr& b = it.second;
+		if (b->runs == 0)
+			continue;
+		double work = (double)b->runs * b->host_opcodes;
+		rows.push_back({ b->vaddr, b->runs, b->host_opcodes, b->guest_opcodes,
+						 b->guest_cycles, b->host_code_size, work });
+		total_work += work;
+		total_runs += b->runs;
+	}
+	std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.work > b.work; });
+
+	FILE *f = fopen(file.c_str(), "w");
+	if (f == nullptr)
+		return;
+	fprintf(f, "# blocks=%zu total_runs=%.0f total_host_ops=%.0f\n",
+			rows.size(), total_runs, total_work);
+	fprintf(f, "#rank\tvaddr\truns\thost_ops\tguest_ops\tcycles\thost_bytes\twork%%\tcum%%\n");
+	double cum = 0;
+	for (size_t i = 0; i < rows.size() && i < 60; i++)
+	{
+		const Row& row = rows[i];	// not `r`: that's a macro for the SH4 GPR file
+		cum += row.work;
+		fprintf(f, "%zu\t%08X\t%u\t%u\t%u\t%u\t%u\t%.2f\t%.2f\n", i + 1, row.addr, row.runs,
+				row.host_ops, row.guest_ops, row.guest_cycles, row.host_bytes,
+				total_work > 0 ? row.work * 100 / total_work : 0,
+				total_work > 0 ? cum * 100 / total_work : 0);
+	}
+
+	// Detail for the hottest few: the SH4 code and the SHIL it compiled to.
+	// Needed to tell a genuinely hot routine apart from a spin loop waiting on
+	// a hardware flag -- the counts alone can't distinguish them.
+	for (size_t i = 0; i < rows.size() && i < 8; i++)
+	{
+		RuntimeBlockInfoPtr blk;
+		for (auto& it : blkmap)
+			if (it.second->vaddr == rows[i].addr) { blk = it.second; break; }
+		if (!blk)
+			continue;
+		fprintf(f, "\n=== #%zu block %08X  runs=%u  type=%d  branch=%08X next=%08X ===\n",
+				i + 1, blk->vaddr, blk->runs, blk->BlockType, blk->BranchBlock, blk->NextBlock);
+		for (u32 pc = blk->vaddr; pc < blk->vaddr + blk->sh4_code_size; pc += 2)
+		{
+			u16 opcode = IReadMem16(pc);
+			// OpDesc[] is the live opcode table; its `diss` is the mnemonic
+			// template. DissasembleOpcode() isn't linked in LIBRETRO builds.
+			const char *diss = OpDesc[opcode] != nullptr ? OpDesc[opcode]->diss : "?";
+			fprintf(f, "  SH4 %08X: %04X  %s\n", pc, opcode, diss);
+		}
+		for (size_t j = 0; j < blk->oplist.size(); j++)
+			fprintf(f, "  shil %s\n", blk->oplist[j].dissasm().c_str());
+	}
+	fclose(f);
 }
 
 void bm_WriteBlockMap(const std::string& file)

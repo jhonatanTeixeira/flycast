@@ -1,4 +1,5 @@
 #include "Renderer_if.h"
+#include <chrono>	// FC_REND_SPLIT timing below
 #include "ta.h"
 #include "hw/pvr/pvr_mem.h"
 #include "rend/TexCache.h"
@@ -156,6 +157,36 @@ void rend_term_renderer()
 	}
 }
 
+// FC_REND_SPLIT (opt-in): split the main thread's per-frame cost into the part
+// spent WAITING for the emu_thread (rsWait) and the part doing actual work
+// (Process = TA parsing, Render = GL submission). Without this, `core_average`
+// from the benchmark lumps the two together, and a core time of e.g. 59ms says
+// nothing about whether the main thread is busy or just blocked -- which is
+// exactly the question when cutting JIT work in half doesn't move the frame
+// rate. Accumulated here, dumped by rend_dump_split() from retro_run().
+bool g_rendSplitEnabled;
+u64 g_rendWaitUs, g_rendProcUs, g_rendRenderUs;
+u32 g_rendSplitFrames;
+
+static inline u64 rend_now_us()
+{
+	return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void rend_dump_split(const char *path)
+{
+	FILE *f = fopen(path, "w");
+	if (f == nullptr)
+		return;
+	u32 n = g_rendSplitFrames ? g_rendSplitFrames : 1;
+	fprintf(f, "frames\t%u\n", g_rendSplitFrames);
+	fprintf(f, "rsWait_ms_avg\t%.3f\n", g_rendWaitUs / 1000.0 / n);
+	fprintf(f, "process_ms_avg\t%.3f\n", g_rendProcUs / 1000.0 / n);
+	fprintf(f, "render_ms_avg\t%.3f\n", g_rendRenderUs / 1000.0 / n);
+	fclose(f);
+}
+
 bool rend_frame(TA_context* ctx, bool draw_osd)
 {
    if (renderer_changed || renderer == NULL)
@@ -166,14 +197,23 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
 	  rend_create_renderer();
 	  rend_init_renderer();
    }
+   u64 t0 = g_rendSplitEnabled ? rend_now_us() : 0;
    bool proc = renderer->Process(ctx);
+   if (g_rendSplitEnabled)
+      g_rendProcUs += rend_now_us() - t0;
 #if !defined(TARGET_NO_THREADS)
    if (settings.rend.ThreadedRendering && (!proc || (!ctx->rend.isRenderFramebuffer && !ctx->rend.isRTT)))
 	   // If rendering to texture, continue locking until the frame is rendered
       re.Set();
 #endif
    
+   u64 t1 = g_rendSplitEnabled ? rend_now_us() : 0;
    bool do_swp = proc && renderer->Render();
+   if (g_rendSplitEnabled)
+   {
+      g_rendRenderUs += rend_now_us() - t1;
+      g_rendSplitFrames++;
+   }
 
    return do_swp;
 }
@@ -190,7 +230,11 @@ bool rend_single_frame(void)
 #if !defined(TARGET_NO_THREADS)
 				if (settings.rend.ThreadedRendering)
 				{
-					if (!rs.Wait(100))
+					u64 tw = g_rendSplitEnabled ? rend_now_us() : 0;
+					bool got = rs.Wait(100);
+					if (g_rendSplitEnabled)
+						g_rendWaitUs += rend_now_us() - tw;
+					if (!got)
 						return false;
 					if (do_swap)
 					{

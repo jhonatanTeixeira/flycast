@@ -1,3 +1,4 @@
+#include <chrono>	// FC_TA_SPLIT timing
 #include <math.h>
 #include <algorithm>
 
@@ -355,6 +356,10 @@ void ReadRTTBuffer() {
 
 static int TexCacheLookups;
 static int TexCacheHits;
+// FC_TA_SPLIT exposes these: 558 GetTexture calls/frame costing 74.8us each
+// (Metal Slug 6) can only be cache misses re-uploading every frame, or hits
+// that are pathologically slow. The hit/miss split tells which.
+int g_texLookups, g_texHits; u64 g_texUpdateUs;
 static float LastTexCacheStats;
 
 
@@ -365,6 +370,7 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
 	//lookup texture
    TextureCacheData* tf = TexCache.getTextureCacheData(tsp, tcw);
 
+   g_texLookups++;
    if (tf->texID == 0)
    {
 		tf->Create();
@@ -373,7 +379,13 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
 
 	//update if needed
 	if (tf->NeedsUpdate())
+	{
+		u64 _tu = (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
 		tf->Update();
+		g_texUpdateUs += (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count() - _tu;
+	}
    else
    {
       if (tf->IsCustomTextureAvailable())
@@ -383,6 +395,7 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
       	tf->CheckCustomTexture();
       }
       TexCacheHits++;
+      g_texHits++;
    }
 
 	// Return gl texture

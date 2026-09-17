@@ -4,6 +4,7 @@
 #include <libretro.h>
 
 #include "gles.h"
+#include <chrono>	// FC_TA_SPLIT timing
 
 #ifndef GL_RED
 #define GL_RED                            0x1903
@@ -1117,9 +1118,20 @@ void rend_set_fb_scale(float x, float y)
 	fb_scale_y = y;
 }
 
+// FC_TA_SPLIT also times the two things around the parse: blocking on
+// rend_inuse (if the emu_thread holds it, that's WAITING showing up as
+// Process time) and TexCache.CollectCleanup().
+extern bool g_taSplitEnabled;
+u64 g_taLockUs, g_taCleanupUs;
+
 bool ProcessFrame(TA_context* ctx)
 {
+   u64 tlk = g_taSplitEnabled ? (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+         std::chrono::steady_clock::now().time_since_epoch()).count() : 0;
    ctx->rend_inuse.lock();
+   if (g_taSplitEnabled)
+      g_taLockUs += (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count() - tlk;
 
    if (KillTex)
    {
@@ -1137,7 +1149,12 @@ bool ProcessFrame(TA_context* ctx)
 		if (!ta_parse_vdrc(ctx))
 			return false;
 	}
+   u64 tcl = g_taSplitEnabled ? (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+         std::chrono::steady_clock::now().time_since_epoch()).count() : 0;
    TexCache.CollectCleanup();
+   if (g_taSplitEnabled)
+      g_taCleanupUs += (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count() - tcl;
 
    return !ctx->rend.Overrun;
 }

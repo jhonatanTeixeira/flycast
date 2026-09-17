@@ -53,6 +53,18 @@ static bool FpscrStatsEnabled()
 	return enabled == 1;
 }
 
+// Opt-in per-block run counter. The x86 backend has always bumped
+// block->runs (rec_x86_driver.cpp), the ARM64 one never did, which is why
+// there was no way to tell WHICH generated code is hot -- perf only shows one
+// anonymous SH4_TCB blob. Report side: bm_DumpHotBlocks() in blockmanager.cpp.
+static bool BlockProfEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_BLOCK_PROF") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+
 static bool IfbCountEnabled()
 {
 	static int enabled = -1; // -1: not checked yet, 0: disabled, 1: enabled
@@ -404,6 +416,18 @@ public:
 
 		// run register allocator
 		regalloc.DoAlloc(block);
+
+		// Opt-in (FC_BLOCK_PROF): bump this block's run counter before anything
+		// else, so the count is exact even for blocks that bail out early on the
+		// cycle check below. Uses x9/x10, the backend's hardcoded scratch pair,
+		// before any allocated register is live.
+		if (BlockProfEnabled())
+		{
+			Mov(x9, reinterpret_cast<uintptr_t>(&block->runs));
+			Ldr(w10, MemOperand(x9));
+			Add(w10, w10, 1);
+			Str(w10, MemOperand(x9));
+		}
 
 		// scheduler
 		if (mmu_enabled())

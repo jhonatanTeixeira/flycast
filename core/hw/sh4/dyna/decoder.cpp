@@ -1172,11 +1172,32 @@ _end:
 		else
 		{
 			//Small-n-simple idle loop detector :p
-			if (state.info.has_readm && !state.info.has_writem && !state.info.has_fpu && blk->guest_opcodes<6)
+			//
+			// The two bounds are tunable (FC_IDLE_OPS / FC_IDLE_MUL) because the
+			// defaults miss real spin loops by a hair. Measured case, Metal Slug 6:
+			// the block that polls the wait flag (8C05B3A4) is read-only, has no
+			// FPU, and is BET_Cond_0 -- it matches every condition here except it
+			// has exactly 6 guest opcodes, so `<6` rejects it by one. That loop
+			// alone (4 blocks, 187M iterations in 30s) is 74.6% of all host
+			// instructions the JIT executes, and it's pure waiting: the whole loop
+			// only reads, so it can't change its own exit condition -- that can
+			// only come from a scheduled event. Charging more emulated cycles per
+			// iteration makes the scheduler reach that event in fewer real
+			// iterations. See docs/tech_debits.md and the block profiler
+			// (FC_BLOCK_PROF) that found it.
+			static int idleOps = -1, idleMul = -1;
+			if (idleOps == -1)
+			{
+				const char *e = getenv("FC_IDLE_OPS");
+				idleOps = e != nullptr ? atoi(e) : 6;
+				e = getenv("FC_IDLE_MUL");
+				idleMul = e != nullptr ? atoi(e) : 3;
+			}
+			if (state.info.has_readm && !state.info.has_writem && !state.info.has_fpu && (int)blk->guest_opcodes<idleOps)
 			{
 				if (blk->BlockType==BET_Cond_0 || (blk->BlockType==BET_Cond_1 && blk->BranchBlock<=blk->vaddr))
 				{
-					blk->guest_cycles*=3;
+					blk->guest_cycles*=idleMul;
 				}
 
 				if (blk->BranchBlock==blk->vaddr)

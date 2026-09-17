@@ -2,6 +2,7 @@
 #include <cstdarg>
 #include <math.h>
 #include <chrono>
+#include <unistd.h>	// getpid(), for the opt-in profiling dumps in retro_run()
 #include "types.h"
 #ifndef _WIN32
 #include <sys/time.h>
@@ -1356,6 +1357,139 @@ void retro_run (void)
       {
          ifbDumpCounter = 0;
          DumpIfbCounts();
+      }
+   }
+
+   // FC_REND_SPLIT (opt-in, see Renderer_if.cpp): separate the main thread's
+   // per-frame cost into waiting-for-emu_thread vs real work, and dump it.
+   {
+      extern bool g_rendSplitEnabled;
+      extern void rend_dump_split(const char *path);
+      static int splitInit = 0;
+      if (splitInit == 0)
+      {
+         splitInit = 1;
+         g_rendSplitEnabled = getenv("FC_REND_SPLIT") != nullptr;
+      }
+      if (g_rendSplitEnabled)
+      {
+         static int splitCounter = 0;
+         if (++splitCounter >= 150)
+         {
+            splitCounter = 0;
+            char path[64];
+            snprintf(path, sizeof(path), "/tmp/rend-split-%d.txt", (int)getpid());
+            rend_dump_split(path);
+         }
+      }
+   }
+
+   // FC_TA_SPLIT (opt-in, see ta_vtx.cpp / gles.cpp): break renderer->Process()
+   // into lock / decode / make_index / bleeding / cleanup.
+   {
+      extern bool g_taSplitEnabled;
+      extern u64 g_taLockUs, g_taCleanupUs;
+      extern void ta_dump_split(const char *path);
+      static int taInit = 0;
+      if (taInit == 0)
+      {
+         taInit = 1;
+         g_taSplitEnabled = getenv("FC_TA_SPLIT") != nullptr;
+      }
+      if (g_taSplitEnabled)
+      {
+         static int taCounter = 0;
+         if (++taCounter >= 150)
+         {
+            taCounter = 0;
+            char path[64];
+            snprintf(path, sizeof(path), "/tmp/ta-split-%d.txt", (int)getpid());
+            ta_dump_split(path);
+            FILE *tf = fopen(path, "a");
+            if (tf != nullptr)
+            {
+               fprintf(tf, "lock_us_total\t%llu\n", (unsigned long long)g_taLockUs);
+               fprintf(tf, "cleanup_us_total\t%llu\n", (unsigned long long)g_taCleanupUs);
+               extern int g_texLookups, g_texHits; extern u64 g_texUpdateUs;
+               fprintf(tf, "tex_lookups\t%d\n", g_texLookups);
+               fprintf(tf, "tex_hits\t%d\n", g_texHits);
+               fprintf(tf, "tex_miss_pct\t%.1f\n", g_texLookups ? 100.0*(g_texLookups-g_texHits)/g_texLookups : 0);
+               fprintf(tf, "tex_update_us_total\t%llu\n", (unsigned long long)g_texUpdateUs);
+               extern u32 g_texMissDirty, g_texMissPalette, g_texMissBoth;
+               fprintf(tf, "miss_vram_dirty\t%u\n", g_texMissDirty);
+               fprintf(tf, "miss_palette\t%u\n", g_texMissPalette);
+               fprintf(tf, "miss_both\t%u\n", g_texMissBoth);
+               extern u32 g_vramWriteFaults, g_vramInvalidations;
+               fprintf(tf, "vram_write_faults\t%u\n", g_vramWriteFaults);
+               fprintf(tf, "vram_invalidations\t%u\n", g_vramInvalidations);
+               fprintf(tf, "tex_killed_per_write\t%.2f\n", g_vramWriteFaults ? (double)g_vramInvalidations/g_vramWriteFaults : 0);
+               fclose(tf);
+            }
+         }
+      }
+   }
+
+   // FC_WATCH_ADDR=<hex guest addr> (opt-in): sample one guest RAM byte every
+   // frame and dump the history. Answers the first question about a spin loop
+   // that polls a RAM flag: does the value the guest is waiting on actually
+   // advance, and how fast? A hook on the write path can't answer it -- with
+   // nvmem the JIT writes RAM with a plain store, never calling into C++.
+   {
+      static u32 watchAddr = 0;
+      static int watchInit = 0;
+      if (watchInit == 0)
+      {
+         watchInit = 1;
+         const char *env = getenv("FC_WATCH_ADDR");
+         if (env != nullptr)
+            watchAddr = (u32)strtoul(env, nullptr, 16);
+      }
+      if (watchAddr != 0)
+      {
+         static u8 hist[4096];
+         static u32 histFrame[4096];
+         static u32 histN = 0;
+         static u32 frameNo = 0;
+         static u8 lastVal = 0;
+         static bool first = true;
+         u8 val = ReadMem8(watchAddr);
+         frameNo++;
+         if (first || val != lastVal)
+         {
+            first = false;
+            lastVal = val;
+            if (histN < 4096) { hist[histN] = val; histFrame[histN] = frameNo; histN++; }
+         }
+         if ((frameNo % 150) == 0)
+         {
+            char path[64];
+            snprintf(path, sizeof(path), "/tmp/watch-%d.txt", (int)getpid());
+            FILE *wf = fopen(path, "w");
+            if (wf != nullptr)
+            {
+               fprintf(wf, "# addr=%08X frames=%u changes=%u\n", watchAddr, frameNo, histN);
+               for (u32 i = 0; i < histN; i++)
+                  fprintf(wf, "frame %u\tval %u\n", histFrame[i], hist[i]);
+               fclose(wf);
+            }
+         }
+      }
+   }
+
+   // FC_BLOCK_PROF (opt-in, see blockmanager.cpp / rec_arm64.cpp): periodically
+   // dump the hottest JIT blocks ranked by host instructions executed. This is
+   // what answers "which generated code is eating the frame" -- perf only ever
+   // shows one anonymous SH4_TCB blob.
+   if (getenv("FC_BLOCK_PROF") != nullptr)
+   {
+      extern void bm_DumpHotBlocks(const std::string& file);
+      static int blockProfCounter = 0;
+      if (++blockProfCounter >= 150)
+      {
+         blockProfCounter = 0;
+         char path[64];
+         snprintf(path, sizeof(path), "/tmp/hot-blocks-%d.txt", (int)getpid());
+         bm_DumpHotBlocks(path);
       }
    }
 

@@ -1724,3 +1724,68 @@ decidir atacar.
   Sanity no kofnw sem crash e também melhor (51,66 fps).
 - **Diferente do fix de FPSCR, este melhora a CAUDA** (p95/p99 ~6%), que é
   onde os hicups aparecem. Maior ganho isolado da sessão.
+
+## 2026-09-16 (continuação 6) — Metal Slug 6: o gargalo é o cache de textura, não a CPU
+
+Instrumentação nova, em cadeia, cada etapa respondendo a anterior. Savestate
+pesado do usuário (`mslug6.fc2021-rrstate.auto`), 30s, cena idêntica.
+
+**1. Profiler de blocos JIT (`FC_BLOCK_PROF`)** — o backend x86 sempre incrementou
+`block->runs` (`rec_x86_driver.cpp`), o ARM64 nunca; e o relatório do
+`blockmanager.cpp` (`bm_Sort`/`bm_PrintTopBlocks`) está dentro de `#if 0` desde
+sempre, com `all_blocks` nem existindo. Implementado incremento no ARM64 +
+`bm_DumpHotBlocks()` (ordena por `runs*host_opcodes`, dumpa SH4 e SHIL dos
+mais quentes). Motivo: o `perf` só mostra um blob anônimo `SH4_TCB` e o
+`FC_PERF_MAP` não foi lido pelo perf.
+
+**Achado:** 4 blocos minúsculos (`8C05B3A4`, `8C05B3D0`, `8C05B68E`,
+`8C05B3D6`) rodando ~187M vezes cada = **74,6% de todas as instruções host**.
+É um spin loop de 4 blocos, somente-leitura, esperando um flag em RAM
+(`0x8C386928`).
+
+**2. Watch do flag (`FC_WATCH_ADDR`)** — o byte alterna 0↔1 a cada 1-2 frames
+(149 mudanças em 450 frames). Escritor funcionando. Refazendo a conta:
+423k iterações/frame × ~15 ciclos ≈ 6,3M ciclos ≈ um frame inteiro a 200MHz.
+**Não é bug: é idle loop legítimo**, o jogo trabalha no handler de interrupção
+e espera no laço principal.
+
+**3. Idle skip (`FC_IDLE_OPS`/`FC_IDLE_MUL`)** — o detector existente rejeitava
+o bloco quente por UM opcode (`guest_opcodes<6`, o bloco tem 6). Com
+`OPS=7 MUL=10`: `cycles` 7→72, iterações 187M→49,7M, **instruções host totais
+26,5G→13,7G (-48%)**. **E o fps não mudou** (14,79→14,46).
+
+**4. Split da main thread (`FC_REND_SPLIT`)** — explicou o porquê:
+`rsWait` 8,7ms / **`Process` 56,8ms** / `render` 17,4ms. O JIT nunca foi o
+caminho crítico; a `emu_thread` termina antes e fica esperando. O `perf`
+mostrava onde os ciclos são gastos, não o que limita o frame.
+
+**5. Split do `Process` (`FC_TA_SPLIT`)** — `make_index` 0,15ms,
+`fix_texture_bleeding` 0ms, `lock` 0,001ms, `CollectCleanup` 0,8ms,
+**decode (`TaCmd`) 42,1ms** — e dentro dele, **`GetTexture` 41,2ms (98%)**,
+com 558 chamadas/frame = **74,8µs por chamada**. A cena tem só 560 polígonos
+e 88KB de display list, então não é parsing.
+
+**6. Contadores do cache de textura** — miss rate **70,1%**, e
+**17,65s dos 30s dentro de `tf->Update()`** (re-conversão + re-upload).
+
+**7. Causa do miss** — `NeedsUpdate()` tem duas causas; separadas:
+`miss_vram_dirty` 164.717, `miss_palette` **7**, `miss_both` 11.843.
+Hipótese de paleta animada (jogo 2D) **refutada**: é VRAM suja.
+
+**8. Granularidade (achado final)** — `vram_write_faults` 5.899 (~13/frame),
+`vram_invalidations` 176.299 (~398/frame): **29,88 texturas mortas por
+escrita**. A VRAM é protegida e invalidada por página de 4KB inteira
+(`_vmem_protect_vram(i*PAGE_SIZE, PAGE_SIZE)`, e `VramLockedWriteOffset`
+percorre `for (lock : list) rend_text_invl(lock)` sem olhar intervalo), então
+uma escrita derruba todas as texturas que compartilham a página. Num jogo 2D
+de sprites pequenos isso é dezenas por escrita.
+
+**Conclusão:** o gargalo do Metal Slug 6 é re-upload desnecessário de textura
+por invalidação grossa — ~394 uploads/frame, ~40ms de um frame de ~63ms. Bate
+com a observação do usuário de que todas as otimizações de CPU rendiam só
+3-7% e que havia coisas que "nunca mudavam o fps".
+
+**Correção de duas leituras minhas registradas aqui:** (a) eu disse que o laço
+girava mais do que o SH4 real conseguiria — errado, cabe no orçamento; (b) eu
+li o `perf` (53,9% em `SH4_TCB`) como "o JIT é o gargalo" — ele mostra consumo
+de CPU somado entre threads, não caminho crítico.

@@ -14,7 +14,24 @@
 
 #if defined(HAVE_TEXUPSCALE) && !defined(TARGET_NO_OPENMP)
 #include <omp.h>
+
+
+
 #endif
+
+// FC_TA_SPLIT counters: 70% of texture lookups miss and re-upload every frame
+// in Metal Slug 6 (~394 textures/frame, 17.6s of a 30s run). There are only two
+// reasons a texture can be stale, and they need completely different fixes, so
+// count them apart: VRAM was written in the texture's page (dirty), or it's a
+// paletted texture whose palette changed. A 2D sprite game animating palettes
+// would show up entirely in the second bucket.
+u32 g_texMissDirty, g_texMissPalette, g_texMissBoth;
+// VRAM is write-protected a whole PAGE_SIZE at a time, and one write kills
+// EVERY texture registered in that page. In a 2D game with small sprites many
+// textures share a page, so the ratio below says whether the ~388 invalidations
+// per frame are the game really rewriting that many textures (ratio ~1) or the
+// protection granularity being too coarse (ratio >> 1).
+u32 g_vramWriteFaults, g_vramInvalidations;
 
 u8* vq_codebook;
 u32 palette_index;
@@ -225,10 +242,12 @@ bool VramLockedWriteOffset(size_t offset)
 	{
 		std::lock_guard<cMutex> lockguard(vramlist_lock);
 
+		g_vramWriteFaults++;
 		for (auto& lock : list)
 		{
 			if (lock != nullptr)
 			{
+            g_vramInvalidations++;
             rend_text_invl(lock);
 
 				if (lock != nullptr)
@@ -404,15 +423,22 @@ void BaseTextureCacheData::PrintTextureName()
 //true if : dirty or paletted texture and hashes don't match
 bool BaseTextureCacheData::NeedsUpdate() {
 	bool rc = dirty != 0;
+	bool pal = false;
 	if (tex_type != TextureType::_8)
 	{
 		if (tcw.PixelFmt == PixelPal4 && palette_hash != pal_hash_16[tcw.PalSelect])
-			rc = true;
+			pal = true;
 		else if (tcw.PixelFmt == PixelPal8 && palette_hash != pal_hash_256[tcw.PalSelect >> 4])
-			rc = true;
+			pal = true;
 	}
+	if (rc && pal)
+		g_texMissBoth++;
+	else if (rc)
+		g_texMissDirty++;
+	else if (pal)
+		g_texMissPalette++;
 
-	return rc;
+	return rc || pal;
 }
 
 bool BaseTextureCacheData::Delete()
