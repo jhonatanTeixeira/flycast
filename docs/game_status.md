@@ -21,6 +21,7 @@
 | **Skies of Arcadia** | drops pra 24 | pontual | falta um toque |
 | **Shenmue** | 18-30 | melhorou muito | neve agora bem consistente a 30 |
 | **mslug6** | 30 (20 em boss) | consistente nos boss | resto do jogo full speed |
+| **Dead or Alive 2** | 25-30 | — | quase lá; só roda bem no fork `flycast_extreme` |
 
 ## Detalhe
 
@@ -84,6 +85,25 @@ Foi o jogo mais medido da sessão: fps +35% e `core_p99` -57% com o fix da
 paleta. O que sobra nas cenas de boss, pelo último mapa do frame:
 upload de textura ~21,5ms + submissão GL (`render`) ~17,3ms.
 
+### Dead or Alive 2 — quase lá, e com uma pista de fora
+25-30 fps no nosso branch. **Só roda bem via RetroArch com o fork
+`flycast_extreme`** — não se sabe o que esse fork tem que faz diferença aqui.
+
+**Por que este caso é especialmente valioso:** é o único jogo da lista onde
+existe uma implementação de referência que comprovadamente roda melhor no
+MESMO hardware. Isso permite comparação de código dirigida, em vez de
+investigação às cegas — exatamente a ferramenta que o `CLAUDE.md` já autoriza
+("comparação de código entre os dois é uma ferramenta de investigação
+legítima") e que já valeu duas vezes nesta sessão: a pesquisa no
+`flyinghead/flycast` master e no `redream` guiou o trabalho de FPSCR, e olhar
+o upstream mostrou que ele **não** resolveu a invalidação de textura de forma
+diferente — o que economizou construir a solução errada.
+
+**Antes de investigar, checar:** (a) se `flycast_extreme` está no device como
+core (dá para medir A/B direto, mesmo savestate, como já fizemos com o
+`flycast2021_libretro.so` original); (b) se é fork público com código
+disponível. Sem uma das duas, vira adivinhação.
+
 ## Para onde olhar, por prioridade
 
 1. **Apresentação/áudio/pacing** — a frente nunca investigada, e a única
@@ -103,3 +123,10 @@ upload de textura ~21,5ms + submissão GL (`render`) ~17,3ms.
    formato — ver `rendering_improvement_plan.md` item 4). O que sobra é
    reduzir a quantidade de chamadas: atlas de textura, mudança arquitetural.
 6. **Tempo de carregamento (SFZ3UGD)** — categoria própria, não é por-frame.
+
+### Fora da ordem: comparar com `flycast_extreme` (Dead or Alive 2)
+Não entra na lista por prioridade porque não é uma frente técnica, é um
+**atalho de método**: quando existe outra implementação rodando melhor no
+mesmo hardware, ler o que ela faz diferente costuma custar menos que
+descobrir do zero. Vale disparar assim que der para confirmar se o core está
+no device e/ou se o código é público.
