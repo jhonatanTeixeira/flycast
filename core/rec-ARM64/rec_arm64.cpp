@@ -104,6 +104,7 @@ void DumpIfbCounts()
 #include "hw/sh4/dyna/ngen.h"
 #include "hw/sh4/sh4_mem.h"
 #include "hw/sh4/sh4_rom.h"
+#include "hw/sh4/sh4_sched.h"
 #include "hw/mem/vmem32.h"
 #include "arm64_regalloc.h"
 
@@ -439,6 +440,15 @@ public:
 		}
 		else
 		{
+			if (block->idle_fastforward)
+			{
+				// Proven idle (decoder.cpp signatures): jump time to just
+				// before the next event, then end the timeslice so the
+				// intc_sched call below handles that event right now.
+				// Nothing is register-allocated yet at this point.
+				GenCallRuntime(sh4_sched_idle_fastforward);
+				Mov(w27, 0);
+			}
 			Subs(w27, w27, block->guest_cycles);
 		}
 		Label cycles_remaining;

@@ -164,6 +164,7 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	BlockType=BET_SCL_Intr;
 	has_fpu_op = false;
 	temp_block = false;
+	idle_fastforward = false;
 	
 	vaddr=rpc;
 #ifndef NO_MMU

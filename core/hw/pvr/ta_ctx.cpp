@@ -1,6 +1,8 @@
 #include "ta_ctx.h"
 #include "spg.h"
 #include "oslib/oslib.h"
+#include <cstdlib>
+#include <atomic>
 
 #include "hw/sh4/sh4_sched.h"
 
@@ -13,6 +15,8 @@ extern u32 FrameCount;
 
 int frameskip=0;
 bool FrameSkipping=false;		// global switch to enable/disable frameskip
+u32 g_queueDrops, g_queueOk, g_queueWaits;	// QueueRender: frames dropped / queued / waited for (see there)
+u32 g_rendIntervalCyclesEma;	// game's render interval, emulated cycles (QueueRender)
 
 TA_context* ta_ctx;
 tad_context ta_tad;
@@ -148,11 +152,67 @@ bool QueueRender(TA_context* ctx)
    }
 
 
+#if !defined(TARGET_NO_THREADS)
+   // The previous frame is still being rendered. Before this, the new one was
+   // simply dropped (unless SynchronousRendering caught it above) -- harmless
+   // while emulation was slower than presentation, but once the idle
+   // fast-forward (docs/tech_debits.md 4.14) made kofxi run at 100% speed it
+   // threw away 25% of the frames the game rendered. Upstream flycast waits
+   // here whenever the CPU keeps up (>= 85% speed over the last 4 vblanks,
+   // AutoSkipFrame "normal") and only drops to catch up when it can't -- which
+   // is what keeps slow games at the right game speed on this device.
+   // FC_AUTOSKIP=2 restores the old always-drop behaviour for A/B.
+   //
+   // On top of upstream's rule: only wait if the render thread keeps up with
+   // the game. Waiting can't make the render thread faster, so when it needs
+   // more real time per frame than the game's own render interval (mslug6's
+   // boss scene: ~34ms of Process+Render per frame against a 16.7ms render
+   // interval), waiting just drags
+   // the whole game down to its pace -- measured 99.7% -> 92.4% game speed.
+   // Dropping, as before, keeps the game at speed there. Where it does keep up
+   // (kofxi: ~6ms against 16.7ms) waiting costs nothing and removes the drops.
+   {
+      static int autoskip = -1;
+      if (autoskip == -1)
+      {
+         const char *e = getenv("FC_AUTOSKIP");
+         autoskip = e != nullptr ? atoi(e) : 1;
+      }
+      // The game's render interval in emulated cycles, smoothed.
+      static u64 lastQueueCycles;
+      u64 nowCycles = sh4_sched_now64();
+      if (lastQueueCycles != 0)
+      {
+         u64 interval = nowCycles - lastQueueCycles;
+         if (interval < SH4_MAIN_CLOCK / 2)
+            g_rendIntervalCyclesEma = g_rendIntervalCyclesEma == 0 ? (u32)interval
+                  : (u32)(((u64)g_rendIntervalCyclesEma * 15 + interval) / 16);
+      }
+      lastQueueCycles = nowCycles;
+
+      extern bool SH4FastEnough;
+      extern std::atomic<u32> g_rendWorkUsEma;
+      u64 workCycles = (u64)g_rendWorkUsEma.load(std::memory_order_relaxed) * (SH4_MAIN_CLOCK / 1000000);
+      bool renderKeepsUp = workCycles != 0 && workCycles <= g_rendIntervalCyclesEma;
+      if (rqueue && settings.rend.ThreadedRendering
+            && (autoskip == 0 || (autoskip == 1 && SH4FastEnough && renderKeepsUp)))
+      {
+         g_queueWaits++;
+         frame_finished.Wait();
+      }
+   }
+#endif
+
 	if (rqueue)
    {
+		// The previous frame hasn't been picked up by the render thread yet:
+		// this one is thrown away. Counted because it's silent otherwise and
+		// only happens once emulation runs ahead of presentation.
+		g_queueDrops++;
 		tactx_Recycle(ctx);
 		return false;
 	}
+	g_queueOk++;
 
    frame_finished.Reset();
    mtx_rqueue.lock();

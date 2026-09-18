@@ -41,6 +41,16 @@ void sh4_sched_tick(int cycles);
 
 void sh4_sched_ffts();
 
+/*
+	Idle fast-forward: the guest has been proven to be only waiting (see the
+	signatures in dyna/decoder.cpp), so consume every cycle up to -- but never
+	past -- the next scheduled event, exactly as if it had kept spinning.
+	Called from JIT code; the caller must end the current timeslice right after
+	so the event is handled immediately.
+*/
+void sh4_sched_idle_fastforward();
+extern u64 g_idleFFCalls, g_idleFFCycles;
+
 struct sched_list
 {
 	sh4_sched_callback* cb;

@@ -44,6 +44,84 @@ static const char idle_hash[] =
        // Dead or Alive 2
        ">:1:08:0A37187A";
 
+// Idle fast-forward signatures (docs/tech_debits.md 4.14). Each one is guest
+// code where arriving at `entry` PROVES the CPU is only waiting, so the block
+// that starts there gets `idle_fastforward` and the JIT jumps time to the next
+// scheduled event instead of emulating the wait cycle by cycle -- the same
+// idea as Dolphin's idle skipping.
+//
+// Why not idle_hash above: RuntimeBlockInfo::hash() reads the block as bytes
+// and only its first `guest_opcodes` of them, so a short block hashes just its
+// first couple of instructions -- for the 4-op block below that would be
+// "mov r15,r4 / add #4,r4", which any compiled C function taking a local's
+// address starts with. Matching the whole surrounding function is exact.
+//
+// `mask` lets bsr displacements vary (0xF000 keeps only the opcode class), so
+// the same library linked at another address in another game still matches.
+struct IdleFFSig
+{
+	const char *name;
+	u32 entry;			// byte offset of the waiting PC from the start of ops[]
+	u32 count;
+	u16 ops[32];
+	u16 mask[32];
+};
+
+#define M_ 0xFFFF
+#define MB 0xF000
+static const IdleFFSig idle_ff_sigs[] = {
+	// Cooperative task kernel linked into several games from different
+	// makers and boards -- found in kofxi at 8C023128, and the same code
+	// matches in kofnw (Atomiswave) and MBAA (not Atomiswave), so it's a
+	// shared library, not a board feature.
+	// yield():  next = cur < 4 ? cur + 1 : cur;  switch_to(next);
+	// Task 4 is the idle task: when it yields it switches to ITSELF, and it
+	// does so ~2100 times per frame waiting for the next interrupt -- 75% of
+	// all JIT host instructions. 8C023146 (+0x1E) is only reachable through
+	// the `bt` taken when cur >= 4, i.e. only on that self-yield; the ~2 real
+	// yields per frame (cur < 4) enter the block at +0x18 instead.
+	{ "coop-task-kernel-idle-yield", 0x1E, 26,
+	  { 0x4F22, 0x7FF8, 0x64F3, 0x7404, 0xB000, 0x0009, 0xB000, 0x0009,
+	    0x2F02, 0xE304, 0x3033, 0x8902, 0x61F2, 0x7101, 0x2F12, 0x64F3,
+	    0x7404, 0xB000, 0x0009, 0x64F2, 0xB000, 0x0009, 0x7F08, 0x4F26,
+	    0x000B, 0x0009 },
+	  { M_, M_, M_, M_, MB, M_, MB, M_,
+	    M_, M_, M_, M_, M_, M_, M_, M_,
+	    M_, MB, M_, M_, MB, M_, M_, M_,
+	    M_, M_ } },
+};
+#undef M_
+#undef MB
+
+static bool idle_ff_match(u32 addr)
+{
+	static int enabled = -1;
+	if (enabled == -1)
+	{
+		const char *e = getenv("FC_IDLE_FF");
+		enabled = (e == nullptr || atoi(e) != 0) ? 1 : 0;
+	}
+	if (!enabled)
+		return false;
+	for (const IdleFFSig& sig : idle_ff_sigs)
+	{
+		if (addr < sig.entry)
+			continue;
+		const u16 *code = (const u16 *)GetMemPtr(addr - sig.entry, sig.count * 2);
+		if (code == nullptr)
+			continue;
+		u32 i = 0;
+		while (i < sig.count && (code[i] & sig.mask[i]) == sig.ops[i])
+			i++;
+		if (i == sig.count)
+		{
+			INFO_LOG(DYNAREC, "Idle fast-forward: %s at %08X", sig.name, addr);
+			return true;
+		}
+	}
+	return false;
+}
+
 static inline shil_param mk_imm(u32 immv)
 {
 	return shil_param(FMT_IMM,immv);
@@ -1163,6 +1241,9 @@ _end:
 	//cycle tricks
 	if (settings.dynarec.idleskip)
 	{
+		if (!mmu_enabled() && idle_ff_match(blk->addr))
+			blk->idle_fastforward = true;
+
 		//Experimental hash-id based idle skip
 		if (!mmu_enabled() && strstr(idle_hash, blk->hash()))
 		{

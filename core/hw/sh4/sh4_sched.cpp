@@ -3,6 +3,7 @@
 #include "sh4_interrupts.h"
 #include "sh4_core.h"
 #include "sh4_sched.h"
+#include <cstdlib>
 
 
 //sh4 scheduler
@@ -62,6 +63,32 @@ void sh4_sched_ffts(void)
       Sh4cntx.sh4_sched_next=SH4_MAIN_CLOCK;
 
 	sh4_sched_ffb+=Sh4cntx.sh4_sched_next;
+}
+
+u64 g_idleFFCalls, g_idleFFCycles;
+
+void sh4_sched_idle_fastforward()
+{
+	// Optional cap per call (FC_IDLE_FF_MAX, in SH4 cycles) for experiments;
+	// unlimited by default.
+	static s32 cap = -2;
+	if (cap == -2)
+	{
+		const char *e = getenv("FC_IDLE_FF_MAX");
+		cap = e != nullptr ? atoi(e) : -1;
+	}
+	// sh4_sched_next is the distance to the next event. Stopping one cycle
+	// short leaves it positive, so the next UpdateSystem() crosses it and
+	// sh4_sched_tick() fires it through the normal path -- jumping past it
+	// would make its remaining time negative and it would never fire.
+	s32 skip = Sh4cntx.sh4_sched_next - 1;
+	if (cap >= 0 && skip > cap)
+		skip = cap;
+	if (skip <= 0)
+		return;
+	Sh4cntx.sh4_sched_next -= skip;
+	g_idleFFCalls++;
+	g_idleFFCycles += skip;
 }
 
 int sh4_sched_register(int tag, sh4_sched_callback* ssc)

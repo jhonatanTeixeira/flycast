@@ -2,6 +2,7 @@
 #include <cstdarg>
 #include <math.h>
 #include <chrono>
+#include <atomic>
 #include <unistd.h>	// getpid(), for the opt-in profiling dumps in retro_run()
 #include "types.h"
 #ifndef _WIN32
@@ -1516,6 +1517,43 @@ void retro_run (void)
          char path[64];
          snprintf(path, sizeof(path), "/tmp/hot-blocks-%d.txt", (int)getpid());
          bm_DumpHotBlocks(path);
+      }
+   }
+
+   // FC_IDLE_FF_STATS (opt-in, see sh4_sched.cpp): how often the idle
+   // fast-forward fired and how many SH4 cycles it skipped, per frame.
+   {
+      static int idleStats = -1;
+      if (idleStats == -1)
+         idleStats = getenv("FC_IDLE_FF_STATS") != nullptr ? 1 : 0;
+      if (idleStats)
+      {
+         extern u64 g_idleFFCalls, g_idleFFCycles;
+         static u32 idleFrames = 0;
+         idleFrames++;
+         if (idleFrames % 150 == 0)
+         {
+            char path[64];
+            snprintf(path, sizeof(path), "/tmp/idle-ff-%d.txt", (int)getpid());
+            FILE *f = fopen(path, "w");
+            if (f != nullptr)
+            {
+               fprintf(f, "frames\t%u\n", idleFrames);
+               fprintf(f, "ff_calls\t%llu\n", (unsigned long long)g_idleFFCalls);
+               fprintf(f, "ff_cycles\t%llu\n", (unsigned long long)g_idleFFCycles);
+               fprintf(f, "ff_calls_per_frame\t%.1f\n", (double)g_idleFFCalls / idleFrames);
+               fprintf(f, "ff_cycles_per_frame\t%.0f\n", (double)g_idleFFCycles / idleFrames);
+               extern u32 g_queueDrops, g_queueOk;
+               fprintf(f, "queued_frames\t%u\n", g_queueOk);
+               fprintf(f, "dropped_frames_rqueue_busy\t%u\n", g_queueDrops);
+               extern u32 g_queueWaits, g_rendIntervalCyclesEma;
+               extern std::atomic<u32> g_rendWorkUsEma;
+               fprintf(f, "waited_for_render\t%u\n", g_queueWaits);
+               fprintf(f, "render_work_ms_ema\t%.2f\n", g_rendWorkUsEma.load() / 1000.0);
+               fprintf(f, "game_interval_ms_ema\t%.2f\n", g_rendIntervalCyclesEma / 200000.0);
+               fclose(f);
+            }
+         }
       }
    }
 

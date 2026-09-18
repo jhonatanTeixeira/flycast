@@ -4,6 +4,8 @@
 #include "hw/holly/holly_intc.h"
 #include "hw/holly/sb.h"
 #include "hw/sh4/sh4_sched.h"
+#include "oslib/oslib.h"
+#include <cstdlib>
 
 u32 in_vblank;
 u32 clc_pvr_scanline;
@@ -20,6 +22,15 @@ int vblank_schid;
 static u32 lightgun_line = 0xffff;
 static u32 lightgun_hpos;
 static bool maple_int_pending;
+
+// Emulated SH4 speed over the last 4 vblanks, as upstream flycast measures it
+// (core/hw/pvr/spg.cpp there). QueueRender() uses it to WAIT for the render
+// thread instead of dropping the new frame while emulation keeps up, and only
+// drop to catch up when it can't. See docs/tech_debits.md 4.14.
+static double real_times[4];
+static u64 cpu_cycles[4];
+static u32 cpu_time_idx;
+bool SH4FastEnough;
 
 void CalculateSync(void)
 {
@@ -125,6 +136,33 @@ int spg_line_sched(int tag, int cycl, int jit)
 			vblk_cnt++;
 
 			rend_vblank(); // notify for vblank
+
+			double now = os_GetSeconds();
+			cpu_time_idx = (cpu_time_idx + 1) % 4;
+			if (cpu_cycles[cpu_time_idx] != 0 && now > real_times[cpu_time_idx])
+			{
+				u32 cycle_span = (u32)(sh4_sched_now64() - cpu_cycles[cpu_time_idx]);
+				double time_span = now - real_times[cpu_time_idx];
+				double cpu_speed = cycle_span / time_span / SH4_MAIN_CLOCK * 100.0;
+				// 85% as upstream. Raising it is NOT the fix for a render
+				// thread slower than the game (mslug6 boss): measured at 95%
+				// it barely helped mslug6 (92.4 -> 95.8% speed) and made the
+				// fast games drop far more (kofxi 17 -> 143 drops, 59.7 ->
+				// 55.4 fps), because the frontend's audio pacing runs the emu
+				// in bursts and a 4-vblank window is noisy. That case is
+				// handled by the render-keeps-up check in QueueRender().
+				static double threshold = -1;
+				if (threshold < 0)
+				{
+					const char *e = getenv("FC_FAST_ENOUGH");
+					threshold = e != nullptr ? atof(e) : 85.0;
+				}
+				SH4FastEnough = cpu_speed >= threshold;
+			}
+			else
+				SH4FastEnough = false;
+			cpu_cycles[cpu_time_idx] = sh4_sched_now64();
+			real_times[cpu_time_idx] = now;
 		}
 		if (lightgun_line != 0xffff && lightgun_line == pvr_cur_scanline)
 		{
@@ -216,6 +254,14 @@ void spg_Term()
 void spg_Reset(bool hard)
 {
    CalculateSync();
+
+   SH4FastEnough = false;
+   cpu_time_idx = 0;
+   for (int i = 0; i < 4; i++)
+   {
+      cpu_cycles[i] = 0;
+      real_times[i] = 0.0;
+   }
 }
 
 void SetREP(TA_context* cntx)

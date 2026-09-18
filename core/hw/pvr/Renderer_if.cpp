@@ -1,4 +1,5 @@
 #include "Renderer_if.h"
+#include <atomic>
 #include <chrono>	// FC_REND_SPLIT timing below
 #include "ta.h"
 #include "hw/pvr/pvr_mem.h"
@@ -187,6 +188,16 @@ void rend_dump_split(const char *path)
 	fclose(f);
 }
 
+// Core-side render work per frame in real time (Process + Render), smoothed.
+// QueueRender() compares it with the game's own render interval to decide
+// whether waiting for this thread would slow the game down (docs/
+// tech_debits.md 4.14). A first version measured "got frame -> started
+// waiting for the next one", which also includes the frontend's present --
+// and that blocks on vsync, so it read ~16.7ms (the display period) in every
+// game, the same as a 60Hz game's interval, and the comparison became a coin
+// flip (kofnw dropped 610 frames). Process + Render never waits on vsync.
+std::atomic<u32> g_rendWorkUsEma(0);
+
 bool rend_frame(TA_context* ctx, bool draw_osd)
 {
    if (renderer_changed || renderer == NULL)
@@ -197,7 +208,7 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
 	  rend_create_renderer();
 	  rend_init_renderer();
    }
-   u64 t0 = g_rendSplitEnabled ? rend_now_us() : 0;
+   u64 t0 = rend_now_us();
    bool proc = renderer->Process(ctx);
    if (g_rendSplitEnabled)
       g_rendProcUs += rend_now_us() - t0;
@@ -207,12 +218,23 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
       re.Set();
 #endif
    
-   u64 t1 = g_rendSplitEnabled ? rend_now_us() : 0;
+   u64 t1 = rend_now_us();
    bool do_swp = proc && renderer->Render();
+   u64 t2 = rend_now_us();
    if (g_rendSplitEnabled)
    {
-      g_rendRenderUs += rend_now_us() - t1;
+      g_rendRenderUs += t2 - t1;
       g_rendSplitFrames++;
+   }
+   // Core-side work for this frame (Process + Render), smoothed. The time
+   // spent waiting on re.Set() above is the emu thread's, not ours, and it's
+   // not in here: t0..t2 is only this thread's own work.
+   u64 work = t2 - t0;
+   if (work < 500000)
+   {
+      u32 ema = g_rendWorkUsEma.load(std::memory_order_relaxed);
+      ema = ema == 0 ? (u32)work : (u32)((ema * 15 + work) / 16);
+      g_rendWorkUsEma.store(ema, std::memory_order_relaxed);
    }
 
    return do_swp;

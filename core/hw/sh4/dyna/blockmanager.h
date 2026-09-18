@@ -47,6 +47,9 @@ struct RuntimeBlockInfo: RuntimeBlockInfo_Core
 	bool has_fpu_op;
 	u32 blockcheck_failures;
 	bool temp_block;
+	// Reaching this block proves the guest is only waiting (decoder.cpp,
+	// idle fast-forward signatures): the JIT jumps time to the next event.
+	bool idle_fastforward;
 
 	u32 BranchBlock; /* if not 0xFFFFFFFF then jump target */
 	u32 NextBlock;   /* if not 0xFFFFFFFF then next block (by position) */
