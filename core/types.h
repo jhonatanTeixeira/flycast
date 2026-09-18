@@ -431,7 +431,11 @@ void os_DebugBreak(void);
 #define verify(x) if((x)==false){ }
 #endif
 
-#define die(reason) { dbgbreak;}
+// die() descartava o `reason` e o local, deixando no log so um "DEBUGBREAK!"
+// generico -- com ~17 pontos de chamada no codigo, isso torna qualquer crash
+// por die() praticamente nao-diagnosticavel. Agora diz o que e onde antes de
+// abortar. ERROR_LOG ja vai pro log do frontend.
+#define die(reason) { ERROR_LOG(COMMON, "die(): %s  [%s:%d]", reason, __FILE__, __LINE__); dbgbreak;}
 
 
 //will be removed sometime soon

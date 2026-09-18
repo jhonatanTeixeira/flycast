@@ -1311,7 +1311,7 @@ public:
 			break;
 
 		default:
-			die("1..8 bytes");
+			{ ERROR_LOG(COMMON, "GenReadMemorySlow: size=%u invalido (bloco SH4 %08X) -- so 1/2/4/8 sao validos", size, block ? block->vaddr : 0); die("1..8 bytes"); }
 			break;
 		}
 		EnsureCodeSize(start_instruction, read_memory_rewrite_size);
@@ -1352,7 +1352,7 @@ public:
 			break;
 
 		default:
-			die("1..8 bytes");
+			{ ERROR_LOG(COMMON, "GenWriteMemorySlow: size=%u invalido (bloco SH4 %08X) -- so 1/2/4/8 sao validos", size, block ? block->vaddr : 0); die("1..8 bytes"); }
 			break;
 		}
 		EnsureCodeSize(start_instruction, write_memory_rewrite_size);
@@ -2436,8 +2436,12 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 	//LOGI("ngen_Rewrite pc %zx\n", host_pc);
 	u32 *code_ptr = (u32 *)CC_RX2RW(host_pc);
 	u32 armv8_op = *code_ptr;
-	bool is_read;
-	u32 size;
+	bool is_read = false;
+	// `size` PRECISA ser inicializada: o verify(found) abaixo e um NO-OP nesta
+	// build (-DNO_VERIFY), entao uma instrucao nao reconhecida seguia adiante
+	// com lixo de pilha aqui e batia no die("1..8 bytes") de
+	// GenWriteMemorySlow(). Ver docs/tech_debits.md.
+	u32 size = 0;
 	bool found = false;
 	u32 masked = armv8_op & STR_LDR_MASK;
 	for (int i = 0; i < ARRAY_SIZE(armv8_mem_ops); i++)
@@ -2449,6 +2453,22 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 			found = true;
 			break;
 		}
+	}
+	if (!found)
+	{
+		// Instrucao de acesso a memoria que este decodificador nao conhece.
+		// Logar o encoding completo: sem isso o sintoma e um die() generico
+		// e nao da pra saber qual forma de endereçamento faltou.
+		// Nem todo fault dentro do buffer JIT e um acesso fastmem ao guest:
+		// pode ser acesso a pilha (Push/PopCallerSaved usam LDP/STP com Rn=SP),
+		// e nesse caso o fault e GENUINO e nao ha call site para reescrever.
+		// Devolver false faz o handler de SIGSEGV tratar como fault real e
+		// reportar com a linha "SIGSEGV @ ..." em vez de morrer aqui com a
+		// mensagem enganosa "1..8 bytes" (o verify(found) abaixo e no-op nesta
+		// build, -DNO_VERIFY, entao antes disto seguia com `size` lixo).
+		ERROR_LOG(COMMON, "ngen_Rewrite: instrucao ARM64 nao reconhecida em %zx: op=%08X masked=%08X acc=%zx -- tratando como fault genuino",
+				(size_t)host_pc, armv8_op, masked, (size_t)acc);
+		return false;
 	}
 	verify(found);
 
