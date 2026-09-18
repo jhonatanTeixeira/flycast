@@ -1789,3 +1789,32 @@ com a observação do usuário de que todas as otimizações de CPU rendiam só
 girava mais do que o SH4 real conseguiria — errado, cabe no orçamento; (b) eu
 li o `perf` (53,9% em `SH4_TCB`) como "o JIT é o gargalo" — ele mostra consumo
 de CPU somado entre threads, não caminho crítico.
+
+## 2026-09-18 — Crash do meltybld/capsnk: `sq_write_stub` não salvava o LR
+
+- Usuário reportou que o meltybld (jogo mais liso do projeto, 60fps nas lutas)
+  passou a crashar durante a luta, e o capsnk também.
+- **Causa (item 1.10):** o `sq_write_stub` (fix de Store Queue, item 1.7, de
+  2026-09-15) é chamado com `Bl`, mas no caminho `not_sq` faz outro `Bl`
+  (`GenCallRuntime(WriteMem32)`) **sem salvar o LR**. O `Ret()` final voltava
+  para dentro do próprio stub, e cada volta reexecutava o `PopCPURegList`,
+  cujo `ldp d16,d17,[sp],#128` soma 128 ao SP — o SP subia 128 bytes por
+  iteração até sair do topo da pilha e bater no guard page. **Fix: salvar e
+  restaurar `x30` em volta da chamada.**
+- **Duas ferramentas de diagnóstico que faltavam e agora existem:**
+  (a) `die()` passou a logar razão, arquivo e linha — antes era só
+  `DEBUGBREAK!` com ~17 pontos possíveis; (b) `ngen_Rewrite` parou de seguir
+  com `size` não inicializada quando não reconhece a instrução (o
+  `verify(found)` é no-op sob `-DNO_VERIFY`), passando a logar o encoding e
+  devolver `false` para o handler reportar o fault de verdade.
+- **Três hipóteses minhas refutadas pelo dado no caminho**, todas registradas
+  no item 1.10: que era regressão do dia 16 (a baseline crasha igual), que a
+  pilha estava dentro da reserva de vmem (está 485MB fora), e que o
+  `EnsureCodeSize` estourava o slot silenciosamente (zero estouros medidos).
+- **Erro de método registrado:** bisseccionei com uma cfg de teste minha em
+  vez da cfg real do EmulationStation, e usei isso para afirmar que a baseline
+  também crashava. A afirmação estava certa, mas o método estava enviesado —
+  o usuário apontou que jogava o jogo inteiro sem crash, e eu deveria ter
+  testado o caminho real antes de concluir.
+- Validado: meltybld 240s sem crash; kofnw/mbaa/mslug6 limpos e com
+  performance mantida (55,6 / 50,0 / 25,5 fps).

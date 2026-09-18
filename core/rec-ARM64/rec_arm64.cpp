@@ -1693,9 +1693,24 @@ public:
 		// float register instead (this path is not the hot one; the SQ match
 		// above is).
 		CPURegList allCallerSaved(CPURegister::kVRegister, 64, 16, 31);
+		// LR TEM de ser salvo: este stub e chamado com Bl (LR = call site no
+		// bloco), e o GenCallRuntime() abaixo emite outro Bl, que SOBRESCREVE
+		// o LR. Sem salvar, o Ret() no fim volta para dentro do proprio stub
+		// (logo depois do Bl interno) em vez de voltar ao chamador -- e cada
+		// volta executa de novo o PopCPURegList, cujo `ldp d16,d17,[sp],#128`
+		// SOMA 128 ao SP. O SP sobe 128 bytes por iteracao ate sair do topo da
+		// pilha e bater no guard page: SIGSEGV.
+		//
+		// Era o crash do meltybld e do capsnk (tech_debits item 1.10),
+		// diagnosticado em 2026-09-18. So dispara quando este caminho `not_sq`
+		// e tomado -- o proprio comentario acima previa isso como "raro a
+		// nunca" -- o que explica o crash ser especifico de alguns jogos.
+		// 16 bytes mantem o alinhamento de pilha exigido pela ABI.
+		Str(x30, MemOperand(sp, -16, PreIndex));
 		PushCPURegList(allCallerSaved);
 		GenCallRuntime(WriteMem32);
 		PopCPURegList(allCallerSaved);
+		Ldr(x30, MemOperand(sp, 16, PostIndex));
 		Ret();
 
 		FinalizeCode();
@@ -2213,6 +2228,13 @@ private:
 	{
 		while (GetCursorAddress<Instruction *>() - start_instruction < code_size * kInstructionSize)
 			Nop();
+		// ESTOURO: se o codigo emitido ja passou do slot, o while acima nao faz
+		// nada e o verify abaixo e NO-OP nesta build (-DNO_VERIFY) -- ou seja o
+		// excesso sobrescreve silenciosamente o que vier depois. Logar alto.
+		ptrdiff_t emitido = GetCursorAddress<Instruction *>() - start_instruction;
+		if (emitido != code_size * kInstructionSize)
+			ERROR_LOG(COMMON, "EnsureCodeSize ESTOUROU: emitiu %d instrucoes num slot de %d (bloco SH4 %08X)",
+					(int)(emitido / kInstructionSize), code_size, block ? block->vaddr : 0);
 		verify (GetCursorAddress<Instruction *>() - start_instruction == code_size * kInstructionSize);
 	}
 
@@ -2483,7 +2505,13 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 	// 32-bit write anywhere else in the game is touched by this check: it
 	// only ever runs here, once, after an actual fault -- not on every write
 	// like the earlier (reverted) attempt at this same optimization.
-	if (!is_read && size == 4 && sq_write_stub != nullptr && ((u32)acc >> 26) == 0x38)
+	// FC_NO_SQ_STUB=1 desliga o redirecionamento para o stub de Store Queue
+	// (item 1.7) e usa o caminho lento generico. Teste de bissecao: o crash do
+	// meltybld acontece dentro do caminho not_sq DESSE stub, com SP ja
+	// corrompido na entrada -- isto responde se o stub esta implicado na causa
+	// ou se e so onde a corrupcao vira fault. Ver tech_debits item 1.10.
+	static const bool noSqStub = getenv("FC_NO_SQ_STUB") != nullptr;
+	if (!noSqStub && !is_read && size == 4 && sq_write_stub != nullptr && ((u32)acc >> 26) == 0x38)
 		assembler->GenCallStubAddr(sq_write_stub);
 	else if (is_read)
 		assembler->GenReadMemorySlow(size);

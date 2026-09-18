@@ -358,6 +358,71 @@ static void signal_handler(int sn, siginfo_t * si, void *segfault_ctx)
    else
    {
    	ERROR_LOG(COMMON, "SIGSEGV @ %zx ... %p -> was not in vram (dyna code %d)", ctx.pc, si->si_addr, dyna_cde);
+#if HOST_CPU == CPU_ARM64
+	// Dump do codigo gerado em volta do PC que faltou. Sem isto so sabemos o
+	// encoding da instrucao que falhou; com o contexto da pra ver se existe um
+	// Push correspondente antes e de onde se pode ter saltado para ca -- que e
+	// a duvida quando o fault e num acesso a pilha (ver tech_debits item 1.10).
+	if (dyna_cde)
+	{
+		const u32 *pc32 = (const u32 *)(ctx.pc & ~3ULL);
+		char line[256]; line[0] = 0;
+		for (int i = -12; i <= 6; i++)
+		{
+			char one[32];
+			snprintf(one, sizeof(one), "%s%08X ", i == 0 ? ">" : "", pc32[i]);
+			strncat(line, one, sizeof(line) - strlen(line) - 1);
+		}
+		ERROR_LOG(COMMON, "JIT ctx (-12..+6 instr, '>' = faltou): %s", line);
+		// host_context_t no ARM64 so carrega pc/x0/x2, entao SP vem direto do
+		// ucontext do sinal.
+		ucontext_t *uc = (ucontext_t *)segfault_ctx;
+		ERROR_LOG(COMMON, "SP=%llx  x28=%llx  faltou=%p  delta=%lld",
+				(unsigned long long)uc->uc_mcontext.sp,
+				(unsigned long long)uc->uc_mcontext.regs[28],
+				si->si_addr,
+				(long long)((size_t)si->si_addr - (size_t)uc->uc_mcontext.sp));
+		// A pilha desta thread esta DENTRO da reserva de memoria virtual do
+		// emulador? Se estiver, qualquer mprotect nosso (protecao de VRAM para
+		// textura, bm_LockPage para SMC) pode derrubar a propria pilha -- que e
+		// exatamente o padrao aqui: o endereco foi escrito com sucesso antes do
+		// BL e faltou na leitura depois. Ver tech_debits item 1.10.
+		{
+			extern u8 *virt_ram_base;
+			size_t base = (size_t)virt_ram_base;
+			size_t sp = (size_t)uc->uc_mcontext.sp;
+			ERROR_LOG(COMMON, "virt_ram_base=%zx  SP-base=%lld (%.1f MB)  pilha dentro da reserva? %s",
+					base, (long long)(sp - base), (double)((long long)(sp - base)) / 1048576.0,
+					(sp > base && sp - base < 0x100000000ULL) ? "SIM" : "nao");
+
+			// Qual regiao realmente contem o SP, e o que existe (ou nao) no
+			// endereco que faltou. Isto distingue "pilha pequena demais" de
+			// "SP invalido" de "pagina desprotegida por nos".
+			FILE *mf = fopen("/proc/self/maps", "r");
+			if (mf != nullptr)
+			{
+				char ln[512];
+				while (fgets(ln, sizeof(ln), mf))
+				{
+					size_t lo = 0, hi = 0;
+					if (sscanf(ln, "%zx-%zx", &lo, &hi) != 2)
+						continue;
+					size_t fa = (size_t)si->si_addr;
+					if ((sp >= lo && sp < hi) || (fa >= lo && fa < hi)
+							|| (lo > fa - 0x200000 && lo < fa + 0x200000))
+					{
+						size_t n = strlen(ln);
+						if (n && ln[n-1] == 0x0A) ln[n-1] = 0;
+						ERROR_LOG(COMMON, "  maps: %s%s%s", ln,
+								(sp >= lo && sp < hi) ? "   <== SP" : "",
+								(fa >= lo && fa < hi) ? "   <== ENDERECO QUE FALTOU" : "");
+					}
+				}
+				fclose(mf);
+			}
+		}
+	}
+#endif
 #ifdef HAVE_LIBNX
     MemoryInfo meminfo;
     u32 pageinfo;
