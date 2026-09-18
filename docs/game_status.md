@@ -59,6 +59,13 @@ Não era esperado chegar perto de rodar; hoje faz **43 fps quase constantes**.
 Apresenta-se lento mas **sem muitos hicups**. Tem glitches de renderização em
 algumas partes que **já existiam antes** das nossas mudanças.
 
+**Medido em 2026-09-18 (savestate, 30s):** 49,7 fps, frame p50/p95/p99 =
+19,9/22,0/25,8ms — cauda curta, bate com o "sem hicup". **Limitado por
+throughput da emulação da CPU, não por textura nem GPU:** 75% do trabalho do
+JIT é o sistema de tarefas do próprio jogo trocando de contexto em vazio
+enquanto espera o vblank (`tech_debits.md` 4.14). É o candidato mais claro do
+projeto a um *idle skip*, e o fork já tem o mecanismo pra isso.
+
 ### Skies of Arcadia — falta um toque
 Roda bem, exceto por trechos pontuais que derrubam para **24 fps**. Não
 investigado: não sabemos ainda se o gargalo desses trechos é o mesmo do

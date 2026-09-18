@@ -1818,3 +1818,28 @@ de CPU somado entre threads, não caminho crítico.
   testado o caminho real antes de concluir.
 - Validado: meltybld 240s sem crash; kofnw/mbaa/mslug6 limpos e com
   performance mantida (55,6 / 50,0 / 25,5 fps).
+
+## 2026-09-18 — Instrumentação do kofxi (savestate, core com fix do LR)
+
+- Duas rodadas de 30s (+5s warmup) no savestate do kofxi, separadas para não
+  misturar overhead: (a) `FC_TA_SPLIT`+`FC_REND_SPLIT` (mapa do frame), (b)
+  `FC_BLOCK_PROF`+`FC_IFB_COUNT`+`FC_FPSCR_STATS` (JIT). Sem crash nas duas.
+- **Números da rodada limpa (a):** 1.490 frames em 30s = **49,7 fps**
+  (frame médio 20,1ms). `active_frame` p50/p95/p99 = 19,9 / 22,0 / 25,8ms;
+  `core` média/p50/p95/p99 = 12,6 / 12,3 / 14,4 / 17,7ms; `video` 7,6ms.
+  Cauda curta (p99/p50 = 1,3x) — bate com o "sem muitos hicups" do usuário.
+- **Mapa da main thread:** `rsWait` 6,3ms · `Process` 3,0ms (textura 2,1) ·
+  `render` 3,5ms. Cena leve pra GPU (~131 polígonos translúcidos/frame).
+  **Ao contrário do mslug6, aqui quem manda é a `emu_thread`:** a main
+  thread espera 6,3ms por frame, e a instrumentação do JIT sozinha derrubou o
+  fps de 49,7 para 40,9.
+- **Achado principal (item 4.14):** 75% das instruções host do JIT estão no
+  SO cooperativo do próprio jogo trocando de contexto em vazio — ~2.100
+  trocas completas por frame (save/restore de todos os registradores e dos
+  dois bancos de FPU), cada uma varrendo 16 slots de handler vazios, enquanto
+  as tarefas esperam o vblank. Lido direto do código SH4 no savestate com um
+  desmontador mínimo em Python (scratchpad, `sh4dis.py`).
+- **Achado secundário (item 4.15):** 98% das texturas paletizadas do kofxi
+  usam filtro bilinear e por isso ficam fora do caminho de paleta na GPU; o
+  master resolve isso no shader (`pp_Palette == 2`).
+- Nada implementado ainda — só medição e diagnóstico.
