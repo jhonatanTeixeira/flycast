@@ -247,6 +247,15 @@ private:
 						}
 						else
 							doit = IsOnRam(op.rs1._imm);
+						// With data writes into code pages going through the
+						// RAM mirror (no fault), the block manager has to know
+						// about the fold to invalidate it -- or refuse it for a
+						// chunk known to be written. docs/tech_debits.md 4.19.
+						if (doit)
+						{
+							extern bool bm_CanFoldRead(RuntimeBlockInfo* block, u32 addr, u32 size);
+							doit = bm_CanFoldRead(block, op.rs1._imm, op.flags & 0x7f);
+						}
 						if (doit)
 						{
 							u32 v;

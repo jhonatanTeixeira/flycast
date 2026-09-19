@@ -1546,6 +1546,27 @@ void retro_run (void)
                extern u32 g_queueDrops, g_queueOk;
                fprintf(f, "queued_frames\t%u\n", g_queueOk);
                fprintf(f, "dropped_frames_rqueue_busy\t%u\n", g_queueDrops);
+               extern u32 protected_blocks, unprotected_blocks;
+               extern bool unprotected_pages[];
+               u32 dirtyPages = 0;
+               for (u32 i = 0; i < RAM_SIZE_MAX / PAGE_SIZE; i++)
+                  dirtyPages += unprotected_pages[i] ? 1 : 0;
+               fprintf(f, "blocks_protected\t%u\n", protected_blocks);
+               fprintf(f, "blocks_unprotected_checked\t%u\n", unprotected_blocks);
+               fprintf(f, "ram_pages_unprotected\t%u\n", dirtyPages);
+               extern u32 g_smcReprotected, g_smcRefaults, g_smcGaveUp;
+               fprintf(f, "smc_pages_reprotected\t%u\n", g_smcReprotected);
+               fprintf(f, "smc_refaults_after_reprotect\t%u\n", g_smcRefaults);
+               fprintf(f, "smc_pages_given_up\t%u\n", g_smcGaveUp);
+               extern u32 g_codePageDataWrites, g_codePageSmcWrites, g_codePageRewrites;
+               fprintf(f, "codepage_store_sites_rewritten\t%u\n", g_codePageRewrites);
+               fprintf(f, "codepage_data_writes\t%u\n", g_codePageDataWrites);
+               fprintf(f, "codepage_smc_writes\t%u\n", g_codePageSmcWrites);
+               extern u32 g_aliasedConstStores;
+               fprintf(f, "aliased_const_stores\t%u\n", g_aliasedConstStores);
+               extern u32 g_foldedReads, g_foldInvalidations;
+               fprintf(f, "folded_reads_tracked\t%u\n", g_foldedReads);
+               fprintf(f, "fold_invalidations\t%u\n", g_foldInvalidations);
                extern u32 g_queueWaits, g_rendIntervalCyclesEma;
                extern std::atomic<u32> g_rendWorkUsEma;
                fprintf(f, "waited_for_render\t%u\n", g_queueWaits);

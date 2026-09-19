@@ -315,6 +315,38 @@ static void signal_handler(int sn, siginfo_t * si, void *segfault_ctx)
 	if (vmem32_handle_signal(si->si_addr, write, exception_pc))
 		return;
 #endif
+#if FEAT_SHREC == DYNAREC_JIT && HOST_CPU == CPU_ARM64
+	// A JIT store writing DATA into a locked page that holds compiled code
+	// (not the code itself): rewrite that store site to a checked stub and
+	// keep the page protected, instead of unprotecting it -- which would make
+	// every block compiled there carry an inline anti-SMC compare forever.
+	// See docs/tech_debits.md 4.19.
+	{
+		extern bool bm_IsDataWriteToCodePage(void *p);
+		extern bool ngen_RewriteCodePageStore(unat& host_pc);
+		const u32 fault_op = *(u32*)ctx.pc;
+		const bool is_write = (fault_op & 0x00400000) == 0;
+		const bool data_write = dyna_cde && is_write && bm_IsDataWriteToCodePage(si->si_addr);
+		if (data_write && ngen_RewriteCodePageStore(ctx.pc))
+		{
+			context_to_segfault(&ctx, segfault_ctx);
+			return;
+		}
+		static int logged = getenv("FC_SMC_LOG") != nullptr ? 0 : 1 << 30;
+		if (dyna_cde && is_write && logged < 40)
+		{
+			logged++;
+			const u32 *pc32 = (const u32 *)(ctx.pc & ~3ULL);
+			extern int g_codePageLastReason;
+			fprintf(stderr, "CODEPAGE not rewritten: op=%08X data_write=%d reason=%d prev=%08X %08X next=%08X addr=%p\n",
+					fault_op, (int)data_write, g_codePageLastReason, pc32[-2], pc32[-1], pc32[1], si->si_addr);
+		}
+	}
+#endif
+	{
+		extern int g_unprotectSource;
+		g_unprotectSource = dyna_cde ? 1 : 0;
+	}
 	if (bm_RamWriteAccess(si->si_addr))
 		return;
 	if (VramLockedWrite((u8*)si->si_addr))

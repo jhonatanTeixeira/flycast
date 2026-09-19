@@ -140,6 +140,16 @@ static void (*arm64_no_update)();
 // docs/tech_debits.md item 1.7. Same lifecycle as `mainloop`: regenerated
 // alongside it (generate_mainloop()), reset to null in ngen_ResetBlocks().
 static void *sq_write_stub;
+// Stores into pages holding compiled code, by size 1/2/4/8 (index 0..3). See
+// bm_WriteMemCodePage() in blockmanager.cpp and docs/tech_debits.md 4.19.
+static void *codepage_write_stub[4];
+extern u8 bm_code_page_locked[];
+extern u8 bm_code_chunks[];
+extern u8 *bm_ram_alias;
+void DYNACALL bm_WriteMemCodePage8(u32 addr, u8 data);
+void DYNACALL bm_WriteMemCodePage16(u32 addr, u16 data);
+void DYNACALL bm_WriteMemCodePage32(u32 addr, u32 data);
+void DYNACALL bm_WriteMemCodePage64(u32 addr, u64 data);
 
 static bool restarting;
 
@@ -194,6 +204,8 @@ void ngen_ResetBlocks()
 {
 	mainloop = NULL;
 	sq_write_stub = nullptr;
+	for (auto& stub : codepage_write_stub)
+		stub = nullptr;
 	if (mmu_enabled())
 		ngen_FailedToFindBlock = &ngen_FailedToFindBlock_mmu;
 	else
@@ -1505,6 +1517,42 @@ public:
 
 			EmitPerfMapEntry(block->code, block->host_code_size, block->vaddr);
 
+			// FC_DUMP_BLOCK=<hex vaddr>[,<hex vaddr>...] (opt-in, diagnosis
+			// only): write the generated ARM64 code of those blocks to
+			// /tmp/block-<vaddr>.bin and their SHIL to .txt, to disassemble
+			// off-device (objdump -b binary -m aarch64 -D). The block
+			// profiler says WHICH blocks are hot; this shows WHAT we emit
+			// for them.
+			{
+				static const char *dumpList = getenv("FC_DUMP_BLOCK");
+				if (dumpList != nullptr)
+				{
+					char key[16];
+					snprintf(key, sizeof(key), "%08X", block->vaddr);
+					if (strcasestr(dumpList, key) != nullptr)
+					{
+						char path[64];
+						snprintf(path, sizeof(path), "/tmp/block-%08X.bin", block->vaddr);
+						FILE *f = fopen(path, "wb");
+						if (f != nullptr)
+						{
+							fwrite(GetBuffer()->GetStartAddress<void*>(), 1, block->host_code_size, f);
+							fclose(f);
+						}
+						snprintf(path, sizeof(path), "/tmp/block-%08X.txt", block->vaddr);
+						f = fopen(path, "w");
+						if (f != nullptr)
+						{
+							fprintf(f, "vaddr %08X guest_ops %u cycles %u host_bytes %u\n", block->vaddr,
+									block->guest_opcodes, block->guest_cycles, block->host_code_size);
+							for (size_t j = 0; j < block->oplist.size(); j++)
+								fprintf(f, "%zu: %s\n", j, block->oplist[j].dissasm().c_str());
+							fclose(f);
+						}
+					}
+				}
+			}
+
 			emit_Skip(block->host_code_size);
 		}
 
@@ -1722,6 +1770,77 @@ public:
 		PopCPURegList(allCallerSaved);
 		Ldr(x30, MemOperand(sp, 16, PostIndex));
 		Ret();
+
+		// Code-page store stubs (docs/tech_debits.md 4.19). Same calling
+		// convention as the fast store they replace: guest address in w0,
+		// data in w1/x1. Fast path, inline: an address in main RAM whose page
+		// is NOT locked is written straight away through the unlocked RAM
+		// mirror -- so a generic store site (a memcpy, say) that once hit a
+		// code page and got rewritten stays cheap for every other page. Only
+		// locked pages (or non-RAM addresses) take the C slow path, which
+		// decides between "data next to code" and real self-modifying code.
+		if (_nvmem_enabled() && !mmu_enabled())
+		{
+			if (bm_ram_alias == nullptr)
+				bm_ram_alias = virt_ram_base + 0x0C000000 + RAM_SIZE;
+			for (int i = 0; i < 4; i++)
+			{
+				codepage_write_stub[i] = CC_RW2RX(GetCursorAddress<uintptr_t>());
+				Label slow;
+				Ubfx(w9, w0, 26, 3);			// area: 3 = main RAM (P0/P1/P2 views alike)
+				Cmp(w9, 3);
+				B(&slow, ne);
+				And(w9, w0, RAM_MASK);
+				Label write;
+				Lsr(w10, w9, 12);
+				Mov(x11, reinterpret_cast<uintptr_t>(bm_code_page_locked));
+				Ldrb(w10, MemOperand(x11, x10));
+				Cbz(w10, &write);
+				// Locked page: only a 32-byte chunk holding compiled code needs
+				// the exact check in C. A store straddling two chunks goes to C
+				// too rather than testing both.
+				const u32 size = 1u << i;
+				if (size > 1)
+				{
+					And(w10, w9, 31);
+					Cmp(w10, 32 - size);
+					B(&slow, hi);
+				}
+				Lsr(w10, w9, 5);				// chunk index
+				Lsr(w12, w10, 3);				// its byte in the bitmap
+				Mov(x11, reinterpret_cast<uintptr_t>(bm_code_chunks));
+				Ldrb(w12, MemOperand(x11, x12));
+				And(w10, w10, 7);
+				Lsr(w12, w12, w10);
+				Tbnz(w12, 0, &slow);
+				Bind(&write);
+				Mov(x11, reinterpret_cast<uintptr_t>(bm_ram_alias));
+				switch (i)
+				{
+				case 0: Strb(w1, MemOperand(x11, x9)); break;
+				case 1: Strh(w1, MemOperand(x11, x9)); break;
+				case 2: Str(w1, MemOperand(x11, x9)); break;
+				default: Str(x1, MemOperand(x11, x9)); break;
+				}
+				Ret();
+
+				Bind(&slow);
+				// Same register discipline as the SQ stub above: save LR (the
+				// call below overwrites it) and every caller-saved vector reg.
+				Str(x30, MemOperand(sp, -16, PreIndex));
+				PushCPURegList(allCallerSaved);
+				switch (i)
+				{
+				case 0: GenCallRuntime(bm_WriteMemCodePage8); break;
+				case 1: GenCallRuntime(bm_WriteMemCodePage16); break;
+				case 2: GenCallRuntime(bm_WriteMemCodePage32); break;
+				default: GenCallRuntime(bm_WriteMemCodePage64); break;
+				}
+				PopCPURegList(allCallerSaved);
+				Ldr(x30, MemOperand(sp, 16, PostIndex));
+				Ret();
+			}
+		}
 
 		FinalizeCode();
 		emit_Skip(GetBuffer()->GetSizeInBytes());
@@ -2093,6 +2212,16 @@ private:
 #endif // NO_MMU
 		bool isram = false;
 		void* ptr = _vmem_write_const(addr, isram, size > 4 ? 4 : size);
+		// Data next to code (docs/tech_debits.md 4.19): write through the RAM
+		// mirror that is never locked, unless the address is compiled code
+		// right now -- then keep the locked view so SMC is detected.
+		if (isram)
+		{
+			extern u8 *bm_ConstStoreAlias(RuntimeBlockInfo* block, u32 addr, u32 size);
+			u8 *alias = bm_ConstStoreAlias(block, addr, size);
+			if (alias != nullptr)
+				ptr = alias;
+		}
 
 		Register reg2;
 		if (size != 8)
@@ -2531,6 +2660,42 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 	delete assembler;
 	host_pc = (unat)CC_RW2RX(code_rewrite);
 
+	return true;
+}
+
+// Called by the fault handler when a JIT store faulted on a locked code page
+// and the bytes it writes are not compiled code (bm_IsDataWriteToCodePage):
+// point THIS store site at the code-page stub and keep the page protected.
+bool ngen_RewriteCodePageStore(unat& host_pc)
+{
+	u32 *code_ptr = (u32 *)CC_RX2RW(host_pc);
+	const u32 masked = *code_ptr & STR_LDR_MASK;
+	u32 size = 0;
+	bool found = false;
+	for (int i = 0; i < ARRAY_SIZE(armv8_mem_ops); i++)
+		if (masked == armv8_mem_ops[i])
+		{
+			if (read_ops[i])
+				return false;
+			size = op_sizes[i];
+			found = true;
+			break;
+		}
+	if (!found)
+		return false;
+	const int idx = size == 1 ? 0 : size == 2 ? 1 : size == 4 ? 2 : size == 8 ? 3 : -1;
+	if (idx < 0 || codepage_write_stub[idx] == nullptr)
+		return false;
+
+	// Same layout ngen_Rewrite() relies on: 1 or 2 ops before the access.
+	u32 *code_rewrite = code_ptr - 1 - (!_nvmem_4gb_space() ? 1 : 0);
+	Arm64Assembler *assembler = new Arm64Assembler(code_rewrite);
+	assembler->GenCallStubAddr(codepage_write_stub[idx]);
+	assembler->Finalize(true);
+	delete assembler;
+	host_pc = (unat)CC_RW2RX(code_rewrite);
+	extern u32 g_codePageRewrites;
+	g_codePageRewrites++;
 	return true;
 }
 

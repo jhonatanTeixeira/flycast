@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <set>
 #include <map>
+#include <unordered_map>
 #include "blockmanager.h"
 #include "ngen.h"
 
@@ -32,6 +33,90 @@ static bm_List del_blocks;
 
 bool unprotected_pages[RAM_SIZE_MAX/PAGE_SIZE];
 static std::set<RuntimeBlockInfo*> blocks_per_page[RAM_SIZE_MAX/PAGE_SIZE];
+
+// Re-protecting pages that stopped being written (docs/tech_debits.md 4.19).
+// A write to a page holding compiled code unprotects it -- before this, for
+// good: every block compiled there afterwards carries the inline anti-SMC
+// compare on EVERY execution. Games that load code overlays at runtime
+// (Shenmue) end up with their hottest loops on such pages: 490 checked blocks
+// on 9 pages cost ~19% fps in Shenmue's vertex transform. The checked blocks
+// of each unprotected page are tracked here, and a page that has been quiet
+// for a while is protected again: its checked blocks are discarded and
+// recompile protected. A new write faults as usual; each re-fault doubles the
+// quiet time, and after a few the page is left unprotected (the old
+// behaviour) so a page mixing code with hot data can't thrash. Same idea as
+// the PCSX2 recompiler's page protection modes.
+static std::set<RuntimeBlockInfo*> checked_blocks_per_page[RAM_SIZE_MAX/PAGE_SIZE];
+static u32 page_unprotected_at[RAM_SIZE_MAX/PAGE_SIZE];	// in DreamcastSecond ticks
+static u8 page_reprotections[RAM_SIZE_MAX/PAGE_SIZE];
+static u32 bm_seconds;
+u32 g_smcReprotected, g_smcRefaults, g_smcGaveUp;
+static const u32 SMC_QUIET_SECONDS = 3;
+static const u8 SMC_MAX_REPROTECTIONS = 6;
+
+// Data writes into pages that hold compiled code (docs/tech_debits.md 4.19).
+// Logged in Shenmue: every write that kept its hottest code pages
+// unprotected landed OUTSIDE the compiled code -- variables living in the same
+// 4KB page as the routine that uses them, not self-modifying code. Unprotecting
+// the page for that made every block on it carry the inline anti-SMC compare
+// (~19% of Shenmue's frame). Instead, a JIT store that faults on a locked code
+// page is rewritten (ngen_RewriteCodePageStore) to a stub that checks, per
+// write, whether it really hits compiled code: if not, it writes through an
+// unlocked mirror of the RAM and the page stays protected; if it does, the
+// usual SMC path runs. The stub's own fast path skips all this for pages that
+// aren't locked, so a generic store site that once hit a code page stays cheap.
+u8 bm_code_page_locked[RAM_SIZE_MAX / PAGE_SIZE];
+// 1 bit per 32-byte chunk of RAM that holds guest code of a protected block.
+// The store stubs test it inline: a data write into a locked page but outside
+// any code chunk goes straight to the RAM mirror without calling C. First
+// attempt without it sent every such write to C: 8.7M calls in 40s in Shenmue,
+// 20.3 -> 11.2 fps.
+u8 bm_code_chunks[RAM_SIZE_MAX / 32 / 8];
+
+static void bm_MarkCodeChunks(u32 ram_start, u32 size)
+{
+	for (u32 c = ram_start / 32; c <= (ram_start + size - 1) / 32; c++)
+		bm_code_chunks[c / 8] |= (u8)(1 << (c % 8));
+}
+static void bm_RebuildPageChunks(u32 page);
+static std::unordered_map<u32, std::vector<RuntimeBlockInfo*>> fold_chunk_blocks;
+static std::unordered_map<RuntimeBlockInfo*, std::vector<u32>> block_fold_chunks;
+static u8 bm_fold_volatile[RAM_SIZE_MAX / 32 / 8];
+u32 g_foldedReads, g_foldInvalidations;
+static void bm_ForgetFoldedReads(RuntimeBlockInfo* block);
+static void bm_InvalidateFoldedReads(u32 ram_addr, u32 size);
+static bool bm_WriteHitsCode(u32 ram_addr, u32 size);
+static u8 *bm_RamAlias();
+
+// Constant-address RAM stores compiled to write through the RAM mirror
+// (GenWriteMemoryImmediate): which blocks do it, into which 32-byte chunks.
+// If a protected block is ever compiled over such a chunk, those blocks are
+// discarded -- recompiled, their store falls back to the locked view and SMC
+// detection works as always.
+static std::unordered_map<u32, std::vector<RuntimeBlockInfo*>> alias_chunk_blocks;
+static std::unordered_map<RuntimeBlockInfo*, std::vector<u32>> block_alias_chunks;
+u32 g_aliasedConstStores;
+
+static void bm_ForgetAliasedStores(RuntimeBlockInfo* block)
+{
+	auto it = block_alias_chunks.find(block);
+	if (it == block_alias_chunks.end())
+		return;
+	for (u32 chunk : it->second)
+	{
+		auto cit = alias_chunk_blocks.find(chunk);
+		if (cit == alias_chunk_blocks.end())
+			continue;
+		auto& v = cit->second;
+		v.erase(std::remove(v.begin(), v.end(), block), v.end());
+		if (v.empty())
+			alias_chunk_blocks.erase(cit);
+	}
+	block_alias_chunks.erase(it);
+}
+
+u8 *bm_ram_alias;		// a RAM mirror bm_LockPage never locks
+u32 g_codePageDataWrites, g_codePageSmcWrites, g_codePageRewrites;
 
 static bm_Map blkmap;
 // Stats
@@ -219,9 +304,52 @@ void bm_DiscardBlock(RuntimeBlockInfo* block)
 	block_ptr->Discard();
 }
 
+static void bm_ReprotectQuietPages()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+	{
+		const char *e = getenv("FC_SMC_REPROTECT");
+		enabled = (e == nullptr || atoi(e) != 0) ? 1 : 0;
+	}
+	if (!enabled)
+		return;
+	for (u32 page = 0; page < RAM_SIZE_MAX / PAGE_SIZE; page++)
+	{
+		if (!unprotected_pages[page] || page_reprotections[page] >= SMC_MAX_REPROTECTIONS)
+			continue;
+		const u32 quiet = SMC_QUIET_SECONDS << page_reprotections[page];
+		if (bm_seconds - page_unprotected_at[page] < quiet)
+			continue;
+		// Only worth it if code actually lives here.
+		if (checked_blocks_per_page[page].empty())
+			continue;
+		std::vector<RuntimeBlockInfo*> list_copy(checked_blocks_per_page[page].begin(),
+				checked_blocks_per_page[page].end());
+		for (RuntimeBlockInfo* block : list_copy)
+		{
+			// Only blocks still live in the block map: a temp block already
+			// dropped by bm_ResetTempCache waits in del_blocks for cleanup.
+			auto it = blkmap.find((void*)block->code);
+			if (it != blkmap.end() && it->second.get() == block)
+				bm_DiscardBlock(block);
+		}
+		checked_blocks_per_page[page].clear();
+		// The page is still writable; it gets locked again when the first
+		// protected block is compiled on it (SetProtectedFlags).
+		unprotected_pages[page] = false;
+		page_reprotections[page]++;
+		g_smcReprotected++;
+	}
+}
+
 void bm_Periodical_1s()
 {
 	bm_CleanupDeletedBlocks();
+	bm_seconds++;
+	// After the cleanup: blocks discarded now stay in del_blocks until the
+	// next second, so a fault inside one still running can be rewritten.
+	bm_ReprotectQuietPages();
 }
 
 
@@ -271,6 +399,7 @@ void bm_Reset()
 static void bm_LockPage(u32 addr)
 {
 	addr = addr & (RAM_MASK - PAGE_MASK);
+	bm_code_page_locked[addr / PAGE_SIZE] = 1;
 	if (_nvmem_enabled())
 	{
 		if (!mmu_enabled() || !_nvmem_4gb_space())
@@ -291,6 +420,7 @@ static void bm_LockPage(u32 addr)
 static void bm_UnlockPage(u32 addr)
 {
 	addr = addr & (RAM_MASK - PAGE_MASK);
+	bm_code_page_locked[addr / PAGE_SIZE] = 0;
 	if (_nvmem_enabled())
 	{
 		if (!mmu_enabled() || !_nvmem_4gb_space())
@@ -334,6 +464,17 @@ void bm_ResetCache()
 		block_list.clear();
 
 	memset(unprotected_pages, 0, sizeof(unprotected_pages));
+	for (auto& list : checked_blocks_per_page)
+		list.clear();
+	memset(page_unprotected_at, 0, sizeof(page_unprotected_at));
+	memset(bm_code_page_locked, 0, sizeof(bm_code_page_locked));
+	memset(bm_code_chunks, 0, sizeof(bm_code_chunks));
+	alias_chunk_blocks.clear();
+	block_alias_chunks.clear();
+	fold_chunk_blocks.clear();
+	block_fold_chunks.clear();
+	memset(bm_fold_volatile, 0, sizeof(bm_fold_volatile));
+	memset(page_reprotections, 0, sizeof(page_reprotections));
 
 #ifdef DYNA_OPROF
 	if (oprofHandle)
@@ -595,12 +736,27 @@ void bm_Sort()
 
 RuntimeBlockInfo::~RuntimeBlockInfo()
 {
+	bm_ForgetAliasedStores(this);
+	bm_ForgetFoldedReads(this);
 	if (sh4_code_size != 0)
 	{
+		// bm_Reset() zeroes these counters while discarded blocks may still be
+		// waiting in del_blocks; don't let their destruction wrap them around.
 		if (read_only)
-			protected_blocks--;
+		{
+			if (protected_blocks > 0)
+				protected_blocks--;
+		}
 		else
-			unprotected_blocks--;
+		{
+			if (unprotected_blocks > 0)
+				unprotected_blocks--;
+			// Some paths drop blocks without Discard() (bm_ResetTempCache):
+			// never leave a dangling pointer in the re-protection lists.
+			if (IsOnRam(this->addr))
+				for (u32 a = this->addr & ~PAGE_MASK; a < this->addr + this->sh4_code_size; a += PAGE_SIZE)
+					checked_blocks_per_page[(a & RAM_MASK) / PAGE_SIZE].erase(this);
+		}
 	}
 }
 
@@ -630,6 +786,13 @@ void RuntimeBlockInfo::Discard()
 	}
 	pre_refs.clear();
 
+	bm_ForgetAliasedStores(this);
+	bm_ForgetFoldedReads(this);
+	if (!read_only && sh4_code_size != 0 && IsOnRam(this->addr))
+	{
+		for (u32 addr = this->addr & ~PAGE_MASK; addr < this->addr + this->sh4_code_size; addr += PAGE_SIZE)
+			checked_blocks_per_page[(addr & RAM_MASK) / PAGE_SIZE].erase(this);
+	}
 	if (read_only)
 	{
 		// Remove this block from the per-page block lists
@@ -637,6 +800,7 @@ void RuntimeBlockInfo::Discard()
 		{
          auto& block_list = blocks_per_page[(addr & RAM_MASK) / PAGE_SIZE];
 			block_list.erase(this);
+			bm_RebuildPageChunks((addr & RAM_MASK) / PAGE_SIZE);
 		}
 	}
 }
@@ -658,6 +822,11 @@ void RuntimeBlockInfo::SetProtectedFlags()
 		{
 			this->read_only = false;
 			unprotected_blocks++;
+			// Track it on every unprotected page it covers, so re-protecting
+			// any of them can find and discard it.
+			for (u32 a = this->addr & ~PAGE_MASK; a < this->addr + sh4_code_size; a += PAGE_SIZE)
+				if (unprotected_pages[(a & RAM_MASK) / PAGE_SIZE])
+					checked_blocks_per_page[(a & RAM_MASK) / PAGE_SIZE].insert(this);
 			return;
 		}
 	}
@@ -670,17 +839,79 @@ void RuntimeBlockInfo::SetProtectedFlags()
 			bm_LockPage(addr);
 		block_list.insert(this);
 	}
+	bm_MarkCodeChunks(this->addr & RAM_MASK, sh4_code_size);
+	if (!alias_chunk_blocks.empty())
+	{
+		const u32 start = this->addr & RAM_MASK;
+		std::vector<RuntimeBlockInfo*> writers;
+		for (u32 c = start / 32; c <= (start + sh4_code_size - 1) / 32; c++)
+		{
+			auto it = alias_chunk_blocks.find(c);
+			if (it != alias_chunk_blocks.end())
+				writers.insert(writers.end(), it->second.begin(), it->second.end());
+		}
+		std::sort(writers.begin(), writers.end());
+		writers.erase(std::unique(writers.begin(), writers.end()), writers.end());
+		for (RuntimeBlockInfo* w : writers)
+		{
+			if (w == this)
+				continue;
+			static int logged = getenv("FC_SMC_LOG") != nullptr ? 0 : 1 << 30;
+			if (logged++ < 40)
+				fprintf(stderr, "ALIAS writer %08x discarded: block %08x compiled over its target\n", w->vaddr, this->vaddr);
+			auto bit = blkmap.find((void*)w->code);
+			if (bit != blkmap.end() && bit->second.get() == w)
+				bm_DiscardBlock(w);
+			else
+				bm_ForgetAliasedStores(w);
+		}
+	}
 }
 
+int g_unprotectSource;	// set by the fault handler: 1 = JIT store, 0 = anything else
 void bm_RamWriteAccess(u32 addr)
 {
 	addr &= RAM_MASK;
+	{
+		// Who unprotects code pages, and does the write touch compiled code?
+		static int logged = getenv("FC_SMC_LOG") != nullptr ? 0 : 1 << 30;
+		if (logged < 60 && !unprotected_pages[addr / PAGE_SIZE] && !blocks_per_page[addr / PAGE_SIZE].empty())
+		{
+			logged++;
+			fprintf(stderr, "UNPROTECT page %08x write %08x pc~%08x from=%s hits_code=%d blocks=%zu\n",
+					addr & ~PAGE_MASK, addr, next_pc, g_unprotectSource ? "JIT" : "other",
+					(int)bm_WriteHitsCode(addr, 1), blocks_per_page[addr / PAGE_SIZE].size());
+		}
+	}
 	if (unprotected_pages[addr / PAGE_SIZE])
 	{
 		ERROR_LOG(DYNAREC, "Page %08x already unprotected", addr);
 		die("Fatal error");
 	}
 	unprotected_pages[addr / PAGE_SIZE] = true;
+	page_unprotected_at[addr / PAGE_SIZE] = bm_seconds;
+	if (page_reprotections[addr / PAGE_SIZE] != 0)
+	{
+		g_smcRefaults++;
+		if (page_reprotections[addr / PAGE_SIZE] >= SMC_MAX_REPROTECTIONS)
+			g_smcGaveUp++;
+		// Is the write inside compiled code (real self-modifying code) or
+		// just data sharing the 4KB page with it? Decides the fix.
+		static int logged = getenv("FC_SMC_LOG") != nullptr ? 0 : 1 << 30;
+		if (logged < 40)
+		{
+			logged++;
+			const RuntimeBlockInfo* hit = nullptr;
+			for (RuntimeBlockInfo* b : blocks_per_page[addr / PAGE_SIZE])
+				if ((b->addr & RAM_MASK) <= addr && addr < (b->addr & RAM_MASK) + b->sh4_code_size)
+					hit = b;
+			INFO_LOG(DYNAREC, "SMC refault: write to %08x (page %08x) pc~%08x -> %s%08x",
+					addr, addr & ~PAGE_MASK, next_pc,
+					hit ? "INSIDE block " : "outside code, blocks on page=", hit ? hit->vaddr : (u32)blocks_per_page[addr / PAGE_SIZE].size());
+			fprintf(stderr, "SMC refault: write to %08x pc~%08x -> %s %08x\n", addr, next_pc,
+					hit ? "INSIDE block" : "outside code, blocks_on_page", hit ? hit->vaddr : (u32)blocks_per_page[addr / PAGE_SIZE].size());
+		}
+	}
 	bm_UnlockPage(addr);
    std::set<RuntimeBlockInfo*>& block_list = blocks_per_page[addr / PAGE_SIZE];
    std::vector<RuntimeBlockInfo*> list_copy;
@@ -693,6 +924,290 @@ void bm_RamWriteAccess(u32 addr)
 	}
 	verify(block_list.empty());
 }
+
+// Does [ram_addr, ram_addr+size) overlap the guest code of a protected block?
+static bool bm_WriteHitsCode(u32 ram_addr, u32 size)
+{
+	for (u32 page = ram_addr / PAGE_SIZE; page <= (ram_addr + size - 1) / PAGE_SIZE; page++)
+		for (const RuntimeBlockInfo* b : blocks_per_page[page])
+		{
+			const u32 start = b->addr & RAM_MASK;
+			if (ram_addr < start + b->sh4_code_size && ram_addr + size > start)
+				return true;
+		}
+	return false;
+}
+
+// Reads the SSA optimizer folded into a constant at compile time (ssa.h: a
+// protected block reading a fixed address on its own pages). That was only
+// valid because any write to the page faulted and discarded the block. With
+// data writes going through the RAM mirror without faulting, such a write
+// must discard the blocks that folded the old value -- missing this is what
+// crashed KOF XI and MBAA at boot (the task kernel folds reads of variables
+// that live right next to its code). A chunk found to be written after being
+// folded becomes "volatile": never folded again, so it can't thrash.
+
+static void bm_ForgetFoldedReads(RuntimeBlockInfo* block)
+{
+	auto it = block_fold_chunks.find(block);
+	if (it == block_fold_chunks.end())
+		return;
+	for (u32 chunk : it->second)
+	{
+		auto cit = fold_chunk_blocks.find(chunk);
+		if (cit == fold_chunk_blocks.end())
+			continue;
+		auto& v = cit->second;
+		v.erase(std::remove(v.begin(), v.end(), block), v.end());
+		if (v.empty())
+			fold_chunk_blocks.erase(cit);
+	}
+	block_fold_chunks.erase(it);
+}
+
+static bool bm_CodePageStoresEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+	{
+		// ON by default: validated on 11 games (Shenmue, kofxi, MBAA, kofnw,
+		// mslug6, ggxxsla, gwing2, sfz3ugd, Ikaruga, capsnk, meltybld),
+		// including real self-modifying code in Ikaruga/capsnk.
+		// FC_CODEPAGE_STORES=0 turns it off.
+		const char *e = getenv("FC_CODEPAGE_STORES");
+		enabled = (e == nullptr || atoi(e) != 0) ? 1 : 0;
+	}
+	return enabled == 1;
+}
+
+static bool bm_ChunkBit(const u8 *bitmap, u32 chunk)
+{
+	return (bitmap[chunk / 8] >> (chunk % 8)) & 1;
+}
+
+// Discard live blocks from a list (or just drop the registration of blocks
+// already out of the block map).
+static void bm_DiscardListed(std::vector<RuntimeBlockInfo*> list, RuntimeBlockInfo* except,
+		void (*forget)(RuntimeBlockInfo*))
+{
+	std::sort(list.begin(), list.end());
+	list.erase(std::unique(list.begin(), list.end()), list.end());
+	for (RuntimeBlockInfo* b : list)
+	{
+		if (b == except)
+			continue;
+		auto bit = blkmap.find((void*)b->code);
+		if (bit != blkmap.end() && bit->second.get() == b)
+			bm_DiscardBlock(b);
+		else
+			forget(b);
+	}
+}
+
+// SSA, at compile time: may this block fold a read of addr into a constant?
+bool bm_CanFoldRead(RuntimeBlockInfo* block, u32 addr, u32 size)
+{
+	if (!bm_CodePageStoresEnabled() || !IsOnRam(addr))
+		return true;		// every write to the page faults: folding is safe as before
+	const u32 ram_addr = addr & RAM_MASK;
+	const u32 first = ram_addr / 32, last = (ram_addr + size - 1) / 32;
+	for (u32 c = first; c <= last; c++)
+		if (bm_ChunkBit(bm_fold_volatile, c))
+			return false;
+	// A chunk that constant stores already write (through the mirror) is known
+	// to change: don't fold it, ever. Discarding those writers instead would
+	// just make them fault on the locked view -- a form the store rewrite
+	// can't handle -- and unprotect the whole page (Shenmue: 23.6 -> 19.9 fps).
+	for (u32 c = first; c <= last; c++)
+		if (alias_chunk_blocks.count(c) != 0)
+		{
+			for (u32 v = first; v <= last; v++)
+				bm_fold_volatile[v / 8] |= (u8)(1 << (v % 8));
+			return false;
+		}
+	for (u32 c = first; c <= last; c++)
+	{
+		fold_chunk_blocks[c].push_back(block);
+		block_fold_chunks[block].push_back(c);
+		bm_code_chunks[c / 8] |= (u8)(1 << (c % 8));	// stub writes here go to C
+	}
+	g_foldedReads++;
+	return true;
+}
+
+// JIT, at compile time: may this constant-address store write through the RAM
+// mirror? Yes unless it writes into compiled code right now.
+u8 *bm_ConstStoreAlias(RuntimeBlockInfo* block, u32 addr, u32 size)
+{
+	static int enabled = -1;
+	if (enabled == -1)
+	{
+		const char *const_env = getenv("FC_CODEPAGE_CONST");
+		enabled = (bm_CodePageStoresEnabled() && (const_env == nullptr || atoi(const_env) != 0)) ? 1 : 0;
+	}
+	if (!enabled || !_nvmem_enabled() || mmu_enabled() || !IsOnRam(addr) || bm_RamAlias() == nullptr)
+		return nullptr;
+	const u32 ram_addr = addr & RAM_MASK;
+	if (bm_WriteHitsCode(ram_addr, size))
+		return nullptr;
+	// A chunk some block folded a read of: that fold is wrong now that the
+	// chunk is known to be written. Discard the folding blocks (they recompile
+	// without the fold, the chunk becomes volatile) -- unless it's the block
+	// being compiled, whose code already embeds the value: then stay on the
+	// locked view, the safe path.
+	bool folded = false;
+	for (u32 c = ram_addr / 32; c <= (ram_addr + size - 1) / 32; c++)
+	{
+		if (fold_chunk_blocks.count(c) == 0)
+			continue;
+		folded = true;
+		auto self = block_fold_chunks.find(block);
+		if (self != block_fold_chunks.end()
+				&& std::find(self->second.begin(), self->second.end(), c) != self->second.end())
+			return nullptr;
+	}
+	if (folded)
+		bm_InvalidateFoldedReads(ram_addr, size);
+	for (u32 c = ram_addr / 32; c <= (ram_addr + size - 1) / 32; c++)
+	{
+		alias_chunk_blocks[c].push_back(block);
+		block_alias_chunks[block].push_back(c);
+	}
+	g_aliasedConstStores++;
+	{
+		static int logged = getenv("FC_SMC_LOG") != nullptr ? 0 : 1 << 30;
+		if (logged++ < 40)
+			fprintf(stderr, "ALIAS store %08x size %u in block %08x (alias base %p, virt %p, RAM_SIZE %x)\n",
+					addr, size, block->vaddr, bm_RamAlias(), virt_ram_base, RAM_SIZE);
+	}
+	return bm_RamAlias() + ram_addr;
+}
+
+// A chunk may be shared by several blocks: recompute the page from the blocks
+// still registered on it.
+static void bm_RebuildPageChunks(u32 page)
+{
+	memset(&bm_code_chunks[page * (PAGE_SIZE / 32) / 8], 0, PAGE_SIZE / 32 / 8);
+	const u32 page_start = page * PAGE_SIZE;
+	for (const RuntimeBlockInfo* b : blocks_per_page[page])
+	{
+		u32 start = b->addr & RAM_MASK;
+		u32 end = start + b->sh4_code_size;
+		start = std::max(start, page_start);
+		end = std::min(end, page_start + PAGE_SIZE);
+		if (end > start)
+			bm_MarkCodeChunks(start, end - start);
+	}
+	if (!fold_chunk_blocks.empty())
+		for (u32 c = page_start / 32; c < (page_start + PAGE_SIZE) / 32; c++)
+			if (fold_chunk_blocks.count(c) != 0)
+				bm_code_chunks[c / 8] |= (u8)(1 << (c % 8));
+}
+
+static u8 *bm_RamAlias()
+{
+	// Area 3 maps the RAM with mirrors every RAM_SIZE bytes; bm_LockPage only
+	// locks the first one (and its P1/P2 views), never this one.
+	if (bm_ram_alias == nullptr && _nvmem_enabled())
+		bm_ram_alias = virt_ram_base + 0x0C000000 + RAM_SIZE;
+	return bm_ram_alias;
+}
+
+// Fault handler: is this a data write to a locked code page (as opposed to
+// self-modifying code)? Only then may the store site be rewritten.
+int g_codePageLastReason;
+bool bm_IsDataWriteToCodePage(void *p)
+{
+	static int enabled = -1;
+	if (enabled == -1)
+	{
+		const char *rw_env = getenv("FC_CODEPAGE_REWRITE");
+		enabled = (bm_CodePageStoresEnabled() && (rw_env == nullptr || atoi(rw_env) != 0)) ? 1 : 0;
+	}
+	g_codePageLastReason = 1;
+	if (!enabled || !_nvmem_enabled() || mmu_enabled() || bm_RamAlias() == nullptr)
+		return false;
+	const u8 *limit = virt_ram_base + (_nvmem_4gb_space() ? 0x100000000L : 0x20000000);
+	g_codePageLastReason = 2;
+	if ((u8 *)p < virt_ram_base || (u8 *)p >= limit)
+		return false;
+	u32 addr = (u32)((u8 *)p - virt_ram_base);
+	if (!IsOnRam(addr) || ((addr >> 29) > 0 && (addr >> 29) < 4))
+	{
+		static int logged = getenv("FC_SMC_LOG") != nullptr ? 0 : 1 << 30;
+		if (logged++ < 5)
+			fprintf(stderr, "CODEPAGE reason2: p=%p base=%p 4gb=%d guest=%08x onram=%d\n", p, virt_ram_base,
+					(int)_nvmem_4gb_space(), addr, (int)IsOnRam(addr));
+		return false;
+	}
+	addr &= RAM_MASK;
+	g_codePageLastReason = 3;
+	if (!bm_code_page_locked[addr / PAGE_SIZE])
+		return false;
+	g_codePageLastReason = 4;
+	if (unprotected_pages[addr / PAGE_SIZE])
+		return false;
+	// Largest store is 8 bytes: be conservative about what it touches.
+	g_codePageLastReason = 5;
+	return !bm_WriteHitsCode(addr, 8);
+}
+
+// A data write about to land in chunks some blocks folded reads of: discard
+// those blocks and never fold these chunks again.
+static void bm_InvalidateFoldedReads(u32 ram_addr, u32 size)
+{
+	std::vector<RuntimeBlockInfo*> folders;
+	for (u32 c = ram_addr / 32; c <= (ram_addr + size - 1) / 32; c++)
+	{
+		auto it = fold_chunk_blocks.find(c);
+		if (it == fold_chunk_blocks.end())
+			continue;
+		folders.insert(folders.end(), it->second.begin(), it->second.end());
+		bm_fold_volatile[c / 8] |= (u8)(1 << (c % 8));
+	}
+	if (folders.empty())
+		return;
+	g_foldInvalidations++;
+	bm_DiscardListed(folders, nullptr, bm_ForgetFoldedReads);
+	// Clear the watch bits the folds set, unless code still lives there.
+	for (u32 page = ram_addr / PAGE_SIZE; page <= (ram_addr + size - 1) / PAGE_SIZE; page++)
+		bm_RebuildPageChunks(page);
+}
+
+// Slow path of the rewritten store sites (the stub only gets here for locked
+// pages or addresses outside main RAM).
+template<typename T>
+static void DYNACALL bm_WriteMemCodePage(u32 addr, T data)
+{
+	if (IsOnRam(addr))
+	{
+		const u32 ram_addr = addr & RAM_MASK;
+		if (bm_code_page_locked[ram_addr / PAGE_SIZE] && !unprotected_pages[ram_addr / PAGE_SIZE])
+		{
+			if (!bm_WriteHitsCode(ram_addr, sizeof(T)))
+			{
+				g_codePageDataWrites++;
+				bm_InvalidateFoldedReads(ram_addr, sizeof(T));
+				memcpy(bm_RamAlias() + ram_addr, &data, sizeof(T));
+				return;
+			}
+			// Real self-modifying code: the usual path (unprotect + discard).
+			g_codePageSmcWrites++;
+			bm_RamWriteAccess(ram_addr);
+		}
+	}
+	switch (sizeof(T))
+	{
+	case 1: WriteMem8(addr, (u8)data); break;
+	case 2: WriteMem16(addr, (u16)data); break;
+	case 4: WriteMem32(addr, (u32)data); break;
+	default: WriteMem64(addr, (u64)data); break;
+	}
+}
+void DYNACALL bm_WriteMemCodePage8(u32 addr, u8 data) { bm_WriteMemCodePage<u8>(addr, data); }
+void DYNACALL bm_WriteMemCodePage16(u32 addr, u16 data) { bm_WriteMemCodePage<u16>(addr, data); }
+void DYNACALL bm_WriteMemCodePage32(u32 addr, u32 data) { bm_WriteMemCodePage<u32>(addr, data); }
+void DYNACALL bm_WriteMemCodePage64(u32 addr, u64 data) { bm_WriteMemCodePage<u64>(addr, data); }
 
 bool bm_RamWriteAccess(void *p)
 {
