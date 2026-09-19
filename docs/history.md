@@ -1843,3 +1843,110 @@ de CPU somado entre threads, não caminho crítico.
   usam filtro bilinear e por isso ficam fora do caminho de paleta na GPU; o
   master resolve isso no shader (`pp_Palette == 2`).
 - Nada implementado ainda — só medição e diagnóstico.
+
+## 2026-09-19 — 4.14 fechado (idle fast-forward + fila de render) e diagnóstico do Shenmue
+
+- **Idle fast-forward validado nos 4 jogos (savestate, baseline × novo):**
+  kofxi 49,7→59,2 fps e 82,9%→100% de velocidade; MBAA 50,0→59,9 fps e
+  83,3%→100%; kofnw 55,6→57,0 fps e 94,4%→98,8%; mslug6 inalterado. A
+  assinatura do kernel cooperativo casou sozinha no MBAA e no kofnw — é
+  biblioteca compartilhada, não recurso de placa. **kofxi e MBAA rodavam em
+  câmera lenta** (velocidade medida pelas amostras de áudio por segundo).
+- **Efeito colateral corrigido (item 4.16):** com a emulação mais rápida que a
+  apresentação, o `QueueRender` descartava em silêncio 25% dos frames. Portado
+  o `SH4FastEnough` do upstream (esperar o render em vez de descartar) + uma
+  condição própria (só esperar se `Process`+`Render` cabe no intervalo do
+  jogo), porque esperar sozinho derrubava o mslug6 para 92% de velocidade.
+  Duas tentativas refutadas no caminho, registradas no item.
+- **Achado lateral (item 4.17):** o `hash()` usado pelo `idle_hash` existente
+  lê bytes em vez de opcodes e só metade do bloco.
+- **Shenmue (item 4.18), savestate novo do usuário:** 17,2 fps, jogo a 57,7%.
+  A CPU emulada sobra; o gargalo é render. Instrumento novo `FC_GL_FINISH`
+  mostrou GPU = 35ms/frame (majoritariamente fill-rate: 14,7ms a 320x240),
+  envio GL ~20ms (586 draw calls), e que os dois correm **em série**: o
+  present do frontend espera a GPU terminar o frame inteiro. O core não
+  sincroniza em lugar nenhum — a espera está no retrorun3.
+- Observação de config: as linhas `flycast2021_*` da `retrorun.cfg` são
+  ignoradas por este core (ele lê `reicast_*`); hoje não muda nada porque os
+  defaults coincidem com os valores pretendidos.
+
+## 2026-09-19 — Apresentação em thread no retrorun (fork) para o Shenmue
+
+- Diagnóstico do item 4.18 levado até o frontend: `SDL_GL_SwapWindow` sozinho
+  levava 33,3ms/frame no Shenmue (o blob Mali só volta do swap quando a GPU
+  termina o frame), serializando CPU e GPU na mesma thread do `retro_run()`.
+- Fork `jhonatanTeixeira/retrorun` (a pedido do usuário), branch
+  `threaded-present`: apresentação em thread no backend SDL, com contexto
+  compartilhado e o contexto do core sem surface; FIFO com vsync, mailbox sem;
+  modo `auto`; métrica de cadência na tela; override `RETRORUN_VSYNC`.
+  Compilado **localmente** (cross aarch64 + sysroot tirado do device) — o
+  usuário não quer build no device; um build iniciado lá foi interrompido e
+  todos os artefatos removidos.
+- Resultado: Shenmue 17→21 fps, velocidade do jogo 57%→71%, cauda mais curta
+  de todas as rodadas com vsync + thread. kofxi: sem vsync a thread piorava o
+  pacing e o áudio (o swap síncrono era o que regulava o loop); com vsync +
+  FIFO o usuário viu melhora e os underruns caíram 12→3, embora a métrica de
+  intervalo entre swaps discorde (ela oscila sob vsync no KMSDRM).
+- Instalado no device para avaliação jogando (com backups): `retrorun3` do
+  fork; `dreamcast.sh`/`naomi.sh` com vsync + thread; cfg global intocada.
+- Achados laterais: o kofxi já estourava o orçamento de 16,7ms no modo
+  síncrono (core 8,9 + swap 8,5ms) — origem dos hicups que ele sempre teve;
+  e o próximo gargalo do Shenmue é a CPU emulada no laço de transformação de
+  vértices (JIT de FPU), não espera.
+
+## 2026-09-19 — Shenmue: a checagem anti-SMC é o próximo gargalo
+
+- `perf` na `emu_thread` (99,6% de uma core com a GPU fora do caminho): 80% é
+  código gerado pelo JIT. Ferramenta nova `FC_DUMP_BLOCK` para ver o ARM64
+  emitido: 22 de ~142 instruções do bloco mais quente são a comparação
+  anti-SMC inline.
+- `FC_NO_BLOCK_CHECK` (diagnóstico): +19% fps, velocidade 68%→81%. O item 1.1,
+  "descartado" em 2026-09-13, foi medido fora do caminho crítico.
+- Reproteção de páginas quietas (estilo PCSX2) implementada e mantida, mas sem
+  ganho aqui: as páginas são re-escritas logo em seguida. O log mostrou por
+  quê — todas as escritas são DADO na mesma página do código, nenhuma é
+  código automodificável.
+- Correção proposta (aguardando ok do usuário): reescrever via `ngen_Rewrite`
+  só os stores do JIT que escrevem em página de código, mantendo a página
+  protegida e os blocos sem checagem. Item 4.19.
+- Pergunta do usuário registrada: "cálculo de vértices não seria melhor na
+  GPU?" — no Dreamcast o T&L é código do jogo no SH4 (sem T&L em hardware), o
+  resultado é usado na hora pela CPU (clipping/descarte), e cada jogo tem sua
+  rotina; o análogo viável seria HLE por jogo em NEON, não GPU.
+
+## 2026-09-19 — Stores em página de código (item 4.19): implementação, um crash e a correção
+
+- Implementado: reescrita de stores do JIT para stubs com bitmap de código de
+  32 bytes, alias de store constante na compilação, registro de leituras
+  dobradas pelo SSA. Tudo escrevendo por um espelho da RAM que nunca é
+  travado (`0x0C000000 + RAM_SIZE`).
+- **Crash no caminho:** com o alias ligado, kofxi e MBAA abortavam no boot
+  (instrução ilegal na BIOS). Bisseção por interruptor isolou o alias de
+  store constante; o log mostrou stores nas variáveis do kernel de tarefas
+  (`0x8C03C90C`), e a causa foi o SSA embutindo leituras de páginas
+  protegidas — premissa que o alias quebra. O core do device ficou com a
+  mudança desligada por padrão enquanto isso (kofxi confirmado a 59 fps e
+  100% com ele). O usuário viu o kofxi a **60 fps constantes** nessa hora —
+  idle skip + fila de render + retrorun vsync/thread.
+- Correção: leituras dobradas registradas e invalidadas por escrita sem
+  fault; trecho escrito por store constante nunca é dobrado.
+- Validado com a mudança ligada: Shenmue 23,3 fps / 77,7% (0 blocos com
+  checagem), kofxi 59,7, MBAA 60,0 sem crash. Bateria ampla em andamento.
+- Romset do Giga Wing 2 confirmado: `gwing2`.
+
+## 2026-09-19 — Bateria ampla, política de fila no retrorun e o save do mslug6 que não se repete
+
+- Stores em página de código validados com a mudança ligada em 11 jogos, sem
+  crash (Ikaruga e capsnk exercitaram SMC real: 44 e 46 escritas em código
+  tratadas pelo caminho antigo). Ligado por padrão (`FC_CODEPAGE_STORES=0`
+  desliga).
+- retrorun (fork): com vsync, fila FIFO enquanto o jogo roda a 100% e
+  mailbox abaixo de 95% (volta acima de 99%) — vsync + FIFO arredondava jogos
+  de ~35ms/frame para 3 vblanks e prendia a emulação. kofxi fica em FIFO
+  (59,5 fps, 100%), Shenmue vai para mailbox (23,2 fps, 77,7%).
+- **Cuidado de método:** o savestate do mslug6 NÃO é reproduzível entre
+  rodadas — sem input, a luta evolui diferente a cada vez (mesmo binário:
+  17,5 a 25,5 fps, 65% a 100% de velocidade). Comparações do mslug6 entre
+  rodadas separadas no tempo não valem; só A/B lado a lado no mesmo binário.
+  O A/B (`FC_CODEPAGE_STORES=0 FC_SMC_REPROTECT=0` × padrão) deu 17,9 × 17,8
+  fps e 99,9% × 99,3%: as mudanças do core não afetam o mslug6.

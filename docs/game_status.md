@@ -15,14 +15,14 @@
 |---|---|---|---|
 | **SFZ3UGD** | 55 | boa | **jogável**, só demora muito pra carregar |
 | **ggxxsla** | 55 | boa | **jogável**, gameplay quase liso |
-| **MBAA** | 45-50 | **ruim** | quase lá — a cauda impede |
-| **kofnw** | 45-50 | **ruim** | quase lá — hicups |
-| **kofxi** | 43 | boa | **surpresa** — não era esperado rodar |
+| **MBAA** | **60** (bench 2026-09-19) | a reavaliar | era câmera lenta (83%); agora 100% de velocidade — reavaliar jogando |
+| **kofnw** | 45-50 → bench 57 | **ruim** | quase lá — hicups; velocidade 94%→99% em 2026-09-19 |
+| **kofxi** | **60 constante** (visto jogando, 2026-09-19) | boa | era câmera lenta (83%); idle skip + fila de render + retrorun vsync/thread |
 | **Skies of Arcadia** | drops pra 24 | pontual | falta um toque |
-| **Shenmue** | 18-30 | melhorou muito | neve agora bem consistente a 30 |
+| **Shenmue** | 18-30; cena pesada 17 → **23-25** | melhorou muito | retrorun thread (+24%) + stores em página de código (+16%, opt-in) |
 | **mslug6** | 30 (20 em boss) | consistente nos boss | resto do jogo full speed |
 | **Dead or Alive 2** | 25-30 | — | quase lá; só roda bem no fork `flycast_extreme` |
-| **Giga Wing 2** (`gwing2`?) | — | **não é cauda** | **jogável** (antes não era); percebe-se o frameskip |
+| **Giga Wing 2** (`gwing2`) | — | **não é cauda** | **jogável** (antes não era); percebe-se o frameskip |
 
 ## Detalhe
 
@@ -36,7 +36,16 @@ sobre cold-start: zip/inflate/crc + JIT frio, ~26% num profile inicial).
 55 fps com cauda longa boa. O frameskip do retrorun3 deixa o gameplay quase
 liso. Um dos melhores resultados.
 
-### MBAA — quase lá, travado pela cauda
+### MBAA — 60 fps no benchmark desde 2026-09-19 (reavaliar jogando)
+**Atualização:** o MBAA **rodava em câmera lenta** — 83% da velocidade real,
+medido pelas amostras de áudio por segundo, com 202 underruns de áudio em
+60s. O jogo usa o mesmo kernel de tarefas cooperativo do kofxi e ganhou o
+mesmo idle fast-forward (`tech_debits.md` 4.14/4.16): **59,9 fps, 100% de
+velocidade, 6 underruns**. A hipótese abaixo (hicups fora da simulação) estava
+certa sobre a CPU plana, mas o que se sentia provavelmente era a lentidão
+constante + estalos de áudio. Precisa de nova avaliação jogando.
+
+#### Avaliação anterior (2026-09-16)
 45-50 fps, mas **cauda longa ruim** com hicups. O retrorun quase salva; a cauda
 impede. Tem glitches de renderização **que não foram introduzidos por nós**
 (já existiam).
@@ -59,6 +68,9 @@ Não era esperado chegar perto de rodar; hoje faz **43 fps quase constantes**.
 Apresenta-se lento mas **sem muitos hicups**. Tem glitches de renderização em
 algumas partes que **já existiam antes** das nossas mudanças.
 
+**Resolvido em 2026-09-19:** 59,2 fps e 100% de velocidade (antes 83% —
+rodava em câmera lenta, o "apresenta-se lento"). Ver `tech_debits.md` 4.14.
+
 **Medido em 2026-09-18 (savestate, 30s):** 49,7 fps, frame p50/p95/p99 =
 19,9/22,0/25,8ms — cauda curta, bate com o "sem hicup". **Limitado por
 throughput da emulação da CPU, não por textura nem GPU:** 75% do trabalho do
@@ -73,6 +85,13 @@ mslug6 (upload de textura) ou outro. É um candidato barato para o próximo
 corte, porque o problema é localizado.
 
 ### Shenmue — melhorou muito
+**Medido em 2026-09-19 (savestate novo do usuário, cena de ~20fps):** 17,2
+fps, jogo a 57,7% de velocidade. **Não é CPU emulada** (ela sobra). É render:
+GPU ~35ms/frame (majoritariamente fill-rate) + envio GL ~20ms (586 draw
+calls), rodando **em série** porque o present do frontend espera a GPU
+terminar cada frame. Ver `tech_debits.md` 4.18. A pendência de savestate
+abaixo está resolvida para esta cena.
+
 18-30 fps. **A cena da neve melhorou muito com o caminho de paleta na GPU**,
 com bem menos drops e 30 fps bastante consistente — era a cena mais
 problemática do projeto inteiro.
@@ -94,8 +113,7 @@ paleta. O que sobra nas cenas de boss, pelo último mapa do frame:
 upload de textura ~21,5ms + submissão GL (`render`) ~17,3ms.
 
 ### Giga Wing 2 — jogável, mas dá pra perceber o frameskip
-Romset MAME: provavelmente **`gwing2`** — *confirmar no device*, o nome não
-foi verificado (SSH estava fora no momento do registro).
+Romset MAME: **`gwing2`** (confirmado no device em 2026-09-19; tem savestate).
 
 **Antes não era jogável; hoje é.** Mas não está liso, e o sintoma é de um
 tipo diferente do resto da lista: **não são hicups** (picos isolados de frame
