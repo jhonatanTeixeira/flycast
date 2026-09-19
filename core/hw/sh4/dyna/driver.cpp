@@ -233,6 +233,16 @@ DynarecCodeEntryPtr rdv_CompilePC(u32 blockcheck_failures)
 		bool do_opts = !rbi->temp_block;
 		rbi->staging_runs=do_opts?100:-100;
 		bool block_check = rbi->read_only ? false : IsOnRam(rbi->addr);
+		// FC_NO_BLOCK_CHECK (diagnosis only, UNSAFE: self-modifying code in an
+		// unprotected page goes undetected): measures what the inline
+		// anti-SMC compare costs. See docs/tech_debits.md 1.1 / 4.19.
+		{
+			static int noCheck = -1;
+			if (noCheck == -1)
+				noCheck = getenv("FC_NO_BLOCK_CHECK") != nullptr ? 1 : 0;
+			if (noCheck)
+				block_check = false;
+		}
 		ngen_Compile(rbi, block_check, (pc & 0xFFFFFF) == 0x08300 || (pc & 0xFFFFFF) == 0x10000, false, do_opts);
 		verify(rbi->code!=0);
 

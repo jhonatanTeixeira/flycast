@@ -1239,6 +1239,21 @@ struct glesrend : Renderer
 	bool Render() override
    {
       bool ret = RenderFrame();
+      // FC_GL_FINISH (opt-in, diagnosis only): wait for the GPU to finish this
+      // frame right here and time it. Without it the GPU's execution time only
+      // surfaces later, inside the frontend's present, mixed with its own blit
+      // and vsync -- this separates "GPU busy" from "CPU submitting GL".
+      static int glFinishTiming = -1;
+      if (glFinishTiming == -1)
+         glFinishTiming = getenv("FC_GL_FINISH") != nullptr ? 1 : 0;
+      if (glFinishTiming)
+      {
+         extern u64 g_glFinishUs;
+         auto t = std::chrono::steady_clock::now();
+         glFinish();
+         g_glFinishUs += (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - t).count();
+      }
 #if !defined(TARGET_NO_THREADS)
       if (!settings.rend.ThreadedRendering)
 #endif

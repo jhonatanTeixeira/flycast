@@ -1,5 +1,10 @@
 #include "gles.h"
 
+// FC_REND_SPLIT: draw calls issued per frame (every glDraw* below is counted).
+// Comma form so it also works as the body of an unbraced if.
+u32 g_glDrawCalls;
+#define FC_COUNT_DRAW g_glDrawCalls++,
+
 /*
 
 Drawing and related state management
@@ -309,7 +314,7 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 
 		if (runEnd - params == 1)
 		{
-			glDrawElements(GL_TRIANGLE_STRIP, params->count, gl.index_type,
+			FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, params->count, gl.index_type,
 						(GLvoid*)(gl.get_index_size() * params->first));
 		}
 		else
@@ -339,7 +344,7 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 			{
 				glBufferData(GL_ELEMENT_ARRAY_BUFFER, batchIdx.size() * sizeof(u32), batchIdx.data(), GL_STREAM_DRAW);
 			}
-			glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
+			FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
 			// Re-bind the main index buffer so unrelated draws (and the next
 			// DrawList call) keep using the un-batched geometry as before.
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs);
@@ -400,7 +405,7 @@ void DrawSorted(bool multipass)
 				if (pidx_sort[p].count>2) //this actually happens for some games. No idea why ..
 				{
 					SetGPState<ListType_Translucent, true>(params);
-					glDrawElements(GL_TRIANGLES, pidx_sort[p].count, gl.index_type,
+					FC_COUNT_DRAW glDrawElements(GL_TRIANGLES, pidx_sort[p].count, gl.index_type,
 						(GLvoid*)(gl.get_index_size() * pidx_sort[p].first));
 				}
 				params++;
@@ -430,7 +435,7 @@ void DrawSorted(bool multipass)
 
 						SetCull(params->isp.CullMode ^ gcflip);
 
-						glDrawElements(GL_TRIANGLES, pidx_sort[p].count, gl.index_type,
+						FC_COUNT_DRAW glDrawElements(GL_TRIANGLES, pidx_sort[p].count, gl.index_type,
 							(GLvoid*)(gl.get_index_size() * pidx_sort[p].first));
 					}
 				}
@@ -617,13 +622,13 @@ static void DrawModVols(int first, int count)
 			SetMVS_Mode(Or, param.isp);		// OR'ing (open volume or quad)
 		else
 			SetMVS_Mode(Xor, param.isp);	// XOR'ing (closed volume)
-		glDrawArrays(GL_TRIANGLES, param.first * 3, param.count * 3);
+		FC_COUNT_DRAW glDrawArrays(GL_TRIANGLES, param.first * 3, param.count * 3);
 
 		if (mv_mode == 1 || mv_mode == 2)
 		{
 			// Sum the area
 			SetMVS_Mode(mv_mode == 1 ? Inclusion : Exclusion, param.isp);
-			glDrawArrays(GL_TRIANGLES, mod_base * 3, (param.first + param.count - mod_base) * 3);
+			FC_COUNT_DRAW glDrawArrays(GL_TRIANGLES, mod_base * 3, (param.first + param.count - mod_base) * 3);
 			mod_base = -1;
 		}
 	}
@@ -647,7 +652,7 @@ static void DrawModVols(int first, int count)
 	glcache.Disable(GL_DEPTH_TEST);
 
 	SetupMainVBO();
-	glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+	FC_COUNT_DRAW glDrawArrays(GL_TRIANGLE_STRIP,0,4);
 
 	//restore states
 	glcache.Enable(GL_DEPTH_TEST);
@@ -762,7 +767,7 @@ static void DrawQuad(GLuint texId, float x, float y, float w, float h, float u0,
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STREAM_DRAW);
 
-	glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_SHORT, (void *)0);
+	FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_SHORT, (void *)0);
 }
 
 void DrawFramebuffer()
@@ -899,7 +904,7 @@ void DrawVmuTexture(u8 vmu_screen_number)
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STREAM_DRAW);
 	}
 
-	glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_SHORT, (void *)0);
+	FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_SHORT, (void *)0);
 }
 
 void UpdateLightGunTexture(int port)
@@ -993,7 +998,7 @@ void DrawGunCrosshair(u8 port)
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STREAM_DRAW);
 	}
 
-	glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_SHORT, (void *)0);
+	FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_SHORT, (void *)0);
 
 	glcache.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }

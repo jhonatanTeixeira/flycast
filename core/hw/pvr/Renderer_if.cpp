@@ -167,6 +167,7 @@ void rend_term_renderer()
 // rate. Accumulated here, dumped by rend_dump_split() from retro_run().
 bool g_rendSplitEnabled;
 u64 g_rendWaitUs, g_rendProcUs, g_rendRenderUs;
+u64 g_glFinishUs;	// FC_GL_FINISH, see gles.cpp
 u32 g_rendSplitFrames;
 
 static inline u64 rend_now_us()
@@ -185,6 +186,9 @@ void rend_dump_split(const char *path)
 	fprintf(f, "rsWait_ms_avg\t%.3f\n", g_rendWaitUs / 1000.0 / n);
 	fprintf(f, "process_ms_avg\t%.3f\n", g_rendProcUs / 1000.0 / n);
 	fprintf(f, "render_ms_avg\t%.3f\n", g_rendRenderUs / 1000.0 / n);
+	extern u32 g_glDrawCalls;
+	fprintf(f, "draw_calls_avg\t%.1f\n", (double)g_glDrawCalls / n);
+	fprintf(f, "gl_finish_ms_avg\t%.3f\n", g_glFinishUs / 1000.0 / n);
 	fclose(f);
 }
 
