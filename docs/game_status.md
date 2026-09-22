@@ -23,6 +23,7 @@
 | **mslug6** | 30 (20 em boss) | consistente nos boss | resto do jogo full speed |
 | **Dead or Alive 2** | 25-30 | — | quase lá; só roda bem no fork `flycast_extreme` |
 | **Giga Wing 2** (`gwing2`) | — | **não é cauda** | **jogável** (antes não era); percebe-se o frameskip |
+| **samsptk** | **~59** (medido 2026-09-22) | boa (p99/p50=1,29x) | **full speed**; era 20fps por conversão de paleta na CPU — corrigido (GPU bilinear), aguarda validação visual |
 
 ## Detalhe
 
@@ -185,3 +186,19 @@ Não entra na lista por prioridade porque não é uma frente técnica, é um
 mesmo hardware, ler o que ela faz diferente costuma custar menos que
 descobrir do zero. Vale disparar assim que der para confirmar se o core está
 no device e/ou se o código é público.
+
+### samsptk (Samurai Shodown 6 / Samurai Spirits 6) — full speed após fix
+**Medido 2026-09-22.** Baseline: `core_average` 47,5ms, ~20,5 fps, cauda
+**curta** (`core_p95` 53,5 / `core_p99` 59,2ms). **Não era JIT** — `perf`
+mostrava conversão de paleta 4bpp na CPU (`convPAL4_TW`, ~19%) como maior bloco
+isolado; 84% das conversões eram de paletizadas **bilineares**, fora do caminho
+de paleta na GPU. São **3 texturas de 512×512 reconvertidas quase todo frame**
+(+2 de 1024×1024), ~61% do frame.
+
+**Corrigido:** portado `palettePixelBilinear` (`pp_Palette == 2`) do master +
+`IsGpuHandledPaletted` aceitar `FilterMode <= 1` em GLES3. Resultado A/B no mesmo
+binário: **20,0 → 59,4 fps**, `core_average` 48,9 → 12,1ms, underruns de áudio
+195 → 2, `dq_filter_updates` 3.070 → 0. Neutro nos outros 8 jogos testados;
+bateria de 10 jogos sem crash. Escape hatch: `FC_NO_GPU_PAL_BILINEAR=1`.
+**Aguarda validação visual do usuário** (mudança de pipeline de textura tem
+histórico de glitch neste projeto).

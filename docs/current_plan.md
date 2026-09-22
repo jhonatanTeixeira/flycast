@@ -6,6 +6,23 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-09-22): samsptk — corrigido, aguardando validação visual
+
+**done (código), pendente (validação visual)** — Samurai Shodown 6 (Atomiswave):
+era 20fps por conversão de paleta 4bpp na CPU (`convPAL4_TW`, ~61% do frame).
+Corrigido portando `palettePixelBilinear` (`pp_Palette == 2`) + `IsGpuHandledPaletted`
+aceitar `FilterMode <= 1` em GLES3 (item 4.15 em `tech_debits.md`). A/B no mesmo
+binário: **20,0 → 59,4 fps**, `core_average` 48,9 → 12,1ms, underruns de áudio
+195 → 2. Neutro nos 8 jogos testados, 10 jogos sem crash. **Falta o usuário
+validar visualmente** (glitch de cor/render). Escape hatch: `FC_NO_GPU_PAL_BILINEAR=1`.
+Detalhe em `docs/history.md` 2026-09-22.
+
+## Agora (2026-09-19): Shenmue
+
+**pendente** — plano completo em `docs/shenmue_plan.md`: (1) acesso à memória
+no JIT, (2) flag T no fim do bloco, (3) fill-rate da GPU, (4) envio GL.
+Estado atual da cena pesada: 17 → 23,3 fps, velocidade 57% → 78%.
+
 ## Pré-requisito já concluído
 
 - [x] **done** — Build cross-compile (aarch64) do flycast2021 funcionando, sem

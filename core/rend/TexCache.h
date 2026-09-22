@@ -17,6 +17,9 @@ extern u32 pal_hash_256[4];
 extern u32 pal_hash_16[64];
 extern bool KillTex;
 extern bool palette_updated;
+// true quando o renderer GL ativo compila o shader de paleta bilinear
+// (pp_Palette == 2); define se IsGpuHandledPaletted aceita FilterMode == 1.
+extern bool g_paletteBilinearSupported;
 
 extern u32 detwiddle[2][11][1024];
 
@@ -655,6 +658,16 @@ typedef void TexConvFP8(PixelBuffer<u8>* pb, u8* p_in, u32 Width, u32 Height);
 typedef void TexConvFP32(PixelBuffer<u32>* pb,u8* p_in,u32 Width,u32 Height);
 enum class TextureType { _565, _5551, _4444, _8888, _8 };
 
+// FC_NO_GPU_PAL_BILINEAR (opt-in, diagnostico): forca o comportamento antigo
+// (paletizada bilinear volta a expandir na CPU), pra A/B limpo no MESMO binario.
+static inline bool GpuPaletteBilinearEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_NO_GPU_PAL_BILINEAR") != nullptr ? 0 : 1;
+	return enabled == 1;
+}
+
 class BaseTextureCacheData
 {
 public:
@@ -739,12 +752,18 @@ public:
 	static bool IsGpuHandledPaletted(TSP tsp, TCW tcw)
 	{
 		// Some palette textures are handled on the GPU
-		// This is currently limited to textures using nearest filtering and not mipmapped.
+		// This is currently limited to textures not mipmapped.
 		// Enabling texture upscaling or dumping also disables this mode.
+		// Nearest filtering is always supported; bilinear only when the shader
+		// can do the 4-tap palette lookup (GLSL 1.30+, i.e. GLES3/GL3 --
+		// g_paletteBilinearSupported, set by the GLES renderer's
+		// findGLVersion; stays false for the other renderers so they keep the
+		// original nearest-only behavior).
 		return (tcw.PixelFmt == PixelPal4 || tcw.PixelFmt == PixelPal8)
 				&& settings.rend.TextureUpscale == 1
 				&& !settings.rend.DumpTextures
-				&& tsp.FilterMode == 0
+				&& (tsp.FilterMode == 0
+					|| (tsp.FilterMode == 1 && g_paletteBilinearSupported && GpuPaletteBilinearEnabled()))
 				&& !tcw.MipMapped
 				&& !tcw.VQ_Comp;
 	}

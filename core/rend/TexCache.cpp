@@ -91,6 +91,29 @@ static inline u64 ta_split_now_us()
 }
 u64 g_texConvUs, g_texUploadUs;
 u32 g_texUpdates, g_texPaletted, g_texGpuHandled;
+// FC_TA_SPLIT, samsptk (2026-09-22): o perfil mostra a conversao de paleta
+// 4bpp->16bpp (convPAL4_TW) dominando (~19% das amostras), contra ~22% do
+// JIT. O caminho de paleta na GPU (IsGpuHandledPaletted) so aceita nearest;
+// o Samurai Shodown 6 usa filtro bilinear em quase tudo. Estes contadores
+// separam, dentre as texturas paletizadas, quantas e QUANTO TEMPO de conversao
+// estao no bucket desqualificado por filtro -- e o premio de portar
+// palettePixelBilinear do master (item 4.15).
+u64 g_texConvUsDqFilter, g_texUploadUsDqFilter;
+u32 g_texUpdatesDqFilter;
+u32 g_texSizeDqFilter, g_texSizeGpuHandled;
+// FC_TEX_DQ_LOG (opt-in, samsptk 2026-09-22): quais texturas bilineares
+// paletizadas estao sendo reconvertidas, e de que tamanho -- o formato do
+// fix (shader de paleta bilinear do master, item 4.15) depende de serem
+// poucas texturas grandes (ex.: plano de fundo) ou muitas pequenas (sprites).
+static bool TexDqLogEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_TEX_DQ_LOG") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+u32 g_texDqLogW[32], g_texDqLogH[32], g_texDqLogSrc[32], g_texDqLogCnt[32], g_texDqLogN;
+u32 g_texDqLogTotal;
 u32 g_texDq_notPal, g_texDq_filter, g_texDq_mipmap, g_texDq_vq, g_texDq_upscale, g_texDq_dump;
 u32 g_texUpscaleVal;
 u64 g_texBytes;
@@ -98,6 +121,10 @@ u64 g_texBytes;
 u8* vq_codebook;
 u32 palette_index;
 bool KillTex=false;
+// Definido pelo renderer GL ativo (findGLVersion) quando o shader de paleta
+// bilinear (pp_Palette == 2) e compilavel (GLSL >= 1.30). Default falso: os
+// outros renderers (Vulkan, gl4) mantem o comportamento nearest-only.
+bool g_paletteBilinearSupported = false;
 u32 palette16_ram[1024];
 u32 palette32_ram[1024];
 u32 pal_hash_256[4];
@@ -753,6 +780,10 @@ void BaseTextureCacheData::Update()
 	}
 
 	u64 _conv_t0 = 0;
+	// FC_TA_SPLIT: marca esta textura como "desqualificada por filtro" pra
+	// atribuir as usinas de conversao/upload a ela depois (o split de custo
+	// fica no fim da Update(), longe daqui).
+	bool _isDqFilter = false;
 	if (g_taSplitEnabled)
 	{
 		_conv_t0 = ta_split_now_us();
@@ -765,9 +796,35 @@ void BaseTextureCacheData::Update()
 		{
 			g_texPaletted++;
 			if (IsGpuHandledPaletted(tsp, tcw))
+			{
 				g_texGpuHandled++;
+				g_texSizeGpuHandled += size;
+			}
 			else if (tsp.FilterMode != 0)
+			{
 				g_texDq_filter++;	// filtro bilinear desqualifica
+				_isDqFilter = true;
+				g_texUpdatesDqFilter++;
+				g_texSizeDqFilter += size;
+				// FC_TEX_DQ_LOG: agrupa por (w,h,sa_tex) pra ver se e uma
+				// textura grande ou muitas pequenas.
+				if (TexDqLogEnabled())
+				{
+					u32 i;
+					for (i = 0; i < g_texDqLogN; i++)
+						if (g_texDqLogW[i] == w && g_texDqLogH[i] == h && g_texDqLogSrc[i] == sa_tex)
+							break;
+					if (i == g_texDqLogN && g_texDqLogN < 32)
+					{
+						g_texDqLogW[i] = w; g_texDqLogH[i] = h;
+						g_texDqLogSrc[i] = sa_tex; g_texDqLogCnt[i] = 0;
+						g_texDqLogN++;
+					}
+					if (i < 32)
+						g_texDqLogCnt[i]++;
+					g_texDqLogTotal++;
+				}
+			}
 			else if (tcw.MipMapped)
 				g_texDq_mipmap++;
 			else if (tcw.VQ_Comp)
@@ -939,12 +996,21 @@ void BaseTextureCacheData::Update()
 	//lock the texture to detect changes in it
    libCore_vramlock_Lock(sa_tex, sa + size - 1, this);
 
+	u64 _conv_us = g_taSplitEnabled ? ta_split_now_us() - _conv_t0 : 0;
 	if (g_taSplitEnabled)
-		g_texConvUs += ta_split_now_us() - _conv_t0;
+		g_texConvUs += _conv_us;
 	u64 _up_t0 = g_taSplitEnabled ? ta_split_now_us() : 0;
 	UploadToGPU(upscaled_w, upscaled_h, (u8*)temp_tex_buffer, IsMipmapped(), mipmapped);
 	if (g_taSplitEnabled)
-		g_texUploadUs += ta_split_now_us() - _up_t0;
+	{
+		u64 up_us = ta_split_now_us() - _up_t0;
+		g_texUploadUs += up_us;
+		if (_isDqFilter)
+		{
+			g_texConvUsDqFilter += _conv_us;
+			g_texUploadUsDqFilter += up_us;
+		}
+	}
 	if (settings.rend.DumpTextures)
 	{
 		ComputeHash();

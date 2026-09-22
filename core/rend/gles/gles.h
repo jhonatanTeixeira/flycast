@@ -81,7 +81,7 @@ struct PipelineShader
 	bool pp_BumpMap;
 	bool fog_clamping;
 	bool trilinear;
-	bool palette;
+	int palette;	// 0 = sem paleta na GPU, 1 = nearest, 2 = bilinear
 };
 
 
@@ -163,7 +163,7 @@ void DrawFramebuffer();
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
-		bool palette);
+		int palette);
 void vertex_buffer_unmap(void);
 
 void findGLVersion();

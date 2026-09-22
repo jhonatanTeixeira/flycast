@@ -1450,6 +1450,19 @@ void retro_run (void)
                fprintf(tf, "glcall_us_total\t%llu\n", (unsigned long long)g_texCallUs);
                extern u32 g_texReupSameFrame;
                fprintf(tf, "reupload_same_frame\t%u\n", g_texReupSameFrame);
+               // samsptk (2026-09-22): split do custo paletizado no bucket
+               // "bilinear, desqualificado do caminho GPU" (item 4.15).
+               extern u64 g_texConvUsDqFilter, g_texUploadUsDqFilter;
+               extern u32 g_texUpdatesDqFilter, g_texSizeDqFilter, g_texSizeGpuHandled;
+               fprintf(tf, "dq_filter_updates\t%u\n", g_texUpdatesDqFilter);
+               fprintf(tf, "dq_filter_src_bytes\t%u\n", g_texSizeDqFilter);
+               fprintf(tf, "gpu_handled_src_bytes\t%u\n", g_texSizeGpuHandled);
+               fprintf(tf, "dq_filter_conv_us\t%llu\n", (unsigned long long)g_texConvUsDqFilter);
+               fprintf(tf, "dq_filter_upload_us\t%llu\n", (unsigned long long)g_texUploadUsDqFilter);
+               extern u32 g_texDqLogW[32], g_texDqLogH[32], g_texDqLogSrc[32], g_texDqLogCnt[32], g_texDqLogN, g_texDqLogTotal;
+               fprintf(tf, "dq_log_total\t%u distinct\t%u\n", g_texDqLogTotal, g_texDqLogN);
+               for (u32 _i = 0; _i < g_texDqLogN && _i < 32; _i++)
+                  fprintf(tf, "dq_log_%u\tw%u h%u sa%08X cnt%u\n", _i, g_texDqLogW[_i], g_texDqLogH[_i], g_texDqLogSrc[_i], g_texDqLogCnt[_i]);
                fclose(tf);
             }
          }

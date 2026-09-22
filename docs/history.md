@@ -1950,3 +1950,134 @@ de CPU somado entre threads, não caminho crítico.
   rodadas separadas no tempo não valem; só A/B lado a lado no mesmo binário.
   O A/B (`FC_CODEPAGE_STORES=0 FC_SMC_REPROTECT=0` × padrão) deu 17,9 × 17,8
   fps e 99,9% × 99,3%: as mudanças do core não afetam o mslug6.
+
+## 2026-09-22 — samsptk (Samurai Shodown 6, Atomiswave): 20fps NÃO é JIT, é conversão de paleta 4bpp na CPU
+
+- Usuário passou os games da Sammy para `/roms2/atomiswave/` e reportou o
+  `samsptk` (Samurai Shodown 6 / Samurai Spirits Tenkaichi Kenkyakuden) a
+  **~20 fps**, fighting game 2D, savestate presente
+  (`/roms2/atomiswave/samsptk.fc2021-rrstate.auto`, md5 `bdabd904...`).
+- **Baseline medido** (`retrorun3 --benchmark 30 --benchmark-warmup 5`,
+  savestate, vsync+threaded present, cfg `retrorun_samsptk.cfg` com
+  `retrorun_auto_load = true`): **`core_average` 47,5 ms, ~20,5 fps**
+  (`core_p50` 46,0, `core_p95` 53,5, `core_p99` 59,2ms — cauda CURTA,
+  p99/p50 = 1,29x), ~617 frames/30s. O savestate carrega (confirmado no log
+  DEBUG: `File '...samsptk.fc2021-rrstate.auto': loaded correctly!`).
+- **Mapa do frame (`FC_REND_SPLIT` + `FC_TA_SPLIT`):** `rsWait` 5,6-6,3ms ·
+  **`process` 38,5ms** · `render` 5,3ms. Dentro do `process`: `decode` 38,2ms,
+  `make_index` 0,31ms, `bleeding` 0. E dentro do decode: **`GetTexture` =
+  37,1ms de 38,2ms (97%)** com 1.033 chamadas/frame (36µs cada). Ou seja, o
+  frame inteiro é dominado por **cache de textura**, exatamente o padrão do
+  mslug6 (item 4.12) — não é parsing de display list (179KB/frame, 222 polys
+  op + 827 translúcidos) nem sort (draw calls 59,7/frame, baixo).
+- **`perf` (`-g dwarf -F 500`, retrorun3 ao vivo, 2 capturas independentes,
+  reprodutível):**
+  - `SH4_TCB` (código gerado pelo JIT) **~21-23%**
+  - `texture_TW<convPAL4_TW<u16>,u16>` (**conversão de paleta 4bpp→16bpp,
+    twiddled**) **~18,5-19%** — self-time, sem filhos
+  - `texture_TW<convPAL4PT_TW<u8>,u8>` (4bpp→8bpp planar, p/ caminho GPU)
+    **~3,2%**
+  - `libmali` ~15% + ~7% disperso (driver GL)
+  - **`BaseTextureCacheData::Update` → `gl_GetTexture` → `AppendPolyParam0` →
+    `ta_parse_vdrc` → `rend_frame`** — a árvore de chamadas confirma que a
+    conversão roda dentro do `Process`, na main thread, serializada.
+  - AICA ~1,3%.
+  - **Contraste com o esperado:** em nenhum momento o JIT domina; o maior
+    bloco de CPU é expandir paleta. Isso **não** é o caso Shenmue (JIT/FPU) nem
+    o caso kofxi (kernel de tarefas); é o caso mslug6 (textura).
+- **Fallbacks do JIT estão limpos neste jogo (`FC_IFB_COUNT`, 30s):**
+  `div1` 89.747 (~150/frame) e `tas.b` 2.366 — **nada** de FPSCR, `stc.l SR`,
+  etc. `FC_FPSCR_STATS`: 144.482 escritas, PR/SZ mudou em 47.792 (mas o guard
+  de no-op já cobre). `FC_BLOCK_PROF`: blocos quentes são laços de cópia de
+  memória (SH4 8C0781CC: 7,04M execuções) e transformação/cópia de vértices —
+  trabalho real do jogo, sem desperdício óbvio. **O JIT não é a alavanca
+  deste jogo.**
+- **Causa raiz quantificada — o bucket `dq_filter` do item 4.15.** Contadores
+  novos (`FC_TA_SPLIT`, `dq_filter_*`): das ~3.670 atualizações de textura por
+  30s, **3.070 são paletizadas com filtro bilinear** (`dq_filter`), i.e.
+  **84% de todas as conversões** — desqualificadas do caminho de paleta na GPU
+  (`IsGpuHandledPaletted` exige `tsp.FilterMode == 0`). Custo atribuído a esse
+  bucket: **`dq_filter_conv_us` ≈ 8,4s de 10,0s totais de conversão (84%)** e
+  **`dq_filter_upload_us` ≈ 9,9s de 11,5s de upload (86%)**. Somando
+  convert+upload do bucket desqualificado ≈ **18,3s de um run de 30s = 61% do
+  tempo total** (≈ 29,7ms por frame de ~47,5ms) — fecha com os 18,5% de `perf`
+  só de conversão (o `perf` self-time exclui o driver Mali e o resto do
+  pipeline).
+- **`FC_TEX_DQ_LOG` (novo) — são POUCAS texturas GRANDES:** 2.382 updates
+  em **5 texturas distintas**: **`w512 h512` × 3** (cnt 793/793/792, quase todo
+  frame) e **`w1024 h1024` × 2** (cnt 2, pontuais). Ou seja, quase todo o custo
+  é reconverter **três planos de 512×512 4bpp** a cada frame (~1,3MB de VRAM
+  fonte/frame ≈ 40MB/s). Não é "muitos sprites pequenos" (que pedia atlas) —
+  é pouca textura grande, o que casa com o shader de paleta bilinear do master
+  (`palettePixelBilinear`, `pp_Palette == 2`, item 4.15) muito melhor do que um
+  atlas.
+- **Hipóteses baratas testadas e refutadas:**
+  - `FC_TEX_SKIP_UNCHANGED` (hash do conteúdo da VRAM antes de reconverter):
+    **`tex_skipped_uploads` = 0** em 3 rodadas — as texturas **mudam de verdade
+    todo frame** (animação de fundo/paleta). Não é invalidação espúria; a
+    invalidação está CERTA.
+  - `FC_TEX_SUBIMAGE` (glTexSubImage2D em vez de glTexImage2D): sem mudança
+    (`core_average` 48,4 vs 48,5).
+  - `FC_TEX_PRECISE_INVL` não testado aqui — já marcado "não usar" (quebra
+    imagem) no item 4.13.
+- **Caminho do fix (não implementado ainda):** portar o `palettePixelBilinear`
+  do `flyinghead/flycast` master (`core/rend/gles/gles.cpp`, `pp_Palette == 2`:
+  4 buscas de índice + 4 buscas na paleta + interpolação manual) e afrouxar
+  `IsGpuHandledPaletted` de `FilterMode == 0` para `FilterMode <= 1`. Com isso
+  as 3 texturas de 512×512 vão como índice 8bpp (o `convPAL4PT_TW` que o
+  `perf` mostra a 3,2%, já sem expansão de paleta) e a paleta é lida no shader
+  — elimina ~8,4s de conversão + converte o upload em 1/4 do tamanho. Custo:
+  mais trabalho de fragment shader na Mali-G31 (4 buscas duplas por pixel
+  dessas texturas), a medir visualmente (risco de regressão de cor/glitch,
+  como em toda mudança de pipeline de textura — ver item 4.2/5.2). **Não
+  implementar sem validação visual.**
+- **Infra usada:** `bench_env.sh` (novo, no device: `bench_env.sh TAG "ENVS"
+  dur warmup` roda o benchmark com env vars), `retrorun_samsptk.cfg` (cópia do
+  `retrorun_debug.cfg` + `retrorun_auto_load = true`). Descoberta repetida:
+  `--benchmark` não carrega savestate sem `retrorun_auto_load = true` no cfg.
+  Instrumentação nova no core: `dq_filter_updates`/`dq_filter_src_bytes`/
+  `gpu_handled_src_bytes`/`dq_filter_conv_us`/`dq_filter_upload_us`/
+  `dq_log_*`, todas opt-in sob `FC_TA_SPLIT` (e `FC_TEX_DQ_LOG`), custo zero
+  sem a env var. Binário com ela deployado no device (backup do anterior em
+  `flycast_libretro.so.pre-samsptk.bak`).
+
+## 2026-09-22 (continuação) — Implementado o shader de paleta bilinear (item 4.15): samsptk 20 → 59 fps
+
+- **Fix implementado** (a pedido do usuário, depois do diagnóstico da sessão):
+  1. **Shader** (`core/rend/gles/gles.cpp`): `pp_Palette` deixou de ser booleano
+     e virou 0/1/2 (sem paleta / nearest / bilinear). Portado o
+     `palettePixelBilinear` do master adaptado à paleta 1024×1 deste fork
+     (4 amostras NEAREST dos texels vizinhos via `textureSize()` + busca na
+     paleta + `mix`). Renomeado o helper `palettePixel` para `getPaletteEntry`.
+  2. **`IsGpuHandledPaletted`** (`core/rend/TexCache.h`): passou a aceitar
+     `FilterMode <= 1` quando `g_paletteBilinearSupported` (flag nova, setada
+     pelo `findGLVersion` do backend GLES quando GLSL >= 1.30 / GLES3/GL3).
+     Renderers sem suporte (Vulkan, gl4) e GLSL antigo ficam nearest-only.
+  3. **`gldraw.cpp`**: `palette` passou de bool a int (`FilterMode + 1`);
+     `GetProgram` usa 2 bits pra ele; o filtro GL da textura continua NEAREST
+     quando a paleta é na GPU (a interpolação é feita no shader).
+  4. Escape hatch `FC_NO_GPU_PAL_BILINEAR=1` força o comportamento antigo.
+- **Medição (samsptk, savestate, mesmo binário, A/B ligado × desligado,
+  2 rodadas):** `core_average` **48,9 → 12,1 ms**, fps **20,0 → 59,4**
+  (100% de velocidade do jogo), `core_p95` 53,7 → 12,7ms; underruns de áudio
+  195 → 2. Mesma cena (222 polys op + 827 tr). `dq_filter_updates` caiu de
+  ~3.070 pra **0** (todas as paletizadas bilineares agora usam a GPU).
+- **Mecanismo confirmado por `perf`:** o hotspot de conversão
+  `convPAL4_TW` (~19%) desapareceu; sobrou `convPAL4PT_TW` (só untwiddle, sem
+  expandir paleta) a ~8%, e o `SH4_TCB` (JIT) voltou a ser o topo (~25%). Com
+  o fix, `render` mede ~23ms dos quais **GPU ~17ms** (`FC_GL_FINISH`) — o jogo
+  saiu de CPU-bound (conversão) para ~60fps cheio, agora levemente GPU-bound.
+- **Bateria de regressão (mesmo binário, A/B por jogo):** neutro em kofnw
+  (+3%), kofxi, ggx15, mbaa, meltybld, ggxxsla, sfz3ugd, gwing2 (todos ~1,00x).
+  mslug6 apareceu 0,92x numa passada mas é o savestate documentado como
+  **não reproduzível**; A/B lado a lado no mesmo binário deu 19,4 × 19,5 × 19,4
+  × 15,0 fps (off1/on1/off2/on2) — ruído, sem regressão.
+- **Bateria de crash (fix ON, 10 jogos que não estavam no A/B):** capsnk,
+  cspike, cvs2, ggxxac, ikaruga, kov7sprt, ngbc, rumblef2, slashout, spawn —
+  todos `exit 0`, sem crash de shader.
+- **PENDENTE — validação visual (usuário):** mudança de pipeline de textura
+  tem histórico de regressão visual neste projeto (itens 4.2/5.2). O ganho
+  medido é grande demais pra não ser checado: pedir ao usuário pra jogar o
+  samsptk e confirmar que as cores/fundo/sprites estão corretos, e olhar 1-2
+  jogos 2D já conhecidos (kofnw, mslug6) por garantia. Se houver corrupção,
+  `FC_NO_GPU_PAL_BILINEAR=1` desliga sem rebuild.

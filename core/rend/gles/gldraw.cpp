@@ -123,7 +123,10 @@ __forceinline
 
 	int clip_rect[4] = {};
 	TileClipping clipmode = GetTileClip(gp->tileclip, ViewportMatrix, clip_rect);
-	bool palette = BaseTextureCacheData::IsGpuHandledPaletted(gp->tsp, gp->tcw);
+	// 0 = paleta na CPU, 1 = paleta na GPU nearest, 2 = paleta na GPU bilinear
+	int palette = 0;
+	if (BaseTextureCacheData::IsGpuHandledPaletted(gp->tsp, gp->tcw))
+		palette = gp->tsp.FilterMode + 1;
 
 	CurrentShader = GetProgram(Type == ListType_Punch_Through ? true : false,
 								  clipmode == TileClipping::Inside,

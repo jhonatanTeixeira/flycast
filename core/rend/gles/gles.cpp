@@ -233,12 +233,53 @@ highp vec4 fog_clamp(highp vec4 col)
 #endif
 }
 
-#if pp_Palette == 1
+#if pp_Palette != 0
+
+// A paleta deste fork e uma textura 1024x1 RGBA. O canal de uma textura de
+// indice carrega o indice normalizado (indice/255); a busca abaixo reproduz a
+// semantica do caminho nearest original (indice*255 + base da paleta).
+lowp vec4 getPaletteEntry(highp float colorIndex)
+{
+	highp vec2 c = vec2((colorIndex * 255.0 + float(palette_index)) / 1023.0, 0.5);
+	return texture(palette, c);
+}
+
+#endif
+
+#if pp_Palette == 1		// Nearest filtering
 
 lowp vec4 palettePixel(highp vec2 coords)
 {
-	highp vec2 c = vec2((texture(tex, coords).FOG_CHANNEL * 255.0 + float(palette_index)) / 1023.0, 0.5);
-	return texture(palette, c);
+	return getPaletteEntry(texture(tex, coords).FOG_CHANNEL);
+}
+
+#elif pp_Palette == 2		// Bi-linear filtering
+
+// Indices nao sao interpolaveis, entao o bilinear nao pode ser feito pelo
+// sampler: amostra-se os 4 indices vizinhos com filtro NEAREST (o SetGPState
+// forca nearest sempre que a paleta e tratada na GPU) e interpola-se o
+// resultado das buscas na paleta. Mesma tecnica do flyinghead/flycast master
+// (pp_Palette == 2, palettePixelBilinear), adaptada a paleta 1024x1 daqui.
+lowp vec4 palettePixelBilinear(highp vec2 coords)
+{
+#if TARGET_GL != GLES2 && TARGET_GL != GL2
+	highp vec2 texSize = vec2(textureSize(tex, 0));
+	highp vec2 pixCoord = coords * texSize - 0.5;
+	highp vec2 originPixCoord = floor(pixCoord);
+	highp vec2 sampleUV = (originPixCoord + 0.5) / texSize;
+	lowp vec4 c00 = getPaletteEntry(texture(tex, sampleUV).FOG_CHANNEL);
+	lowp vec4 c01 = getPaletteEntry(texture(tex, sampleUV + vec2(0.0, 1.0) / texSize).FOG_CHANNEL);
+	lowp vec4 c11 = getPaletteEntry(texture(tex, sampleUV + vec2(1.0, 1.0) / texSize).FOG_CHANNEL);
+	lowp vec4 c10 = getPaletteEntry(texture(tex, sampleUV + vec2(1.0, 0.0) / texSize).FOG_CHANNEL);
+	highp vec2 weight = pixCoord - originPixCoord;
+	lowp vec4 temp0 = mix(c00, c10, weight.x);
+	lowp vec4 temp1 = mix(c01, c11, weight.x);
+	return mix(temp0, temp1, weight.y);
+#else
+	// GLES2/GL2 nao tem textureSize(); este caminho nao e alcancado porque o
+	// flag g_paletteBilinearSupported so fica true em GLSL >= 1.30.
+	return getPaletteEntry(texture(tex, coords).FOG_CHANNEL);
+#endif
 }
 
 #endif
@@ -263,8 +304,10 @@ void main()
 	{
 		#if pp_Palette == 0
 			lowp vec4 texcol = texture(tex, vtx_uv);
-		#else
+		#elif pp_Palette == 1
 			lowp vec4 texcol = palettePixel(vtx_uv);
+		#else
+			lowp vec4 texcol = palettePixelBilinear(vtx_uv);
 		#endif
 		
 		#if pp_BumpMap == 1
@@ -383,7 +426,7 @@ glm::mat4 ViewportMatrix;
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
-		bool palette)
+		int palette)
 {
 	u32 rv=0;
 
@@ -399,7 +442,7 @@ PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 	rv<<=1; rv|=pp_BumpMap;
 	rv<<=1; rv|=fog_clamping;
 	rv<<=1; rv|=trilinear;
-	rv<<=1; rv|=palette;
+	rv<<=2; rv|=palette;
 
 	PipelineShader *shader = &gl.shaders[rv];
 	if (shader->program == 0)
@@ -462,6 +505,9 @@ void findGLVersion()
 			gl.gl_version = "GLES3";
 			gl.glsl_version_header = "#version 300 es";
 			glInvalidateFramebuffer_ = (PFN_glInvalidateFramebuffer)eglGetProcAddress("glInvalidateFramebuffer");
+			// GLSL ES 3.00 tem textureSize(); o shader de paleta bilinear
+			// (pp_Palette == 2) so compila daqui pra frente.
+			g_paletteBilinearSupported = true;
 		}
 		else
 		{
@@ -497,6 +543,7 @@ void findGLVersion()
 			gl.glsl_version_header = "#version 130";
 			gl.single_channel_format = GL_RED;
 			gl.single_channel_internal_format = GL_R8;
+			g_paletteBilinearSupported = true;
 		}
 		else
 		{
