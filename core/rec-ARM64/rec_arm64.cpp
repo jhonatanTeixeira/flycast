@@ -1980,10 +1980,12 @@ public:
 	// que o sq_write_stub faz --, sem o bl/ret do stub: no kofnw (SQ enchida
 	// palavra a palavra, item 1.7) os desvios extras custavam ~3% de fps.
 	// Endereco fora da SQ (nao esperado no mesmo site) cai no WriteMem32.
-	void GenCompactTrampolineSQ(u32 rt, u32 rm, void *return_rx, u16 live_fregs)
+	void GenCompactTrampolineSQ(u32 rt, u32 rm, void *return_rx, u16 live_fregs, u32 size = 4)
 	{
 		const Register& addr = Register::GetWRegFromCode(rm);
-		const Register& data = Register::GetWRegFromCode(rt);
+		// 32 bits (mov.l) ou 64 bits (fmov.d com SZ=1, o jeito rapido de
+		// encher a SQ -- DOA2 faz assim).
+		const Register& data = size == 8 ? Register::GetXRegFromCode(rt) : Register::GetWRegFromCode(rt);
 		Label not_sq;
 		Lsr(w9, addr, 26);
 		Cmp(w9, 0x38);
@@ -1993,7 +1995,53 @@ public:
 		Str(data, MemOperand(x10, x9));
 		GenBranchAbs(return_rx, false);
 		Bind(&not_sq);
-		GenCompactTrampoline(false, 4, rt, rm, (void *)WriteMem32, return_rx, false, live_fregs);
+		GenCompactTrampoline(false, size, rt, rm, size == 8 ? (void *)WriteMem64 : (void *)WriteMem32, return_rx, false, live_fregs);
+	}
+
+	// Trampolim de site na RAM interna do SH4 (cache usado como RAM, OCRAM,
+	// 0x7C000000-0x7FFFFFFF). Jogos 3D a usam como rascunho na transformacao
+	// de vertices (DOA2: ~250 sites) e cada acesso atravessava ReadMem/WriteMem
+	// + despacho de handler ate ReadMem_area7_OCR (sh4_mmr.cpp). Aqui: confere
+	// a regiao e CCR.ORA e acessa OnChipRAM[addr & 0x1FFF] direto; senao, o
+	// caminho generico (mesma semantica do handler).
+	void GenCompactTrampolineOCR(bool is_read, u32 size, u32 rt, u32 rm, bool is_unsigned, void *slow_target, void *return_rx, u16 live_fregs)
+	{
+		extern Array<u8> OnChipRAM;
+		const Register& addr = Register::GetWRegFromCode(rm);
+		Label slow;
+		Lsr(w9, addr, 26);
+		Cmp(w9, 0x1F);
+		B(&slow, ne);
+		Mov(x10, reinterpret_cast<uintptr_t>(&CCN_CCR.reg_data));
+		Ldr(w10, MemOperand(x10));
+		Tbz(w10, 5, &slow);		// CCR.ORA
+		Mov(x10, reinterpret_cast<uintptr_t>(&OnChipRAM.data));
+		Ldr(x10, MemOperand(x10));
+		And(w9, addr, OnChipRAM_MASK);
+		MemOperand mo(x10, x9);
+		if (is_read)
+		{
+			const Register& d = size == 8 ? Register::GetXRegFromCode(rt) : Register::GetWRegFromCode(rt);
+			switch (size)
+			{
+			case 1: if (is_unsigned) Ldrb(d, mo); else Ldrsb(d, mo); break;
+			case 2: if (is_unsigned) Ldrh(d, mo); else Ldrsh(d, mo); break;
+			default: Ldr(d, mo); break;
+			}
+		}
+		else
+		{
+			const Register& d = size == 8 ? Register::GetXRegFromCode(rt) : Register::GetWRegFromCode(rt);
+			switch (size)
+			{
+			case 1: Strb(d, mo); break;
+			case 2: Strh(d, mo); break;
+			default: Str(d, mo); break;
+			}
+		}
+		GenBranchAbs(return_rx, false);
+		Bind(&slow);
+		GenCompactTrampoline(is_read, size, rt, rm, slow_target, return_rx, is_unsigned, live_fregs);
 	}
 
 	void GenBranchAbs(void *target, bool link)
@@ -2908,7 +2956,7 @@ static bool DecodeCompactMem(u32 op, bool& is_read, u32& size, u32& rt, u32& rm,
 
 // Gera o trampolim do slow path e troca a instrucao do acesso por um `b` para
 // ele. host_pc nao muda: ao voltar do handler, a CPU executa o `b`.
-static bool RewriteCompactMem(unat host_pc, bool is_read, u32 size, u32 rt, u32 rm, void *target, bool is_unsigned = false, bool is_stub = false, bool is_sq = false)
+static bool RewriteCompactMem(unat host_pc, bool is_read, u32 size, u32 rt, u32 rm, void *target, bool is_unsigned = false, bool is_stub = false, bool is_sq = false, bool is_ocr = false)
 {
 	u16 live = 0;
 	if (!is_stub || is_sq)
@@ -2924,8 +2972,10 @@ static bool RewriteCompactMem(unat host_pc, bool is_read, u32 size, u32 rt, u32 
 	}
 	Arm64Assembler *a = new Arm64Assembler();
 	void *tramp_rx = CC_RW2RX(a->GetBuffer()->GetStartAddress<void*>());
-	if (is_sq)
-		a->GenCompactTrampolineSQ(rt, rm, (void *)(host_pc + 4), live);
+	if (is_ocr)
+		a->GenCompactTrampolineOCR(is_read, size, rt, rm, is_unsigned, target, (void *)(host_pc + 4), live);
+	else if (is_sq)
+		a->GenCompactTrampolineSQ(rt, rm, (void *)(host_pc + 4), live, size);
 	else
 		a->GenCompactTrampoline(is_read, size, rt, rm, target, (void *)(host_pc + 4), is_unsigned, live);
 	a->FinalizeStub();
@@ -2964,14 +3014,19 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 		if (DecodeCompactMem(*(u32 *)CC_RX2RW(host_pc), c_read, c_size, c_rt, c_rm, &c_unsigned))
 		{
 			static const bool noSqStubC = getenv("FC_NO_SQ_STUB") != nullptr;
+			static const bool logAcc = getenv("FC_COMPACT_LOG") != nullptr;
+			if (logAcc)
+				fprintf(stderr, "COMPACT fault acc=%08x read=%d size=%u sq=%d\n", (u32)acc, (int)c_read, c_size, (int)(((u32)acc >> 26) == 0x38));
 			void *target = CompactSlowTarget(c_read, c_size);
 			bool stub = false;
-			if (!noSqStubC && !c_read && c_size == 4 && sq_write_stub != nullptr && ((u32)acc >> 26) == 0x38)
+			if (!noSqStubC && !c_read && (c_size == 4 || c_size == 8) && sq_write_stub != nullptr && ((u32)acc >> 26) == 0x38)
 			{
 				target = sq_write_stub;
 				stub = true;
 			}
-			return RewriteCompactMem(host_pc, c_read, c_size, c_rt, c_rm, target, c_unsigned, stub, stub);
+			static const bool noOcrFast = getenv("FC_NO_OCR_FAST") != nullptr;
+			const bool ocr = !noOcrFast && !stub && ((u32)acc >> 26) == 0x1F;
+			return RewriteCompactMem(host_pc, c_read, c_size, c_rt, c_rm, target, c_unsigned, stub, stub, ocr);
 		}
 	}
 

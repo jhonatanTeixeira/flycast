@@ -1,4 +1,6 @@
 #include "ta_ctx.h"
+#include <chrono>
+#include <atomic>
 #include "spg.h"
 #include "oslib/oslib.h"
 #include <cstdlib>
@@ -16,6 +18,7 @@ extern u32 FrameCount;
 int frameskip=0;
 bool FrameSkipping=false;		// global switch to enable/disable frameskip
 u32 g_queueDrops, g_queueOk, g_queueWaits;	// QueueRender: frames dropped / queued / waited for (see there)
+u32 g_queueBusyDrops;	// descartados por render ainda ocupado apos liberacao antecipada
 u32 g_rendIntervalCyclesEma;	// game's render interval, emulated cycles (QueueRender)
 
 TA_context* ta_ctx;
@@ -217,6 +220,32 @@ bool QueueRender(TA_context* ctx)
    }
 #endif
 
+	// Liberacao antecipada (Renderer_if.cpp): o slot pode estar livre com o
+	// render ainda desenhando o frame anterior. So enfileira se ele estiver
+	// perto de acabar (FC_EARLY_THRESHOLD_US, padrao 1000); senao descarta,
+	// como quando o slot esta ocupado.
+	{
+		extern std::atomic<u64> g_rendBusyUntilUs;
+		static int thresholdUs = -1;
+		if (thresholdUs == -1)
+		{
+			const char *t = getenv("FC_EARLY_THRESHOLD_US");
+			thresholdUs = t != nullptr ? atoi(t) : 1000;
+		}
+		u64 busy = g_rendBusyUntilUs.load(std::memory_order_relaxed);
+		if (!rqueue && busy != 0)
+		{
+			u64 now = (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+			if (busy > now + (u64)thresholdUs)
+			{
+				g_queueDrops++;
+				g_queueBusyDrops++;
+				tactx_Recycle(ctx);
+				return false;
+			}
+		}
+	}
 	if (rqueue)
    {
 		// The previous frame hasn't been picked up by the render thread yet:

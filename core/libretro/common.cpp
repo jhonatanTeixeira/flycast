@@ -1,4 +1,5 @@
 #include "types.h"
+#include "hw/mem/_vmem.h"
 
 #include <errno.h>
 
@@ -379,7 +380,14 @@ static void signal_handler(int sn, siginfo_t * si, void *segfault_ctx)
 		context_to_segfault(&ctx, segfault_ctx);
 	}
 #elif HOST_CPU == CPU_ARM64
-	else if (dyna_cde && ngen_Rewrite(ctx.pc, 0, ctx.x0))
+	// Endereco GUEST do acesso que deu fault. O caminho rapido antigo tinha o
+	// endereco sempre em w0 (ctx.x0); o acesso compacto (tech_debits 4.27) o
+	// tem em wRm, que este contexto nao carrega. No espaco de 4GB o host e
+	// virt_ram_base + endereco, entao si_addr - virt_ram_base vale para os dois
+	// formatos -- e o que faz o teste de Store Queue do rewrite funcionar.
+	else if (dyna_cde && ngen_Rewrite(ctx.pc, 0,
+			(_nvmem_4gb_space() && virt_ram_base != nullptr && (u8 *)si->si_addr >= virt_ram_base)
+				? (unat)(u32)((u8 *)si->si_addr - virt_ram_base) : ctx.x0))
 	{
 		context_to_segfault(&ctx, segfault_ctx);
 	}

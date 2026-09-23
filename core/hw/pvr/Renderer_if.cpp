@@ -198,6 +198,10 @@ static inline u64 rend_now_us()
 			std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+extern u64 g_emuReWaitUs;
+extern u32 g_emuReWaits;
+u32 g_earlyReleases;
+
 void rend_dump_split(const char *path)
 {
 	FILE *f = fopen(path, "w");
@@ -210,6 +214,10 @@ void rend_dump_split(const char *path)
 	fprintf(f, "render_ms_avg\t%.3f\n", g_rendRenderUs / 1000.0 / n);
 	fprintf(f, "emu_frame_interval_ms_avg\t%.3f\n", g_emuFrameCount ? g_emuFrameIntervalUs / 1000.0 / g_emuFrameCount : 0.0);
 	fprintf(f, "emu_frames\t%u\n", g_emuFrameCount);
+	fprintf(f, "early_releases\t%u\n", g_earlyReleases);
+	fprintf(f, "emu_re_waits\t%u\n", g_emuReWaits);
+	fprintf(f, "emu_re_wait_ms_avg\t%.3f\n", g_emuReWaits ? g_emuReWaitUs / 1000.0 / g_emuReWaits : 0.0);
+	fprintf(f, "emu_re_wait_ms_total\t%.1f\n", g_emuReWaitUs / 1000.0);
 	// Taxa de swap nativa do jogo em tempo emulado (30 vs 60).
 	fprintf(f, "swap_native_fps\t%.2f\n", (g_swapCount && g_swapEmuCycles) ? (double)SH4_MAIN_CLOCK * g_swapCount / g_swapEmuCycles : 0.0);
 	fprintf(f, "swaps\t%u\n", g_swapCount);
@@ -246,6 +254,42 @@ void rend_dump_split(const char *path)
 // flip (kofnw dropped 610 frames). Process + Render never waits on vsync.
 std::atomic<u32> g_rendWorkUsEma(0);
 
+// Liberacao antecipada do slot da fila (docs/tech_debits.md 4.21/4.29).
+// A fila tem UM slot, e o contexto so saia dele depois do Render inteiro:
+// com o render quase do tamanho do intervalo do jogo (KOF Evolution na
+// chuva: 16,2 x 16,8ms), o frame seguinte chegava com o slot ocupado, era
+// descartado, e o render ficava ~10ms parado esperando o proximo (36-43 fps
+// com a emulacao a 100%). Agora, logo apos o Process, os dados ja processados
+// passam para um contexto-sombra do render (troca de ponteiros, sem copia) e o
+// slot e liberado: o proximo frame espera na fila enquanto este e desenhado.
+// So quando o render cabe no intervalo do jogo -- senao o Process do frame
+// seguinte atrasaria e a emu thread esperaria por ele no fim do render
+// (re.Wait), roubando velocidade (DOA2, render 21ms). FC_NO_EARLY_RELEASE=1
+// desliga.
+static TA_context* rend_shadow;
+static bool rend_early_released;
+extern u32 g_earlyReleases;
+// Previsao de quando o Render em andamento (apos liberacao antecipada)
+// termina, em us de steady_clock. QueueRender (emu thread) so enfileira o
+// proximo frame se faltar pouco -- senao a emu thread esperaria o Process dele
+// no fim do render (re.Wait) e a emulacao cairia para o ritmo do render
+// (medido: KOF Evolution 100% -> 90,8%, 2,7ms de espera por frame).
+std::atomic<u64> g_rendBusyUntilUs(0);
+static u32 g_rendRenderUsEma;
+
+static void rend_fix_overrun_ptrs(rend_context& r)
+{
+	r.verts.overrun = &r.Overrun;
+	r.idx.overrun = &r.Overrun;
+	r.modtrig.overrun = &r.Overrun;
+	r.global_param_mvo.overrun = &r.Overrun;
+	r.global_param_mvo_tr.overrun = &r.Overrun;
+	r.global_param_op.overrun = &r.Overrun;
+	r.global_param_pt.overrun = &r.Overrun;
+	r.global_param_tr.overrun = &r.Overrun;
+	r.render_passes.overrun = &r.Overrun;
+}
+
 bool rend_frame(TA_context* ctx, bool draw_osd)
 {
    if (renderer_changed || renderer == NULL)
@@ -264,11 +308,42 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
    if (settings.rend.ThreadedRendering && (!proc || (!ctx->rend.isRenderFramebuffer && !ctx->rend.isRTT)))
 	   // If rendering to texture, continue locking until the frame is rendered
       re.Set();
+
+   {
+      static int earlyEnabled = -1;
+      if (earlyEnabled == -1)
+         earlyEnabled = getenv("FC_NO_EARLY_RELEASE") != nullptr ? 0 : 1;
+      extern u32 g_rendIntervalCyclesEma;
+      u64 workCycles = (u64)g_rendWorkUsEma.load(std::memory_order_relaxed) * (SH4_MAIN_CLOCK / 1000000);
+      bool renderFits = workCycles != 0 && g_rendIntervalCyclesEma != 0 && workCycles <= g_rendIntervalCyclesEma;
+      if (earlyEnabled && settings.rend.ThreadedRendering && proc && renderFits
+            && !ctx->rend.isRenderFramebuffer && !ctx->rend.isRTT && ctx == _pvrrc)
+      {
+         if (rend_shadow == nullptr)
+         {
+            rend_shadow = new TA_context();
+            rend_shadow->Alloc();
+         }
+         std::swap(rend_shadow->rend, ctx->rend);
+         rend_fix_overrun_ptrs(rend_shadow->rend);
+         rend_fix_overrun_ptrs(ctx->rend);
+         _pvrrc = rend_shadow;
+         // ~1ms a mais pela apresentacao do frame, que vem logo depois.
+         g_rendBusyUntilUs.store(rend_now_us() + g_rendRenderUsEma + 1000, std::memory_order_relaxed);
+         FinishRender(ctx);	// libera o slot: a emu thread ja pode enfileirar o proximo
+         rend_early_released = true;
+         if (g_rendSplitEnabled)
+            g_earlyReleases++;
+      }
+   }
 #endif
    
    u64 t1 = rend_now_us();
    bool do_swp = proc && renderer->Render();
    u64 t2 = rend_now_us();
+   g_rendBusyUntilUs.store(0, std::memory_order_relaxed);
+   if (t2 - t1 < 500000)
+      g_rendRenderUsEma = g_rendRenderUsEma == 0 ? (u32)(t2 - t1) : (u32)(((u64)g_rendRenderUsEma * 15 + (t2 - t1)) / 16);
    if (g_rendSplitEnabled)
    {
       g_rendRenderUs += t2 - t1;
@@ -348,7 +423,9 @@ bool rend_single_frame(void)
 			re.Set();
 
 		//clear up & free data ..
-		FinishRender(_pvrrc);
+		if (!rend_early_released)
+			FinishRender(_pvrrc);
+		rend_early_released = false;
 		_pvrrc=0;
 
 		if (do_swp && !swap_pending)
@@ -443,13 +520,28 @@ void rend_start_render(void)
    }
 }
 
+// FC_REND_SPLIT: tempo que a EMU thread passa bloqueada no fim do render
+// esperando o Process() da render thread (re.Wait). E tempo roubado da
+// emulacao a cada frame renderizado -- o que decide a velocidade em jogos
+// limitados pelo SH4 (DOA2, Zombie Revenge).
+u64 g_emuReWaitUs;
+u32 g_emuReWaits;
+
 void rend_end_render(void)
 {
    if (pend_rend)
    {
 #if !defined(TARGET_NO_THREADS)
 	   if (settings.rend.ThreadedRendering)
+	   {
+		   u64 tw = g_rendSplitEnabled ? rend_now_us() : 0;
 		   re.Wait();
+		   if (g_rendSplitEnabled)
+		   {
+			   g_emuReWaitUs += rend_now_us() - tw;
+			   g_emuReWaits++;
+		   }
+	   }
 	   else
 #endif
 		  if(renderer != NULL)

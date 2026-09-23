@@ -2311,3 +2311,21 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   precisou sair). Backup: `flycast2026_libretro.so.bak-pre-margin`. Para
   benchmarks do core novo usar `~/bench_2026.sh` (cfg `retrorun_dbg3.cfg`
   com chaves `flycast2026_`; o `retrorun_dbg2.cfg` antigo só tem `reicast_`).
+
+### 2026-09-24 — Fila e velocidade de emulação (DOA2, Zombie Revenge, KOF Evo)
+
+- Estado estável congelado antes de mexer: commit `73c813d7d` + tag
+  `flycast2026-estavel-2026-09-24`, binário em
+  `../flycast2026-builds/`, snapshot completo do device em
+  `~/snapshot-flycast2026-estavel-2026-09-24/` (core, cfgs, ES, scripts).
+- Regras da sessão (usuário): 3D medido por **velocidade de emulação**; 1
+  rodada por jogo, sem A/B; só retrorun + instrumentação de JIT/GLES.
+- Achados: fila não limita DOA2/Zombie (emu espera o render 0,1-0,3ms/frame);
+  rewrite usava `x0` como endereço (4.32) → SQ e OCRAM agora rápidos: DOA2
+  72,9 → 80,9%, Shenmue 76 → 79,9%; KOF Evo 100%; Zombie 74% (limitado pela
+  moldura de blocos pequenos, 4.34). Liberação antecipada da fila (4.33):
+  física do render do KOF Evo impede 60 fps a 100% sem render mais curto.
+- 2D conferidos (1 rodada): SFA3 98,6%/58,8fps, MBAA 97,9%/50,2, KOFXI
+  99,8%/59,2.
+- Instalado como `flycast2026_libretro.so` (md5 3ed1ac55); o estável anterior
+  em `flycast2026_libretro.so.bak-estavel-2026-09-24` e no snapshot.
