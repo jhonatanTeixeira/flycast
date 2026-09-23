@@ -49,6 +49,7 @@ public:
 		SimplifyExpressionPass();
 		CombineShiftsPass();
 		DeadRegisterPass();
+		ZeroExtendLoadPass();
 		IdentityMovePass();
 
 #if DEBUG
@@ -660,6 +661,70 @@ private:
 			stats.dead_registers++;
 			//printf("%08x DREG %s\n", block->vaddr + block->oplist[defnum].guest_offs, block->oplist[defnum].dissasm().c_str());
 			block->oplist.erase(block->oplist.begin() + defnum);
+		}
+	}
+
+	// O SH4 so tem leitura de byte/word COM sinal (mov.b/mov.w); o jogo zera
+	// com extu.b/extu.w logo depois. `readm rX.n <- ...` (1/2 bytes) seguido de
+	// `and rX.n+1 <- rX.n, 0xff/0xffff`, com o valor lido usado SO por esse and,
+	// vira uma leitura sem sinal (flags2 bit 0) que ja define rX.n+1, e o and
+	// some. So o backend ARM64 honra flags2 -- e o unico compilado neste fork.
+	// FC_NO_ZX_LOAD=1 desliga.
+	void ZeroExtendLoadPass()
+	{
+		static const bool disabled = getenv("FC_NO_ZX_LOAD") != nullptr;
+		if (disabled)
+			return;
+		for (size_t i = 0; i < block->oplist.size(); i++)
+		{
+			shil_opcode& ld = block->oplist[i];
+			if (ld.op != shop_readm || !ld.rd.is_r32i() || ld.rs1.is_imm() || (ld.flags2 & 1))
+				continue;
+			const u32 size = ld.flags & 0x7f;
+			if (size != 1 && size != 2)
+				continue;
+			const RegValue v(ld.rd);
+			if (writeback_values.count(v) > 0)
+				continue;
+			const u32 mask = size == 1 ? 0xff : 0xffff;
+			size_t use = (size_t)-1;
+			bool bad = false;
+			for (size_t j = i + 1; j < block->oplist.size() && !bad; j++)
+			{
+				const shil_opcode& op = block->oplist[j];
+				const bool uses = UsesRegValue(op.rs1, v) || UsesRegValue(op.rs2, v) || UsesRegValue(op.rs3, v);
+				if (!uses)
+				{
+					if (use == (size_t)-1)
+					{
+						// Nada entre a leitura e o and pode ler o contexto nem
+						// redefinir o registrador (o and passara a ser definido
+						// mais cedo, na leitura).
+						if (op.op == shop_ifb || op.op == shop_sync_sr || op.op == shop_sync_fpscr)
+							bad = true;
+						else if ((op.rd.is_reg() && op.rd._reg == ld.rd._reg) || (op.rd2.is_reg() && op.rd2._reg == ld.rd._reg))
+							bad = true;
+					}
+					continue;
+				}
+				if (use != (size_t)-1)
+				{
+					bad = true;	// segundo uso
+					break;
+				}
+				if (op.op == shop_and && op.rs1.is_r32i() && RegValue(op.rs1) == v
+						&& op.rs2.is_imm() && op.rs2._imm == mask
+						&& op.rd.is_r32i() && op.rd._reg == ld.rd._reg)
+					use = j;
+				else
+					bad = true;
+			}
+			if (bad || use == (size_t)-1)
+				continue;
+			ld.rd = block->oplist[use].rd;
+			ld.flags2 |= 1;
+			block->oplist.erase(block->oplist.begin() + use);
+			stats.dead_code_ops++;
 		}
 	}
 

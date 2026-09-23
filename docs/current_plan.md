@@ -6,6 +6,24 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-09-22): DOA2 — diagnosticado (emu-bound), sem fix
+
+**diagnóstico done, correção pendente** — Dead or Alive 2 (Dreamcast, 60fps
+nativo): 23,1 fps / **74% de velocidade**. **Gargalo primário: throughput de
+emulação SH4** — a emu thread está **saturada em ~1 core** (103%,
+`SH4_TCB` 39% + `ta_vtx_data32` + ARM7), produzindo ~40 frames/s onde o jogo
+pede 60. O render (640 draw calls, 22,5ms, CPU-bound) é o 2º gargalo e descarta
+frames (tela ~21fps). **Remover o render não leva a 60fps** (teto de 74% é do
+SH4, caso Shenmue). Armadilha de medição: `FC_AUTOSKIP=0` sobe fps apresentado
+mas derruba a velocidade do jogo (54,5%). Itens 4.20 em `tech_debits.md`;
+`docs/history.md` 2026-09-22.
+
+**Alavancas (nenhuma implementada):** (a) qualidade do JIT SH4 (FPU/vertex —
+esforço alto, frente do Shenmue); (b) reordenar opacos por estado para reduzir
+draw calls (~296 runs → ~154 estados/frame, ~22% menos draws; risco visual,
+precisa validação); (c) `idle_hash` do DOA2 (entrada existe; item 4.17 suspeita
+de matches errados — não medido).
+
 ## Agora (2026-09-22): samsptk — corrigido, aguardando validação visual
 
 **done (código), pendente (validação visual)** — Samurai Shodown 6 (Atomiswave):

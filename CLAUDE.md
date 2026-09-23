@@ -76,9 +76,11 @@ dois é uma ferramenta de investigação legítima.
   linha de comando:
   ```
   make platform=arm64 CC_PREFIX=aarch64-linux-gnu- \
-       CXX=aarch64-linux-gnu-g++ CC=aarch64-linux-gnu-gcc \
-       CC_AS=aarch64-linux-gnu-g++ HAVE_OPENMP=0 -j2
+       CXX=aarch64-linux-gnu-g++-13 CC=aarch64-linux-gnu-gcc-13 \
+       CC_AS=aarch64-linux-gnu-g++-13 HAVE_OPENMP=0 LDFLAGS="-L." -j2
   ```
+  (Nesta máquina só existem os binários com sufixo `-13`; o nome sem sufixo
+  sumiu em 2026-09-23 e o build falha com "not found".)
   (`CXX ?= g++` na linha 922 do Makefile sobrescreve o cross-compiler pra alguns
   arquivos silenciosamente — um `.o` compilado errado não dá erro até o link ou,
   pior, até rodar. Depois de qualquer mudança nessas variáveis, rode `make clean`
@@ -117,6 +119,18 @@ dois é uma ferramenta de investigação legítima.
   (`core/profiler/fc_profiler.*`, `ui/`, etc. não existem aqui). Instrumentação
   precisa ser feita com `chrono`/contadores simples direto no código, ou portando
   um subconjunto mínimo — decisão ainda em aberto, ver `docs/current_plan.md`.
+- **Cores no device (desde 2026-09-23):** o NOSSO fork é
+  `~/.config/retroarch/cores/flycast2026_libretro.so` (opções com prefixo
+  `flycast2026_`, bloco no fim de `~/.config/retrorun.cfg` e em
+  `~/.config/retroarch/retroarch-core-options.cfg`). `flycast_libretro.so` agora
+  é o **flyinghead/flycast oficial** (v2.7-42, build em
+  `../flycast-upstream/build-arm64`, cmake `-DLIBRETRO=ON -DUSE_GLES=ON
+  -DUSE_VULKAN=OFF`), prefixo `flycast_`. ES (dreamcast, naomi, atomiswave):
+  padrão `retrorun3` + `flycast2026`; `flycast2026` também como opção do
+  `retroarch`. Para A/B de desenvolvimento continue usando um `.so` separado
+  (ex.: `/home/ark/flycast_test.so`), nunca sobrescrevendo o `flycast2026` sem
+  backup. Cuidado: `cp` por cima de um core com hardlinks (cache `~/.debug` do
+  perf) altera todos os nomes do inode — use `cp` para temporário + `mv`.
 - **Acesso ao device de teste:** SSH em `192.168.0.14` (usuário `ark`, senha
   `ark`, via `sshpass`). Frontend de teste é o `retrorun3`
   (`/usr/local/bin/retrorun3`), que tem um modo `--benchmark N --benchmark-warmup

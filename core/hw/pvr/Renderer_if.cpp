@@ -7,6 +7,7 @@
 #include "hw/mem/_vmem.h"
 #include "cheats.h"
 #include "spg.h"
+#include "hw/sh4/sh4_sched.h"
 
 /*
 
@@ -170,6 +171,27 @@ u64 g_rendWaitUs, g_rendProcUs, g_rendRenderUs;
 u64 g_glFinishUs;	// FC_GL_FINISH, see gles.cpp
 u32 g_rendSplitFrames;
 
+// FC_REND_SPLIT (DOA2 2026-09-22): intervalo real (wall clock) entre quadros
+// produzidos pela emu_thread, medido em rend_start_render (que roda nela).
+// Responde direto "quem limita": a emu_thread (SH4) ou a main thread (GL).
+u64 g_emuFrameIntervalUs;
+u32 g_emuFrameCount;
+// Taxa de frames de render PEDIDOS pelo jogo, em tempo EMULADO. Imune aos
+// drops da fila (nao depende de quantos chegam ao render thread). ~60 => jogo
+// e 60fps; ~30 => o jogo so renderiza a cada 2 vblanks.
+u64 g_reqEmuCycles;
+u32 g_reqCount;
+u64 g_lastReqCycles;
+// Taxa de swap NATIVA do jogo, em tempo EMULADO (independente de quao lento
+// roda no device): media de ciclos SH4 entre frames que realmente trocam
+// (do_swp). SH4_MAIN_CLOCK / ciclos = fps nativo. Decide 30 vs 60.
+u64 g_swapEmuCycles;
+u32 g_swapCount;
+u64 g_lastSwapCycles;
+// Quantos pedidos de render sao RTT/render-framebuffer (nao vao pra tela) vs
+// frames de tela de verdade -- decide se o jogo apresenta a 60 ou 30Hz.
+u32 g_reqRtt, g_reqDisplay;
+
 static inline u64 rend_now_us()
 {
 	return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
@@ -186,8 +208,30 @@ void rend_dump_split(const char *path)
 	fprintf(f, "rsWait_ms_avg\t%.3f\n", g_rendWaitUs / 1000.0 / n);
 	fprintf(f, "process_ms_avg\t%.3f\n", g_rendProcUs / 1000.0 / n);
 	fprintf(f, "render_ms_avg\t%.3f\n", g_rendRenderUs / 1000.0 / n);
+	fprintf(f, "emu_frame_interval_ms_avg\t%.3f\n", g_emuFrameCount ? g_emuFrameIntervalUs / 1000.0 / g_emuFrameCount : 0.0);
+	fprintf(f, "emu_frames\t%u\n", g_emuFrameCount);
+	// Taxa de swap nativa do jogo em tempo emulado (30 vs 60).
+	fprintf(f, "swap_native_fps\t%.2f\n", (g_swapCount && g_swapEmuCycles) ? (double)SH4_MAIN_CLOCK * g_swapCount / g_swapEmuCycles : 0.0);
+	fprintf(f, "swaps\t%u\n", g_swapCount);
+	// Taxa de render PEDIDA (imune a drops): decisao 30 vs 60 limpa.
+	fprintf(f, "req_native_fps\t%.2f\n", (g_reqCount && g_reqEmuCycles) ? (double)SH4_MAIN_CLOCK * g_reqCount / g_reqEmuCycles : 0.0);
+	fprintf(f, "reqs\t%u\n", g_reqCount);
+	fprintf(f, "req_rtt\t%u\n", g_reqRtt);
+	fprintf(f, "req_display\t%u\n", g_reqDisplay);
 	extern u32 g_glDrawCalls;
 	fprintf(f, "draw_calls_avg\t%.1f\n", (double)g_glDrawCalls / n);
+	extern u32 g_batchBreakPcw, g_batchBreakIsp, g_batchBreakTcw, g_batchBreakTsp, g_batchBreakTileclip, g_batchBreakTotal;
+	fprintf(f, "batch_breaks_total\t%u\n", g_batchBreakTotal);
+	extern u32 g_opaqueRuns, g_opaqueDistinctSum, g_opaqueFramesCounted;
+	fprintf(f, "opaque_runs\t%u\n", g_opaqueRuns);
+	fprintf(f, "opaque_distinct_states_per_frame\t%.1f\n",
+			g_opaqueFramesCounted ? (double)g_opaqueDistinctSum / g_opaqueFramesCounted : 0.0);
+	fprintf(f, "batch_break_pcw\t%u\n", g_batchBreakPcw);
+	fprintf(f, "batch_break_isp\t%u\n", g_batchBreakIsp);
+	fprintf(f, "batch_break_tcw\t%u\n", g_batchBreakTcw);
+	fprintf(f, "batch_break_tsp\t%u\n", g_batchBreakTsp);
+	fprintf(f, "batch_break_tileclip\t%u\n", g_batchBreakTileclip);
+	fprintf(f, "batch_breaks_per_frame\t%.1f\n", (double)g_batchBreakTotal / n);
 	fprintf(f, "gl_finish_ms_avg\t%.3f\n", g_glFinishUs / 1000.0 / n);
 	fclose(f);
 }
@@ -229,6 +273,16 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
    {
       g_rendRenderUs += t2 - t1;
       g_rendSplitFrames++;
+      if (do_swp)
+      {
+         u64 nowC = sh4_sched_now64();
+         if (g_lastSwapCycles != 0)
+         {
+            g_swapEmuCycles += nowC - g_lastSwapCycles;
+            g_swapCount++;
+         }
+         g_lastSwapCycles = nowC;
+      }
    }
    // Core-side work for this frame (Process + Render), smoothed. The time
    // spent waiting on re.Set() above is the emu thread's, not ours, and it's
@@ -311,6 +365,25 @@ void rend_start_render(void)
 {
    render_called = true;
    pend_rend = false;
+   if (g_rendSplitEnabled)
+   {
+      static u64 lastEmuFrame = 0;
+      u64 now = rend_now_us();
+      if (lastEmuFrame != 0)
+      {
+         g_emuFrameIntervalUs += now - lastEmuFrame;
+         g_emuFrameCount++;
+      }
+      lastEmuFrame = now;
+      // Taxa de pedidos de render do jogo em tempo emulado (imune a drops).
+      u64 nowC = sh4_sched_now64();
+      if (g_lastReqCycles != 0 && nowC - g_lastReqCycles < SH4_MAIN_CLOCK / 2)
+      {
+         g_reqEmuCycles += nowC - g_lastReqCycles;
+         g_reqCount++;
+      }
+      g_lastReqCycles = nowC;
+   }
    TA_context* ctx = tactx_Pop(CORE_CURRENT_CTX);
 
    // No end of render interrupt when rendering the framebuffer
@@ -320,6 +393,11 @@ void rend_start_render(void)
    if (ctx)
    {
       bool is_rtt=(FB_W_SOF1& 0x1000000)!=0 && !ctx->rend.isRenderFramebuffer;
+      if (g_rendSplitEnabled)
+      {
+         if (ctx->rend.isRenderFramebuffer || is_rtt) g_reqRtt++;
+         else g_reqDisplay++;
+      }
 
       if (!ctx->rend.Overrun)
       {

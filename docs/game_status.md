@@ -21,7 +21,7 @@
 | **Skies of Arcadia** | drops pra 24 | pontual | falta um toque |
 | **Shenmue** | 18-30; cena pesada 17 → **23-25** | melhorou muito | retrorun thread (+24%) + stores em página de código (+16%, opt-in) |
 | **mslug6** | 30 (20 em boss) | consistente nos boss | resto do jogo full speed |
-| **Dead or Alive 2** | 25-30 | — | quase lá; só roda bem no fork `flycast_extreme` |
+| **Dead or Alive 2** | 25-30 (bench 23) | — | diagnosticado 2026-09-22: **emu-bound (SH4 saturado, 74%)**, render 2º gargalo; 60fps nativo |
 | **Giga Wing 2** (`gwing2`) | — | **não é cauda** | **jogável** (antes não era); percebe-se o frameskip |
 | **samsptk** | **~59** (medido 2026-09-22) | boa (p99/p50=1,29x) | **full speed**; era 20fps por conversão de paleta na CPU — corrigido (GPU bilinear), aguarda validação visual |
 
@@ -138,9 +138,27 @@ muita textura e muito draw call. **Ainda não medido** — vale rodar com
 savestate e o `FC_TA_SPLIT`/`FC_REND_SPLIT` para ver se o mapa do frame bate
 com o do mslug6 (upload de textura + submissão GL) ou se é outra coisa.
 
-### Dead or Alive 2 — quase lá, e com uma pista de fora
+### Dead or Alive 2 — diagnosticado: emu-bound (SH4), não render-bound
+**Medido 2026-09-22** (savestate, `--benchmark 20`): 23,1 fps, jogo a **73,9%**
+de velocidade, 186 underruns. **É 60fps nativo** (confirmado:
+`req_native_fps=59,92`, sem RTT). **Gargalo primário: throughput de emulação
+SH4** — a emu thread está **saturada em ~1 core** (103%, `SH4_TCB` 39% self +
+`ta_vtx_data32` + ARM7), produzindo ~40 frames reais/s onde o jogo pede 60. O
+render (640 draw calls, 22,5ms, CPU-bound não-GPU) é o **segundo** gargalo:
+descarta os frames que não cabem, então a tela mostra ~21fps. Remover o render
+não levaria a 60fps (teto de 74% é do SH4, como Shenmue em cena pesada).
+vsync/threaded present não mudam (4 combos, todas ~74%).
+
+**Armadilha de medição (usuário viu na tela):** `FC_AUTOSKIP=0` sobe os frames
+apresentados de 23,1 para 32,6 fps mas a **velocidade do jogo CAI de 74% para
+54,5%** (áudio) — "passa de 30fps mas fica mais lento". A métrica de fps do
+frontend conta frames apresentados, não velocidade de jogo. Ver
+`docs/history.md` 2026-09-22 e item 4.20.
+
 25-30 fps no nosso branch. **Só roda bem via RetroArch com o fork
 `flycast_extreme`** — não se sabe o que esse fork tem que faz diferença aqui.
+(A versão no device é um build **32-bit ARM** de 2020, que não roda no
+`retrorun3` 64-bit — comparar exige RetroArch32.)
 
 **Por que este caso é especialmente valioso:** é o único jogo da lista onde
 existe uma implementação de referência que comprovadamente roda melhor no
@@ -202,3 +220,33 @@ binário: **20,0 → 59,4 fps**, `core_average` 48,9 → 12,1ms, underruns de á
 bateria de 10 jogos sem crash. Escape hatch: `FC_NO_GPU_PAL_BILINEAR=1`.
 **Aguarda validação visual do usuário** (mudança de pipeline de textura tem
 histórico de glitch neste projeto).
+
+### Evolution - The World of Sacred Device — não inicia (CHD em zstd)
+**Diagnosticado 2026-09-22.** Não é crash do emulador: o CHD foi gerado por
+um `chdman` recente com codec **`cdzs` (CD + Zstandard)** no header
+(`cdzs cdzl cdfl`); todos os outros CHDs de DC do device usam `cdlz cdzl cdfl`.
+O `libchdr` deste fork (`core/deps/libchdr`) só conhece zlib/lzma/flac, então
+o disco abre como `NoDisk` e `nullDC.cpp` (~linha 453) desliga o HLE e tenta a
+BIOS real — daí a mensagem enganosa *"Unable to find bios in /roms2/bios/dc/"*.
+(Este fork não lê `dc.zip`; só `dc_boot.bin`/`dc_bios.bin`. Todo jogo de DC no
+device roda com HLE BIOS, que é o default.) Evolution 2 usa `cdlz` e não é
+afetado. Correções possíveis: recomprimir o CHD (`chdman`) ou portar o codec
+zstd pro `libchdr`.
+
+### KOF Evolution (DC) — 60 fps fora da chuva; ~54 fps na chuva desde 2026-09-23 (era 30)
+**Medido 2026-09-22** (savestate da chuva): jogo a **100% de velocidade**, mas
+a tela mostra **30,4 fps** (core p50/p95/p99 31,6/34,6/41,7ms). O jogo é 60fps;
+o render passa um pouco de 16,7ms e cai para metade. Ver `tech_debits.md` 4.21.
+
+### MBAA — glitches (2026-09-22)
+Fixos no savestate slot 2: blocos no retrato e lixo tipo texto no fundo.
+Intermitente: retrato some e fica só o contorno (em algumas rodadas).
+Ver `tech_debits.md` 4.23.
+
+**Atualização 2026-09-23:** com `glDrawRangeElements` a chuva vai a **~54 fps**
+(render 18,7 → 13,9ms), com o jogo a ~92% de velocidade nessa cena (a fila
+agora espera o render; ver `tech_debits.md` 4.29). Reavaliar jogando.
+
+### Soulcalibur — congela no boot pelo ES (2026-09-23)
+Com o flycast2026 lançado pelo ES (boot do zero). Pelo savestate roda. Ver
+`tech_debits.md` 4.30.

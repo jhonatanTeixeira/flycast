@@ -1944,7 +1944,8 @@ de CPU somado entre threads, não caminho crítico.
   mailbox abaixo de 95% (volta acima de 99%) — vsync + FIFO arredondava jogos
   de ~35ms/frame para 3 vblanks e prendia a emulação. kofxi fica em FIFO
   (59,5 fps, 100%), Shenmue vai para mailbox (23,2 fps, 77,7%).
-- **Cuidado de método:** o savestate do mslug6 NÃO é reproduzível entre
+- **[CORRIGIDO em 2026-09-22, ver `tech_debits.md` 4.22: a média É
+  reproduzível; o que varia é a cadência]** **Cuidado de método:** o savestate do mslug6 NÃO é reproduzível entre
   rodadas — sem input, a luta evolui diferente a cada vez (mesmo binário:
   17,5 a 25,5 fps, 65% a 100% de velocidade). Comparações do mslug6 entre
   rodadas separadas no tempo não valem; só A/B lado a lado no mesmo binário.
@@ -2081,3 +2082,232 @@ de CPU somado entre threads, não caminho crítico.
   samsptk e confirmar que as cores/fundo/sprites estão corretos, e olhar 1-2
   jogos 2D já conhecidos (kofnw, mslug6) por garantia. Se houver corrupção,
   `FC_NO_GPU_PAL_BILINEAR=1` desliga sem rebuild.
+
+## 2026-09-22 — DOA2 (Dreamcast): diagnóstico — render thread domina, e a política de fila engana a métrica
+
+- Pedido do usuário: "salvar" o Dead or Alive 2 (tem savestate em
+  `/roms2/dreamcast/Dead or Alive 2 (USA).fc2021-rrstate.auto`). **Confirmado
+  que o jogo é 60fps** — medido limpo no fim desta sessão com um contador novo
+  que conta os **pedidos de render do jogo em tempo emulado** (`req_native_fps`,
+  imune aos drops da fila): **59,92Hz**. (Uma primeira tentativa,
+  `swap_native_fps`, deu 31,65 e estava **contaminada** — só contava os swaps
+  que chegavam ao render thread, com 521/591 frames descartados pela fila;
+  registro do erro de medição.) `declared_fps=60`, `game_interval_ms_ema`
+  16,68ms confirmam.
+- **Baseline** (`retrorun3 --benchmark 30 --benchmark-warmup 10`, savestate,
+  vsync+threaded present): **23,1 fps**, jogo a **73,9% de velocidade**
+  (`core_average` 42,0ms, `core_p50` 42,5 / p95 50,8 / p99 75,2ms; 186
+  underruns de áudio).
+- **Quem limita (medido, não inferido):** instrumentei o intervalo real entre
+  frames produzidos pela emu thread (`emu_frame_interval_ms_avg`). Deu
+  **24ms** — a emu thread (SH4) produz a ~42fps, **longe dos 60 nativos**.
+  Mas eu errei ao concluir daqui que "a emu thread tem folga" — o dado que
+  decide é a **amostragem de CPU por thread** (`/proc/<pid>/task/*/stat`,
+  jiffies em 5s), e ela mostra **duas threads quase saturadas**:
+
+  | thread | CPU (de 1 core) | o que roda (via `perf --sort pid`) |
+  |---|---|---|
+  | emu (`dc_run`: SH4+AICA+ARM7) | **~103%** | `SH4_TCB` 39% self, `ta_vtx_data32`, `ARM7_TCB` |
+  | main/render (`retro_run`) | **~72%** | `FifoSplitter::ta_poly_data`, `make_index`, `DrawStrips`, `SetGPState`, `libmali` |
+  | SDLAudio / mali-cmar / presenter | 3% cada | áudio, driver GPU |
+
+  **Correção de rota (registrada):** eu primeiro li o `perf` agregado
+  (`SH4_TCB` 40%) como "a emu thread gira produzindo frames descartados, não é
+  o limitante". **Errado** — 103% de um core na emu thread significa que ela
+  está **saturada de trabalho real** (SH4 + parse de vértices na TA + ARM7),
+  não girando à toa. A `rsWait` de 14,7ms é a main thread esperando essa emu
+  thread saturada. **O DOA2 é, primariamente, limitado pelo throughput de
+  emulação SH4** (~74% = 24ms para produzir o que deveria levar 16,7ms), com o
+  render (~22,5ms, 640 draw calls) como **segundo gargalo** que realimenta via
+  fila (521/591 frames descartados quando a main thread não acompanha).
+- **O render NÃO é GPU:** `FC_GL_FINISH` → GPU ≈ 8ms; baixar a resolução para
+  320x240 **não mudou** o `render` (~21,7ms). São **~640 draw calls/frame ×
+  ~34µs** = overhead de submissão do driver Mali JM (mesmo teto do item 4.2).
+  `process` é só 5,5ms (decode 5,3, textura 2,6 — irrelevante; 2.804 polys
+  opacos).
+- **O batching já funde ~4,5 strips/draw** e o item 6 (máscara `isp` mais
+  justa) só cobriria ~9% dos breaks — os breaks reais são `tcw`/`tsp`
+  (texturas/estado diferentes). Não é alavanca grande.
+- **ACHADO IMPORTANTE — a métrica de fps engana, e o usuário viu na tela:**
+  `FC_AUTOSKIP=0` (esperar o render) sobe os frames apresentados de 23,1 para
+  **32,6 fps**, mas a **velocidade emulada do jogo CAI de 73,9% para 54,5%**
+  (áudio 977.920 → 481.280 frames). O usuário descreveu exatamente isso antes
+  de eu medir: *"passa de 30 fps mas fica visualmente mais lento"*. Mecanismo:
+  com autoskip off a emu thread **espera** o render lento, e a apresentação
+  conta frames que a main thread empurra enquanto a emulação avança menos
+  ciclos/s. `FC_AUTOSKIP=1/2` mantém 73-74% de velocidade com 23,7 fps.
+   **Conclusão: não existe política de fila que resolva o teto de velocidade
+   — a emu thread (SH4) está saturada.** A cadência de tela
+   (`RETRORUN_PRESENT_STATS`) confirma: autoskip off p50 29,4ms (parece mais
+   fluido na contagem) mas o jogo anda a 55%.
+- **Pista do `flycast_extreme` (do `game_status.md`):** no device só existe o
+  build **32-bit ARM** (`/home/ark/.config/retroarch32/cores/flycast_xtreme_libretro.so`,
+  2,28MB, de 2020-03-04, stripped, via RetroArch32) — não roda no `retrorun3`
+  (64-bit). É a versão antiga pública `flyinghead/flycast_xtreme`, não um fork
+  com código secreto; comparar código é possível via upstream histórico.
+- **Gargalo do frontend (retrorun) — pedido do usuário para tratar junto:**
+  a apresentação em thread do fork (`threaded-present`, commit `648f450`) já
+  resolveu parte do Shenmue. No DOA2 ela interage com o autoskip: em modo
+  mailbox, sem esperar o render, retro_run() dispara frames mais rápido que a
+  emulação avança, e é a **contagem de frames apresentados** (não a velocidade
+  do jogo) que sobe. A velocidade real só é observável pela taxa de áudio
+  (`audio_frames/sample_rate`). Isso é uma armadilha de medição que vale
+  corrigir no frontend também (expor/exibir velocidade do jogo, não frames).
+- **Nada corrigido ainda.** Instrumentação nova (opt-in, `FC_REND_SPLIT`):
+  `emu_frame_interval_ms_avg`/`emu_frames` (Renderer_if.cpp), contadores de
+  quebra de batching `batch_breaks_*`/`batch_isp_irrelevant_only`
+  (gldraw.cpp). Binário deployado no device.
+
+### Nota de método (a pedido do usuário)
+O usuário reforçou: **medir o core e o retrorun em conjunto**, porque o
+sintoma que se vê na tela ("mais fps mas mais lento") só aparece na interação
+dos dois. A métrica de `core_frames` do retrorun não é velocidade de jogo na
+presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
+4.20.
+
+### 2026-09-22 — DOA2: correção do diagnóstico (emu-bound, não render-bound) e pista do idle_hash
+
+- **Correção de leitura (importante):** a primeira conclusão ("render thread é
+  o limitante") estava **errada**. A medição que decide é a **amostragem de CPU
+  por thread** (`/proc/<pid>/task/*/stat`, jiffies em 5s):
+  - emu thread (`dc_run`: SH4+AICA+ARM7): **~103% de um core** — saturada
+  - main/render thread (`retro_run`): ~72%
+  - confirmado por `perf --sort pid`: a thread de 103% roda `SH4_TCB` (39%
+    self) + `ta_vtx_data32` + `ARM7_TCB`; a de 72% roda `FifoSplitter`,
+    `make_index`, `DrawStrips`, `SetGPState`, `libmali`.
+  - CPU em 1,512GHz (máx) em todos os cores — não é throttling.
+- **`req_native_fps = 59,92`, `req_rtt = 0`, `req_display = 1126`** (contador
+  novo, imune a drops): o jogo pede 60 frames de TELA/s em tempo emulado, sem
+  RTT nenhum. Logo, DOA2 é 60fps nativo mesmo (o usuário estava certo; minha
+  `swap_native_fps=31,65` estava contaminada pelos 521/591 frames descartados).
+- **Quadro final:** a emu thread (SH4) produz ~40 frames reais/s onde o jogo
+  pede 60 → **~74% de velocidade** (bate com o áudio). O render (640 draw
+  calls, 22,5ms) é o segundo gargalo: descarta os frames que não cabem, então a
+  tela mostra ~21fps. **Remover o render não levaria a 60fps** — o teto de 74%
+  é da emulação SH4 (mesmo caso do Shenmue em cena pesada, item 6 do
+  `current_plan`). O frontend (vsync/threaded) não muda isso: 4 combinações
+  testadas, todas ~74%.
+- **`FC_DUMP_BLOCK=8C101BC4`** (bloco #1, 10,4% do trabalho do JIT): laço de
+  transformação de vértices (`fmov.s @Rm+`, `fadd`, `ftrv xmtrx`, `dt/bt`). O
+  `ftrv` já sai em NEON (`ld1/fmul/fmla/st1`) — bom. Mas os `fldi0/fldi1/fadd`
+  e `fmov.s` fazem muito tráfego `[x28,#...]` (contexto SH4) porque os
+  registradores FPU desses ops não estão alocados — só 8/24 são mapeados
+  (item 4.9). Não é um único bloco dominante: o trabalho do JIT está espalhado
+  (total ~11,8G host-ops em 30s, ~393M/s).
+- **Pista nova (idle):** os blocos `8C12D2C0`/`8C12F99E`/... têm
+  `cycles=224 = max_cycles` — são **matches do `idle_hash`** (a entrada
+  "Dead or Alive 2" existe em `decoder.cpp`), e `idle_hash` é o mecanismo
+  antigo que o item 4.17 suspeita casar blocos errados (lê bytes, não opcodes,
+  e só metade do bloco). Não medido ainda se esses matches são corretos.
+- **Nada corrigido.** Instrumentação opt-in nova: `req_native_fps`/`req_rtt`/
+  `req_display`/`swaps`/`emu_frame_interval_ms_avg`/`batch_breaks_*`/
+  `opaque_distinct_states_per_frame` (todos sob `FC_REND_SPLIT`).
+
+### 2026-09-22 — Evolution 1 não inicia: CHD com codec zstd (`cdzs`)
+
+- Sintoma: fecha na inicialização com *"Unable to find bios in
+  /roms2/bios/dc/"*. Log do core em INFO: `Did not load bios, using reios` →
+  logo em seguida o erro de BIOS. Causa: o disco não abre (`NoDisk`), e aí
+  `nullDC.cpp` força BIOS real, que o fork não acha (não lê `dc.zip`).
+- Header do CHD: `cdzs cdzl cdfl` (os demais: `cdlz cdzl cdfl`). O `libchdr`
+  do fork não tem zstd. Nada corrigido ainda; ver `game_status.md`.
+
+### 2026-09-22 (noite) — KOF Evolution, mslug6, MBAA (dumps) e Macross
+
+- **Macross M3** (CHD novo do usuário, `cdlz`): boota com HLE, ~60 fps e
+  100% na abertura (core p50/p95/p99 10,8/28,7/40,6ms).
+- **KOF Evolution (chuva)** — `tech_debits.md` 4.21: jogo a 100%, tela a
+  30fps; render ~21ms > 16,7ms e a fila de 1 slot descarta o frame que chega
+  durante o render. 71% da main thread dentro da `libmali`; ~10% é o driver
+  varrendo o index buffer por draw. Implementado `glDrawRangeElements`
+  (`FC_NO_DRAW_RANGE=1` desliga) — **compilado, não medido**.
+- **mslug6** — 4.22: 4 rodadas iguais (19,8-19,9 fps, 66%). A nota antiga de
+  "não reproduzível" estava errada quanto à média. Eu errei uma leitura na
+  sessão (amostragem do arquivo de split a cada 5s → "30fps/100%" falso); o
+  usuário corrigiu vendo a tela.
+- **MBAA** — 4.23: dumps do slot 2 mostram glitches fixos (blocos no
+  retrato, lixo tipo texto). Descartados RTT, cache de textura
+  (`FC_TEX_ALWAYS_UPDATE`, novo) e sorting. Retrato sumindo é intermitente.
+- **Infra:** `bench_game.sh TAG SAVEDIR ROM "ENVS" dur warm` (cfg
+  `retrorun_dbg2.cfg`, log DEBUG mostra "loaded correctly"),
+  `bench_test.sh` (mesmo, com `/home/ark/flycast_test.so`), `perf_game.sh`,
+  `timeline_game.sh`. Slot 2 do savestate = arquivo `.auto1`; copiar para
+  uma pasta temporária como `.auto` e passar como `-s` (modo `--benchmark`
+  não grava state). **Toolchain:** nesta máquina só existem
+  `aarch64-linux-gnu-g++-13`/`gcc-13` (o link sem sufixo sumiu) — passar
+  `CXX=aarch64-linux-gnu-g++-13 CC=aarch64-linux-gnu-gcc-13
+  CC_AS=aarch64-linux-gnu-g++-13`.
+- Core ativo no device **intocado** (build `32a2b9ed1`).
+
+### 2026-09-23 — RE CV / EGG (FMV) e DOA2: o "teto de SH4" medido por contadores de hardware
+
+- Pergunta do usuário: outra análise culpou o SH4 (codegen, ~3,2 host ops/op)
+  tanto na FMV quanto no DOA2 — "como 3D e FMV batem na mesma coisa?".
+- Medido (`tech_debits.md` 4.24/4.25): os dois têm IPC ~0,5 na emu thread,
+  mas a FMV para em **cache de instrução** (código traduzido quente 60-115KB
+  × L1I 32KB) e o DOA2 em **DRAM**. Clock real ~1,30GHz; governor não muda
+  nada. CHD (LZMA+ECC) come ~8% da emu thread na FMV.
+- `PREF`→`PRFM` implementado e A/B no DOA2: ruído. Binário de teste
+  (`/home/ark/flycast_test.so`) tem ainda `glDrawRangeElements` e
+  `FC_TEX_ALWAYS_UPDATE`; core ativo intocado.
+- Scripts novos no device: `ipc_game.sh` (perf stat por janela na emu thread
+  + timeline por mtime), `l1i_game.sh` (amostragem por evento de L1I).
+- **Continuação (usuário não aceitou "FMV é gargalo"):** medido em tempo
+  EMULADO com `FC_BLOCK_PROF` (estendido): 171M instr SH4 por segundo
+  emulado na FMV, ~88% de código real (decoder, divisão por software,
+  middleware CRI), idle já barato. O próprio SH4 real estaria quase cheio. O
+  nosso teto é ~9 ciclos host por instrução SH4 (~85%), e o C++ na emu thread
+  leva ao ~70%. `tech_debits.md` 4.26.
+- **Otimização do JIT a partir do dump do código gerado (pedido do usuário):**
+  `FC_DUMP_BLOCK` nos 14 blocos quentes da FMV mostrou que cada acesso à RAM
+  emulada custava 5 instruções ARM (mov→w0, add, ldr/str, nop, mov). Feito o
+  acesso compacto (`tech_debits.md` 4.27): base em `x13`, `ldr/str [x13, wA,
+  uxtw]`, trampolim no fault. FMV do RE CV **71% → 82-83%** (2×2 rodadas).
+  Bateria de 18 jogos, 1ª passada: sem crash, mas **Shenmue 76→68%,
+  Soulcalibur 91→79%, KOF Evo 99,5→95%** — o trampolim salvava v16-v31 +
+  LR em toda execução de site reescrito (SQ/hardware), onde antes havia um
+  `bl` direto. Corrigido: stubs sem salvamento, genérico salva só os S16-S31
+  vivos no site (máscara gravada na emissão). Junto: acesso compacto de 64
+  bits e `ZeroExtendLoadPass` (ssa.h: `mov.b`+`extu.b` → `ldrb`,
+  `FC_NO_ZX_LOAD=1` desliga). Achado o bug latente 4.28 (slow path reescrito
+  não salvava S16-S31). 2ª passada da bateria em andamento.
+- **Resultado final da sessão (binário de teste `/home/ark/flycast_test.so`,
+  core ativo intocado):** acesso compacto + 64 bits + leitura sem sinal +
+  trampolins enxutos. FMV do RE CV **71% → 83%** (confirmado no binário
+  final). Bateria de 18 jogos sem crash; ganhos em Soulcalibur (88→93%),
+  meltybld (80→87%), DOA2 (+1pt), SA2 (+1pt), mslug6 (+10% fps); kofnw com
+  emulação 9% mais barata mas fps pior por pacing (4.29). **mslug6 bimodal
+  confirmado em número** (4.22): rodada antiga a 99,3% e outra a 66,6% no
+  mesmo binário. Um erro meu registrado: li o "64% → 83,5%" da bateria como
+  ganho, era troca de modo.
+
+### 2026-09-23 — flycast2026: novo nome do nosso core, upstream oficial instalado
+
+- Prefixo de opções do fork: `reicast_` → `flycast2026_`
+  (`libretro_core_option_defines.h`). `library_name` segue "Flycast" com
+  versão sem "v" de propósito: o retrorun3 continua aplicando os quirks de
+  core legado (não chamar `retro_unload_game`) e os savestates
+  `*.fc2021-rrstate.auto` continuam sendo lidos.
+- Device: `flycast2026_libretro.so` (+ `.info`) = binário final (acesso
+  compacto, 64 bits, leitura sem sinal, trampolins enxutos, SQ,
+  `glDrawRangeElements` LIGADO). `flycast_libretro.so` = flyinghead/flycast
+  v2.7-42-g869038f40 (backup do anterior em
+  `flycast_libretro.so.bak-fork-pre-upstream`). `retrorun.cfg` e
+  `retroarch-core-options.cfg`: `reicast_*` removidos, 18 chaves
+  `flycast2026_*` com a configuração medida (backups `*.bak-pre-flycast2026`).
+  ES: flycast2026 primeiro em retrorun3/retrorun3go2/retroarch nos 3
+  sistemas, padrão dos sistemas e 7 jogos fixados migrados para flycast2026
+  (backups `*.bak-flycast2026-1790166999`). Scripts `*.sh` não precisaram
+  mudar (já carregam `"$2"_libretro.so`).
+- **`glDrawRangeElements` medido (A/B 2×2, KOF Evolution na chuva):**
+  **31,1 → 54,2/54,3 fps**, render 18,7 → 13,9ms; a velocidade cai 100% →
+  92% porque agora a fila faz a emulação esperar o render (4.29).
+- Upstream no device: SA2 (boot) 32 fps/59%, sfz3ugd 50 fps/90%; roda como
+  core moderno no retrorun3.
+- Soulcalibur congelou no boot pelo ES com flycast2026 (4.30), não
+  investigado a pedido do usuário.
+- Paliativo da fila (4.29): espera só com render ≤ 75% do intervalo
+  (`FC_AUTOSKIP_MARGIN`), instalado como flycast2026 **sem medição** (usuário
+  precisou sair). Backup: `flycast2026_libretro.so.bak-pre-margin`. Para
+  benchmarks do core novo usar `~/bench_2026.sh` (cfg `retrorun_dbg3.cfg`
+  com chaves `flycast2026_`; o `retrorun_dbg2.cfg` antigo só tem `reicast_`).

@@ -1,5 +1,7 @@
 #include <math.h>
 #include <string.h>
+#include <cstdio>
+#include <cstdlib>
 
 #include <libretro.h>
 
@@ -32,8 +34,16 @@
 #ifndef GL_R8
 #define GL_R8 0x8229
 #endif
+#ifndef GL_FRAMEBUFFER_BINDING
+#define GL_FRAMEBUFFER_BINDING 0x8CA6
+#endif
 typedef void (*PFN_glInvalidateFramebuffer)(GLenum target, GLsizei numAttachments, const GLenum *attachments);
 static PFN_glInvalidateFramebuffer glInvalidateFramebuffer_;
+// GLES3 glDrawRangeElements (headers here are GLES2). With only glDrawElements
+// the Mali driver scans every draw's indices on the CPU for their min/max
+// (KOF Evolution: ~10% of the render thread in that one loop); DrawList passes
+// the range it already knows instead. FC_NO_DRAW_RANGE=1 keeps glDrawElements.
+PFN_glDrawRangeElements_fc glDrawRangeElements_;
 
 GLCache glcache;
 gl_ctx gl;
@@ -505,6 +515,8 @@ void findGLVersion()
 			gl.gl_version = "GLES3";
 			gl.glsl_version_header = "#version 300 es";
 			glInvalidateFramebuffer_ = (PFN_glInvalidateFramebuffer)eglGetProcAddress("glInvalidateFramebuffer");
+			if (getenv("FC_NO_DRAW_RANGE") == nullptr)
+				glDrawRangeElements_ = (PFN_glDrawRangeElements_fc)eglGetProcAddress("glDrawRangeElements");
 			// GLSL ES 3.00 tem textureSize(); o shader de paleta bilinear
 			// (pp_Palette == 2) so compila daqui pra frente.
 			g_paletteBilinearSupported = true;
@@ -895,6 +907,8 @@ static void upload_vertex_indices()
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER,pvrrc.idx.bytes(),pvrrc.idx.head(),GL_STREAM_DRAW);
 }
 
+static void fc_dump_framebuffer();
+
 static bool RenderFrame(void)
 {
 	int vmu_screen_number = 0 ;
@@ -1160,6 +1174,30 @@ static bool RenderFrame(void)
 
 	if (is_rtt)
 		ReadRTTBuffer();
+	else
+	{
+		// FC_FB_OPAQUE: force the final framebuffer alpha to 1. On real
+		// hardware the framebuffer is RGB565 with no alpha, but this GL FBO
+		// keeps the alpha of the topmost draw. A frontend that composites the
+		// frame by alpha (RetroRun's window has an alpha channel) then shows it
+		// semi-transparent: darker dots, disappearing sprites, see-through
+		// HUD. A color-masked clear sets alpha=1 everywhere and leaves RGB
+		// untouched. Diagnostic for the MBAA transparency glitch.
+		static int fc_fb_opaque = -1;
+		if (fc_fb_opaque == -1)
+		{
+			const char *e = getenv("FC_FB_OPAQUE");
+			fc_fb_opaque = e != nullptr ? atoi(e) != 0 : 1;
+		}
+		if (fc_fb_opaque)
+		{
+			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+			glClearColor(0.f, 0.f, 0.f, 1.f);
+			glClear(GL_COLOR_BUFFER_BIT);
+			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		}
+		fc_dump_framebuffer();
+	}
 
 	// Tell the driver we're done with depth/stencil for whichever framebuffer
 	// is still bound here (the RTT one if is_rtt, otherwise the frontend's
@@ -1199,6 +1237,93 @@ void rend_set_fb_scale(float x, float y)
 // Process time) and TexCache.CollectCleanup().
 extern bool g_taSplitEnabled;
 u64 g_taLockUs, g_taCleanupUs;
+
+// FC_FB_DUMP: opt-in framebuffer dump for visual glitch diagnosis. Reads the
+// frontend framebuffer back and writes PPMs, so a scene can be compared
+// across runs without a screenshot hotkey. FC_FB_DUMP=<first frame to dump>,
+// FC_FB_DUMP_N=<how many> (default 1). Output dir FC_FB_DUMP_DIR or
+// /roms2/bios/dc/fbdump.
+static void fc_dump_framebuffer()
+{
+	static int first = -2, count = 1, step = 1, frame = 0;
+	if (first == -2)
+	{
+		const char *e = getenv("FC_FB_DUMP");
+		first = e != nullptr ? atoi(e) : -1;
+		const char *n = getenv("FC_FB_DUMP_N");
+		count = n != nullptr ? atoi(n) : 1;
+		const char *s = getenv("FC_FB_DUMP_STEP");
+		step = s != nullptr ? atoi(s) : 1;
+		if (step < 1)
+			step = 1;
+	}
+	if (first < 0)
+		return;
+	int idx = frame - first;
+	frame++;
+	if (idx < 0 || idx % step != 0 || idx / step >= count)
+		return;
+	idx /= step;
+
+	int w = screen_width, h = screen_height;
+	if (w <= 0 || h <= 0)
+		return;
+	// Do NOT rebind: read from whatever framebuffer is bound right now (the
+	// frontend FBO the strips were just drawn into). Rebinding
+	// hw_render.get_current_framebuffer() read black, so log what's bound.
+	GLint fbo = -1, vp[4] = {0,0,0,0};
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
+	glGetIntegerv(GL_VIEWPORT, vp);
+	u8 *px = (u8 *)malloc((size_t)w * h * 4);
+	if (px == nullptr)
+		return;
+	memset(px, 0xAB, (size_t)w * h * 4);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	while (glGetError() != GL_NO_ERROR) {}
+	// Mali rejects GL_RGB readback from this FBO (GL_INVALID_OPERATION); the
+	// RTT path uses GL_RGBA/GL_UNSIGNED_BYTE for the same reason.
+	glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	GLenum rerr = glGetError();
+	NOTICE_LOG(RENDERER, "FC_FB_DUMP fbo=%d vp=%d,%d,%d,%d err=%x", fbo, vp[0], vp[1], vp[2], vp[3], rerr);
+	const char *dir = getenv("FC_FB_DUMP_DIR");
+	if (dir == nullptr)
+		dir = "/roms2/bios/dc/fbdump";
+	char path[512];
+	snprintf(path, sizeof(path), "%s/frame_%04d.ppm", dir, idx);
+	FILE *f = fopen(path, "wb");
+	if (f != nullptr)
+	{
+		fprintf(f, "P6\n%d %d\n255\n", w, h);
+		// GL reads bottom-up; flip to top-down, dropping alpha
+		for (int y = h - 1; y >= 0; y--)
+		{
+			const u8 *row = &px[(size_t)y * w * 4];
+			for (int x = 0; x < w; x++)
+			{
+				u8 rgb[3] = { row[x * 4], row[x * 4 + 1], row[x * 4 + 2] };
+				fwrite(rgb, 1, 3, f);
+			}
+		}
+		fclose(f);
+		NOTICE_LOG(RENDERER, "Dumped framebuffer %s (%dx%d)", path, w, h);
+	}
+	// Also dump the alpha channel: the presentation path blends the core FBO
+	// by alpha, so a wrong alpha shows on screen while RGB looks fine.
+	snprintf(path, sizeof(path), "%s/alpha_%04d.pgm", dir, idx);
+	f = fopen(path, "wb");
+	if (f != nullptr)
+	{
+		fprintf(f, "P5\n%d %d\n255\n", w, h);
+		for (int y = h - 1; y >= 0; y--)
+		{
+			const u8 *row = &px[(size_t)y * w * 4];
+			for (int x = 0; x < w; x++)
+				fputc(row[x * 4 + 3], f);
+		}
+		fclose(f);
+	}
+	free(px);
+}
 
 bool ProcessFrame(TA_context* ctx)
 {

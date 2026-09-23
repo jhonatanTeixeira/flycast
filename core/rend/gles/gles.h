@@ -12,6 +12,9 @@
 #include "postprocess.h"
 #include "glcache.h"
 
+typedef void (*PFN_glDrawRangeElements_fc)(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices);
+extern PFN_glDrawRangeElements_fc glDrawRangeElements_;
+
 #ifndef TEXTURE_MAX_ANISOTROPY_EXT
 #define TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
 #endif

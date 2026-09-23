@@ -147,7 +147,9 @@ struct shil_opcode
 	shilop op;
 	u32 Flow;
 	u32 flags;
-	u32 flags2;
+	// bit 0 em shop_readm de 1/2 bytes: leitura SEM sinal (ZeroExtendLoadPass,
+	// ssa.h). Inicializado aqui porque as ops sao montadas em locais sem init.
+	u32 flags2 = 0;
 
 	shil_param rd,rd2;
 	shil_param rs1,rs2,rs3;

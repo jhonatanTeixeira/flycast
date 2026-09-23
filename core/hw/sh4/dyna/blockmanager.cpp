@@ -575,6 +575,43 @@ void bm_DumpHotBlocks(const std::string& file)
 				total_work > 0 ? cum * 100 / total_work : 0);
 	}
 
+	// Every block, for diffing two snapshots over a window (the counters are
+	// cumulative since boot). runs*cycles is EMULATED time, runs*host_ops is
+	// host work: a block that is cheap per run but eats emulated time is a
+	// wait loop, and emulated time is what the game's speed is made of.
+	{
+		FILE *fa = fopen((file + ".all").c_str(), "w");
+		if (fa != nullptr)
+		{
+			for (const Row& row : rows)
+				fprintf(fa, "%08X\t%u\t%u\t%u\t%u\t%u\n", row.addr, row.runs, row.host_ops,
+						row.guest_cycles, row.guest_ops, row.host_bytes);
+			fclose(fa);
+		}
+	}
+	// SH4 code of the blocks eating the most EMULATED time.
+	{
+		std::vector<Row> byCycles = rows;
+		std::sort(byCycles.begin(), byCycles.end(), [](const Row& a, const Row& b) {
+			return (double)a.runs * a.guest_cycles > (double)b.runs * b.guest_cycles; });
+		for (size_t i = 0; i < byCycles.size() && i < 16; i++)
+		{
+			RuntimeBlockInfoPtr blk;
+			for (auto& it : blkmap)
+				if (it.second->vaddr == byCycles[i].addr) { blk = it.second; break; }
+			if (!blk)
+				continue;
+			fprintf(f, "\n=== by-cycles #%zu block %08X  runs=%u cycles=%u host_ops=%u branch=%08X next=%08X ===\n",
+					i + 1, blk->vaddr, blk->runs, blk->guest_cycles, blk->host_opcodes, blk->BranchBlock, blk->NextBlock);
+			for (u32 pc = blk->vaddr; pc < blk->vaddr + blk->sh4_code_size; pc += 2)
+			{
+				u16 opcode = IReadMem16(pc);
+				const char *diss = OpDesc[opcode] != nullptr ? OpDesc[opcode]->diss : "?";
+				fprintf(f, "  SH4 %08X: %04X  %s\n", pc, opcode, diss);
+			}
+		}
+	}
+
 	// Detail for the hottest few: the SH4 code and the SHIL it compiled to.
 	// Needed to tell a genuinely hot routine apart from a spin loop waiting on
 	// a hardware flag -- the counts alone can't distinguish them.

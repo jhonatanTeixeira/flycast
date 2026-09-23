@@ -193,7 +193,21 @@ bool QueueRender(TA_context* ctx)
       extern bool SH4FastEnough;
       extern std::atomic<u32> g_rendWorkUsEma;
       u64 workCycles = (u64)g_rendWorkUsEma.load(std::memory_order_relaxed) * (SH4_MAIN_CLOCK / 1000000);
-      bool renderKeepsUp = workCycles != 0 && workCycles <= g_rendIntervalCyclesEma;
+      // Exige FOLGA, nao so "cabe": com o render no limite (KOF Evolution na
+      // chuva apos o glDrawRangeElements: 15,9ms de 16,7) a espera derrubava o
+      // jogo de 100% para 92% de velocidade, porque a emu thread ja estava
+      // saturada. So espera se o render usar ate `margin`% do intervalo do
+      // jogo (kofxi/MBAA: ~6ms de 16,7, seguem esperando). FC_AUTOSKIP_MARGIN
+      // ajusta (100 = regra antiga). docs/tech_debits.md 4.29.
+      static int margin = -1;
+      if (margin == -1)
+      {
+         const char *m = getenv("FC_AUTOSKIP_MARGIN");
+         margin = m != nullptr ? atoi(m) : 75;
+         if (margin <= 0 || margin > 100)
+            margin = 75;
+      }
+      bool renderKeepsUp = workCycles != 0 && workCycles * 100 <= (u64)g_rendIntervalCyclesEma * margin;
       if (rqueue && settings.rend.ThreadedRendering
             && (autoskip == 0 || (autoskip == 1 && SH4FastEnough && renderKeepsUp)))
       {

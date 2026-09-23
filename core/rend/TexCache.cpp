@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <unordered_map>
 #include <deps/xxhash/xxhash.h>
 #include <chrono>
 
@@ -554,6 +555,26 @@ void BaseTextureCacheData::PrintTextureName()
 
 //true if : dirty or paletted texture and hashes don't match
 bool BaseTextureCacheData::NeedsUpdate() {
+	// FC_TEX_ALWAYS_UPDATE (diagnostico, lento): reconverte e reenvia toda
+	// textura a cada uso. Se um glitch some com isto, a causa e invalidacao
+	// do cache de textura (VRAM mudou sem a textura ser marcada dirty).
+	static int alwaysUpdate = -1;
+	if (alwaysUpdate == -1)
+		alwaysUpdate = getenv("FC_TEX_ALWAYS_UPDATE") != nullptr ? 1 : 0;
+	if (alwaysUpdate == 1)
+	{
+		// Uma vez por frame por textura: reenviar a cada uso levava o MBAA a
+		// 800ms/frame. Basta para o teste: toda textura usada no frame reflete
+		// a VRAM daquele frame.
+		extern u32 FrameCount;
+		static std::unordered_map<const void*, u32> lastUpdate;
+		u32& last = lastUpdate[this];
+		if (last != FrameCount)
+		{
+			last = FrameCount;
+			return true;
+		}
+	}
 	bool rc = dirty != 0;
 	bool pal = false;
 	if (tex_type != TextureType::_8)

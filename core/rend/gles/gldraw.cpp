@@ -1,9 +1,29 @@
 #include "gles.h"
+#include <unordered_set>
 
 // FC_REND_SPLIT: draw calls issued per frame (every glDraw* below is counted).
 // Comma form so it also works as the body of an unbraced if.
 u32 g_glDrawCalls;
 #define FC_COUNT_DRAW g_glDrawCalls++,
+
+// FC_REND_SPLIT (opt-in, DOA2 2026-09-22): por que o batching (PP_SameGPUState)
+// nao funde mais strips. Conta, para cada par adjacente que interrompe uma
+// sequencia, qual campo difere. O item 6 do rendering_improvement_plan suspeita
+// que a comparacao de 32 bits cheia rejeita pares que SetGPState() trataria
+// igual (bits reservados/irrelevantes). So mede; nenhum custo sem FC_REND_SPLIT.
+extern bool g_rendSplitEnabled;
+u32 g_batchBreakPcw, g_batchBreakIsp, g_batchBreakTcw, g_batchBreakTsp, g_batchBreakTileclip;
+u32 g_batchBreakTotal;
+// Prêmio de reordenar OPACOS por estado (depth test torna a ordem irrelevante):
+// runs de estado por frame (pós-batching) vs chaves de estado DISTINTAS por
+// frame. Se distinct << runs, ordenar por estado funde muito mais; ~igual,
+// quase toda strip tem estado próprio e não há o que fundir.
+u32 g_opaqueRuns;
+u32 g_opaqueDistinctSum, g_opaqueFramesCounted;
+static std::unordered_set<u64> s_opaqueKeys;
+static u32 s_opaqueKeyFrame;
+static bool s_opaqueKeyFrameValid;
+
 
 /*
 
@@ -311,13 +331,59 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 		{
 			while (runEnd < end && runEnd->count > 2 && PP_SameGPUState(runEnd, params))
 				runEnd++;
+			if (g_rendSplitEnabled)
+			{
+				g_opaqueRuns++;
+				u64 key = (u64)(params->tcw.full) | ((u64)params->tsp.full << 24)
+						| ((u64)(params->isp.full & 0x1F) << 56)
+						| ((u64)(params->pcw.full & PCW_DRAW_MASK) << 61)
+						| ((u64)params->tileclip << 32);
+				if (s_opaqueKeyFrameValid && s_opaqueKeyFrame != FrameCount)
+				{
+					g_opaqueDistinctSum += (u32)s_opaqueKeys.size();
+					g_opaqueFramesCounted++;
+					s_opaqueKeys.clear();
+				}
+				s_opaqueKeyFrame = FrameCount;
+				s_opaqueKeyFrameValid = true;
+				s_opaqueKeys.insert(key);
+			}
+			if (runEnd < end && runEnd->count > 2)
+			{
+				const PolyParam* a = params;
+				const PolyParam* b = runEnd;
+				g_batchBreakTotal++;
+				bool pcwDiff = (a->pcw.full & PCW_DRAW_MASK) != (b->pcw.full & PCW_DRAW_MASK);
+				bool ispDiff = a->isp.full != b->isp.full;
+				bool tcwDiff = a->tcw.full != b->tcw.full;
+				bool tspDiff = a->tsp.full != b->tsp.full;
+				bool tileDiff = a->tileclip != b->tileclip;
+				if (pcwDiff) g_batchBreakPcw++;
+				if (ispDiff) g_batchBreakIsp++;
+				if (tcwDiff) g_batchBreakTcw++;
+				if (tspDiff) g_batchBreakTsp++;
+				if (tileDiff) g_batchBreakTileclip++;
+			}
 		}
 
 		SetGPState<Type,SortingEnabled>(params);
 
 		if (runEnd - params == 1)
 		{
-			FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, params->count, gl.index_type,
+			if (glDrawRangeElements_ != nullptr)
+			{
+				const u32 *pi = idx_base + params->first;
+				u32 lo = pi[0], hi = pi[0];
+				for (u32 i = 1; i < params->count; i++)
+				{
+					lo = std::min(lo, pi[i]);
+					hi = std::max(hi, pi[i]);
+				}
+				FC_COUNT_DRAW glDrawRangeElements_(GL_TRIANGLE_STRIP, lo, hi, params->count, gl.index_type,
+						(GLvoid*)(gl.get_index_size() * params->first));
+			}
+			else
+				FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, params->count, gl.index_type,
 						(GLvoid*)(gl.get_index_size() * params->first));
 		}
 		else
@@ -327,10 +393,16 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 			// (GL starts a fresh strip right after a restart index, exactly
 			// like a new, independent glDrawElements call would).
 			batchIdx.clear();
+			u32 lo = 0xFFFFFFFF, hi = 0;
 			for (PolyParam* p = params; p < runEnd; p++)
 			{
 				for (u32 i = 0; i < p->count; i++)
-					batchIdx.push_back(idx_base[p->first + i]);
+				{
+					u32 v = idx_base[p->first + i];
+					lo = std::min(lo, v);
+					hi = std::max(hi, v);
+					batchIdx.push_back(v);
+				}
 				if (p + 1 < runEnd)
 					batchIdx.push_back(0xFFFFFFFF);
 			}
@@ -347,7 +419,10 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 			{
 				glBufferData(GL_ELEMENT_ARRAY_BUFFER, batchIdx.size() * sizeof(u32), batchIdx.data(), GL_STREAM_DRAW);
 			}
-			FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
+			if (glDrawRangeElements_ != nullptr)
+				FC_COUNT_DRAW glDrawRangeElements_(GL_TRIANGLE_STRIP, lo, hi, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
+			else
+				FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
 			// Re-bind the main index buffer so unrelated draws (and the next
 			// DrawList call) keep using the un-batched geometry as before.
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs);

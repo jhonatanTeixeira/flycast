@@ -38,7 +38,13 @@ enum eFReg {
 };
 
 static eReg alloc_regs[] = { W19, W20, W21, W22, W23, W24, W25, W26, (eReg)-1 };
-static eFReg alloc_fregs[] = { S16, S17, S18, S19, S20, S21, S22, S23, S24, S25, S26, S27, S28, S29, S30, S31, S8, S9, S10, S11, S12, S13, S14, S15, (eFReg)-1 };
+// Ordem importa: os primeiros do pool sao alocados primeiro. S8-S15 sao
+// callee-saved (preservados pela funcao chamada -> NAO pagam Push/Pop em
+// runtime calls); S16-S31 sao caller-saved (pagam). Preferir os callee-saved
+// primeiro evita o PushCallerSaved/PopCallerSaved na maioria dos blocos (2D,
+// pouca pressao de FPU) e so usa os caller-saved em blocos de alta pressao
+// (3D, muitos floats vivos). Ver docs/tech_debits.md item 4.9.
+static eFReg alloc_fregs[] = { S8, S9, S10, S11, S12, S13, S14, S15, S16, S17, S18, S19, S20, S21, S22, S23, S24, S25, S26, S27, S28, S29, S30, S31, (eFReg)-1 };
 
 class Arm64Assembler;
 
@@ -52,6 +58,7 @@ struct Arm64RegAlloc : RegAlloc<eReg, eFReg
 
 	void PushCallerSaved();
 	void PopCallerSaved();
+	u16 LiveCallerSavedFMask();	// S16-S31 vivos agora, bit i = S16+i
 
 	void DoAlloc(RuntimeBlockInfo* block)
 	{

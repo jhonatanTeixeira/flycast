@@ -103,6 +103,7 @@ void DumpIfbCounts()
 #include "hw/sh4/sh4_core.h"
 #include "hw/sh4/dyna/ngen.h"
 #include "hw/sh4/sh4_mem.h"
+#include <unordered_map>
 #include "hw/sh4/sh4_rom.h"
 #include "hw/sh4/sh4_sched.h"
 #include "hw/mem/vmem32.h"
@@ -143,6 +144,12 @@ static void *sq_write_stub;
 // Stores into pages holding compiled code, by size 1/2/4/8 (index 0..3). See
 // bm_WriteMemCodePage() in blockmanager.cpp and docs/tech_debits.md 4.19.
 static void *codepage_write_stub[4];
+// Acessos compactos (item 4.27): quais S16-S31 estavam vivos em cada call site
+// (endereco RX da instrucao -> mascara, bit i = S16+i). So entra quem tem
+// algum; o trampolim do fault salva exatamente esses, como o GenCallRuntime
+// faria. Entrada velha de codigo descartado so faz salvar a mais -- nunca a
+// menos, porque todo site emitido com mascara != 0 sobrescreve a sua.
+static std::unordered_map<uintptr_t, u16> compact_live_fregs;
 extern u8 bm_code_page_locked[];
 extern u8 bm_code_chunks[];
 extern u8 *bm_ram_alias;
@@ -203,6 +210,7 @@ void ngen_init()
 void ngen_ResetBlocks()
 {
 	mainloop = NULL;
+	compact_live_fregs.clear();
 	sq_write_stub = nullptr;
 	for (auto& stub : codepage_write_stub)
 		stub = nullptr;
@@ -297,6 +305,26 @@ public:
 	Arm64Assembler() : Arm64Assembler(emit_GetCCPtr())
 	{
 	}
+
+	// x13 = base da RAM emulada (x28 + sizeof(Sh4Context)) para os acessos
+	// compactos (item 4.27). E caller-saved: qualquer chamada pode destrui-lo,
+	// e numa juncao de fluxo nao se sabe por onde se chegou. Entao vale so ate
+	// o proximo Bl/Blr ou Bind -- estes wrappers escondem os do MacroAssembler
+	// dentro desta classe, que e de onde todo o codigo do bloco e emitido.
+	bool memBaseValid = false;
+	void EnsureMemBase()
+	{
+		if (!memBaseValid)
+		{
+			Add(x13, x28, sizeof(Sh4Context));
+			memBaseValid = true;
+		}
+	}
+	using MacroAssembler::Bind;
+	void Bind(Label *label) { memBaseValid = false; MacroAssembler::Bind(label); }
+	using MacroAssembler::Bl;
+	void Bl(Label *label) { memBaseValid = false; MacroAssembler::Bl(label); }
+	void Blr(const Register& xn) { memBaseValid = false; MacroAssembler::Blr(xn); }
 	Arm64Assembler(void *buffer) : MacroAssembler((u8 *)buffer, emit_FreeSpace()), regalloc(this)
 	{
 		call_regs.push_back(&w0);
@@ -425,6 +453,7 @@ public:
 	{
 		//printf("REC-ARM64 compiling %08x\n", block->addr);
 		this->block = block;
+		memBaseValid = false;
 		CheckBlock(force_checks, block);
 
 		// run register allocator
@@ -1043,7 +1072,29 @@ public:
 						}
 						Blr(x9);
 					}
-					Bind(&not_sqw);
+					// PREF fora da Store Queue: o jogo esta pedindo prefetch de
+					// RAM (e assim que o SH4 esconde a latencia de memoria nos
+					// lacos de T&L/decode). Antes era descartado; o A53 e in-order
+					// e para em cada miss, entao repassa como PRFM do host. PRFM
+					// nunca gera falta, nem em pagina protegida/invalida.
+					// FC_NO_PREF_HINT=1 volta ao comportamento antigo.
+					static const bool noPrefHint = getenv("FC_NO_PREF_HINT") != nullptr;
+					if (!op.rs1.is_imm() && !noPrefHint && _nvmem_enabled() && !mmu_enabled())
+					{
+						Label done;
+						B(&done);
+						Bind(&not_sqw);
+						const Register& addr = regalloc.IsAllocg(op.rs1) ? regalloc.MapRegister(op.rs1) : w0;
+						if (!_nvmem_4gb_space())
+							Ubfx(x1, addr.X(), 0, 29);
+						else
+							Mov(w1, addr);	// zero-extends into x1
+						Add(x1, x1, sizeof(Sh4Context));
+						Prfm(PLDL1KEEP, MemOperand(x28, x1));
+						Bind(&done);
+					}
+					else
+						Bind(&not_sqw);
 				}
 				break;
 
@@ -1869,6 +1920,104 @@ public:
 		EnsureCodeSize(start_instruction, write_memory_rewrite_size);
 	}
 
+	// Slow path, fora da linha, de um acesso compacto (GenRead/WriteMemoryCompact)
+	// que deu fault. O fault handler troca a instrucao do acesso por um `b` para
+	// ca. Como nao conhecemos a alocacao do bloco daqui, salva LR e TODOS os
+	// vetores caller-saved (v16-v31) -- ao contrario do rewrite antigo, cujo
+	// PushCallerSaved() com regalloc vazio nao salvava nada (item 4.27).
+	// target: ReadMem/WriteMem generico ou um dos stubs (Store Queue, escrita
+	// em pagina de codigo), ja resolvido pelo chamador (ngen_Rewrite*).
+	// live_fregs: S16-S31 vivos no site (bit i = S16+i). Os stubs de SQ e de
+	// pagina de codigo se protegem sozinhos -- o chamador passa 0 para eles.
+	// LR nao e salvo: como no rewrite antigo, o codigo do bloco nao mantem x30
+	// vivo (todo GenCallRuntime o destroi).
+	void GenCompactTrampoline(bool is_read, u32 size, u32 rt, u32 rm, void *target, void *return_rx, bool is_unsigned = false, u16 live_fregs = 0)
+	{
+		CPURegList saved(CPURegister::kVRegister, 64, 0);
+		for (int i = 0; i < 16; i++)
+			if (live_fregs & (1 << i))
+				saved.Combine(VRegister::GetDRegFromCode(16 + i));
+		if ((saved.GetCount() % 2) != 0)
+			saved.Combine(d7);
+		if (!saved.IsEmpty())
+			PushCPURegList(saved);
+		Mov(w0, Register::GetWRegFromCode(rm));
+		if (!is_read)
+		{
+			if (size == 8)
+				Mov(x1, Register::GetXRegFromCode(rt));
+			else
+				Mov(w1, Register::GetWRegFromCode(rt));
+		}
+		GenBranchAbs(target, true);
+		if (is_read)
+		{
+			if (size == 1)
+			{
+				if (is_unsigned) Uxtb(w0, w0); else Sxtb(w0, w0);
+			}
+			else if (size == 2)
+			{
+				if (is_unsigned) Uxth(w0, w0); else Sxth(w0, w0);
+			}
+		}
+		if (!saved.IsEmpty())
+			PopCPURegList(saved);
+		if (is_read)
+		{
+			if (size == 8)
+				Mov(Register::GetXRegFromCode(rt), x0);
+			else
+				Mov(Register::GetWRegFromCode(rt), w0);
+		}
+		// O bloco pode seguir contando com x13 valido depois deste acesso.
+		Add(x13, x28, sizeof(Sh4Context));
+		GenBranchAbs(return_rx, false);
+	}
+
+	// Trampolim de site de Store Queue (escrita de 32 bits que deu fault em
+	// 0xE0000000-0xE3FFFFFF). Faz a escrita no sq_buffer aqui mesmo -- o mesmo
+	// que o sq_write_stub faz --, sem o bl/ret do stub: no kofnw (SQ enchida
+	// palavra a palavra, item 1.7) os desvios extras custavam ~3% de fps.
+	// Endereco fora da SQ (nao esperado no mesmo site) cai no WriteMem32.
+	void GenCompactTrampolineSQ(u32 rt, u32 rm, void *return_rx, u16 live_fregs)
+	{
+		const Register& addr = Register::GetWRegFromCode(rm);
+		const Register& data = Register::GetWRegFromCode(rt);
+		Label not_sq;
+		Lsr(w9, addr, 26);
+		Cmp(w9, 0x38);
+		B(&not_sq, ne);
+		And(w9, addr, 0x3f);
+		Sub(x10, x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, sq_buffer));
+		Str(data, MemOperand(x10, x9));
+		GenBranchAbs(return_rx, false);
+		Bind(&not_sq);
+		GenCompactTrampoline(false, 4, rt, rm, (void *)WriteMem32, return_rx, false, live_fregs);
+	}
+
+	void GenBranchAbs(void *target, bool link)
+	{
+		ptrdiff_t offset = reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(CC_RW2RX(GetBuffer()->GetStartAddress<void*>()));
+		verify(offset >= -128 * 1024 * 1024 && offset <= 128 * 1024 * 1024);
+		verify((offset & 3) == 0);
+		Label l;
+		BindToOffset(&l, offset);
+		if (link)
+			Bl(&l);
+		else
+			B(&l);
+	}
+
+	void FinalizeStub()
+	{
+		FinalizeCode();
+		emit_Skip(GetBuffer()->GetSizeInBytes());
+		vmem_platform_flush_cache(
+			CC_RW2RX(GetBuffer()->GetStartAddress<void*>()), CC_RW2RX(GetBuffer()->GetEndAddress<void*>()),
+			GetBuffer()->GetStartAddress<void*>(), GetBuffer()->GetEndAddress<void*>());
+	}
+
 
 private:
 	// Runtime branches/calls need to be adjusted if rx space is different to rw space.
@@ -1923,9 +2072,128 @@ private:
 			B(&code_label, cond);
 	}
 
+	// Acesso compacto a RAM emulada (item 4.27, FC_NO_COMPACT_MEM=1 desliga).
+	// O caminho rapido antigo gasta 5 instrucoes por leitura -- mov do endereco
+	// para w0, add do offset, ldr, nop de reserva e mov do resultado -- porque o
+	// rewrite em caso de fault precisa do endereco em w0 e de um slot fixo. Aqui
+	// sao 2: a base (x28 + sizeof(Sh4Context)) em x13, que o JIT nao usa para
+	// mais nada, e um ldr/str com os registradores alocados direto, indice
+	// estendido de 32 bits (UXTW). No fault, ngen_Rewrite reconhece a forma
+	// (Rn == x13) e troca SO essa instrucao por um `b` para um trampolim
+	// (GenCompactTrampoline). Dados de float passam por w15.
+	static bool CompactMemEnabled()
+	{
+		static int enabled = -1;
+		if (enabled == -1)
+			enabled = getenv("FC_NO_COMPACT_MEM") != nullptr ? 0 : 1;
+		return enabled == 1;
+	}
+
+	bool CompactMemUsable(const shil_opcode& op)
+	{
+		if (!CompactMemEnabled() || !_nvmem_enabled() || !_nvmem_4gb_space() || mmu_enabled())
+			return false;
+		u32 size = op.flags & 0x7f;
+#ifdef EXPLODE_SPANS
+		if (size != 1 && size != 2 && size != 4)
+			return false;
+#else
+		if (size != 1 && size != 2 && size != 4 && size != 8)
+			return false;
+#endif
+		return !op.rs1.is_imm();
+	}
+
+	const Register& CompactMemAddr(const shil_opcode& op)
+	{
+		if (op.rs3.is_null() && regalloc.IsAllocg(op.rs1))
+			return regalloc.MapRegister(op.rs1);
+		return GenMemAddr(op, &w14);
+	}
+
+	// Registra, para o acesso que vai ser emitido AGORA, os S16-S31 vivos.
+	void RecordCompactSite()
+	{
+		const u16 mask = regalloc.LiveCallerSavedFMask();
+		if (mask != 0)
+			compact_live_fregs[(uintptr_t)CC_RW2RX(GetCursorAddress<void*>())] = mask;
+	}
+
+	bool GenReadMemoryCompact(const shil_opcode& op)
+	{
+		if (!CompactMemUsable(op) || !op.rd.is_reg())
+			return false;
+		if ((op.flags & 0x7f) == 8)
+		{
+			// Par de floats (fmov.d / SZ=1): vai para o contexto, como no
+			// caminho antigo (Str(x0, ...)), mas sem os movs e o nop.
+			const Register& addr = CompactMemAddr(op);
+			EnsureMemBase();
+			RecordCompactSite();
+			Ldr(x15, MemOperand(x13, addr, UXTW));
+			Str(x15, sh4_context_mem_operand(op.rd.reg_ptr()));
+			return true;
+		}
+		if (op.rd.is_r64f())
+			return false;
+		const bool dstInt = regalloc.IsAllocg(op.rd);
+		const Register& addr = CompactMemAddr(op);
+		const Register& dst = dstInt ? regalloc.MapRegister(op.rd) : w15;
+		EnsureMemBase();
+		RecordCompactSite();
+		MemOperand mo(x13, addr, UXTW);
+		const bool zx = (op.flags2 & 1) != 0;
+		switch (op.flags & 0x7f)
+		{
+		case 1: if (zx) Ldrb(dst, mo); else Ldrsb(dst, mo); break;
+		case 2: if (zx) Ldrh(dst, mo); else Ldrsh(dst, mo); break;
+		default: Ldr(dst, mo); break;
+		}
+		if (!dstInt)
+			host_reg_to_shil_param(op.rd, w15);
+		return true;
+	}
+
+	bool GenWriteMemoryCompact(const shil_opcode& op)
+	{
+		if (!CompactMemUsable(op))
+			return false;
+		if ((op.flags & 0x7f) == 8)
+		{
+			if (!op.rs2.is_reg())
+				return false;
+			const Register& addr = CompactMemAddr(op);
+			Ldr(x15, sh4_context_mem_operand(op.rs2.reg_ptr()));
+			EnsureMemBase();
+			RecordCompactSite();
+			Str(x15, MemOperand(x13, addr, UXTW));
+			return true;
+		}
+		if (op.rs2.is_r64f())
+			return false;
+		const Register& addr = CompactMemAddr(op);
+		const Register* data = &w15;
+		if (op.rs2.is_reg() && regalloc.IsAllocg(op.rs2))
+			data = &regalloc.MapRegister(op.rs2);
+		else
+			shil_param_to_host_reg(op.rs2, w15);
+		EnsureMemBase();
+		RecordCompactSite();
+		MemOperand mo(x13, addr, UXTW);
+		switch (op.flags & 0x7f)
+		{
+		case 1: Strb(*data, mo); break;
+		case 2: Strh(*data, mo); break;
+		default: Str(*data, mo); break;
+		}
+		return true;
+	}
+
 	void GenReadMemory(const shil_opcode& op, size_t opid, bool optimise)
 	{
 		if (GenReadMemoryImmediate(op))
+			return;
+		if (optimise && GenReadMemoryCompact(op))
 			return;
 
 		GenMemAddr(op, call_regs[0]);
@@ -1936,6 +2204,13 @@ private:
 		if (!optimise || !GenReadMemoryFast(op, opid))
 			GenReadMemorySlow(size);
 
+		if (op.flags2 & 1)	// ZeroExtendLoadPass: leitura sem sinal
+		{
+			if (size == 1)
+				Uxtb(w0, w0);
+			else if (size == 2)
+				Uxth(w0, w0);
+		}
 		if (size < 8)
 			host_reg_to_shil_param(op.rd, w0);
 		else
@@ -2147,6 +2422,8 @@ private:
 	void GenWriteMemory(const shil_opcode& op, size_t opid, bool optimise)
 	{
 		if (GenWriteMemoryImmediate(op))
+			return;
+		if (optimise && GenWriteMemoryCompact(op))
 			return;
 
 		GenMemAddr(op, call_regs[0]);
@@ -2592,8 +2869,112 @@ static const u32 op_sizes[] = {
 		4,
 		8,
 };
+// Acesso compacto (GenRead/WriteMemoryCompact): ldr/str (registrador, UXTW)
+// com base x13. Mesmo layout de bits do armv8_mem_ops acima, com option=010.
+static const u32 compact_mem_ops[] = {
+		0x38E04800,		// Ldrsb w
+		0x78E04800,		// Ldrsh w
+		0xB8604800,		// Ldr w
+		0x38204800,		// Strb
+		0x78204800,		// Strh
+		0xB8204800,		// Str w
+		0xF8604800,		// Ldr x
+		0xF8204800,		// Str x
+		0x38604800,		// Ldrb w (sem sinal, ZeroExtendLoadPass)
+		0x78604800,		// Ldrh w
+};
+static const bool compact_read_ops[] = { true, true, true, false, false, false, true, false, true, true };
+static const u32 compact_op_sizes[] = { 1, 2, 4, 1, 2, 4, 8, 8, 1, 2 };
+static const bool compact_unsigned[] = { false, false, false, false, false, false, false, false, true, true };
+
+static bool DecodeCompactMem(u32 op, bool& is_read, u32& size, u32& rt, u32& rm, bool *is_unsigned = nullptr)
+{
+	if (((op >> 5) & 31) != 13)
+		return false;
+	const u32 masked = op & STR_LDR_MASK;
+	for (int i = 0; i < ARRAY_SIZE(compact_mem_ops); i++)
+		if (masked == compact_mem_ops[i])
+		{
+			is_read = compact_read_ops[i];
+			size = compact_op_sizes[i];
+			if (is_unsigned != nullptr)
+				*is_unsigned = compact_unsigned[i];
+			rt = op & 31;
+			rm = (op >> 16) & 31;
+			return true;
+		}
+	return false;
+}
+
+// Gera o trampolim do slow path e troca a instrucao do acesso por um `b` para
+// ele. host_pc nao muda: ao voltar do handler, a CPU executa o `b`.
+static bool RewriteCompactMem(unat host_pc, bool is_read, u32 size, u32 rt, u32 rm, void *target, bool is_unsigned = false, bool is_stub = false, bool is_sq = false)
+{
+	u16 live = 0;
+	if (!is_stub || is_sq)
+	{
+		auto it = compact_live_fregs.find((uintptr_t)host_pc);
+		if (it != compact_live_fregs.end())
+			live = it->second;
+	}
+	if (emit_FreeSpace() < 1024)
+	{
+		ERROR_LOG(DYNAREC, "RewriteCompactMem: sem espaco no cache de codigo para o trampolim");
+		return false;
+	}
+	Arm64Assembler *a = new Arm64Assembler();
+	void *tramp_rx = CC_RW2RX(a->GetBuffer()->GetStartAddress<void*>());
+	if (is_sq)
+		a->GenCompactTrampolineSQ(rt, rm, (void *)(host_pc + 4), live);
+	else
+		a->GenCompactTrampoline(is_read, size, rt, rm, target, (void *)(host_pc + 4), is_unsigned, live);
+	a->FinalizeStub();
+	delete a;
+
+	u32 *code_rw = (u32 *)CC_RX2RW(host_pc);
+	ptrdiff_t off = (u8 *)tramp_rx - (u8 *)host_pc;
+	verify(off >= -128 * 1024 * 1024 && off < 128 * 1024 * 1024);
+	*code_rw = 0x14000000 | ((u32)(off >> 2) & 0x03FFFFFF);
+	vmem_platform_flush_cache((void *)host_pc, (u8 *)host_pc + 4, code_rw, (u8 *)code_rw + 4);
+	extern u32 g_compactMemRewrites;
+	g_compactMemRewrites++;
+	// FC_COMPACT_LOG: confirma que o caminho de fault -> trampolim roda.
+	static int logLeft = getenv("FC_COMPACT_LOG") != nullptr ? std::max(1, atoi(getenv("FC_COMPACT_LOG"))) : 0;
+	if (logLeft > 0)
+	{
+		logLeft--;
+		fprintf(stderr, "COMPACT rewrite #%u pc=%zx read=%d size=%u rt=w%u rm=w%u target=%p\n",
+				g_compactMemRewrites, (size_t)host_pc, (int)is_read, size, rt, rm, target);
+	}
+	return true;
+}
+u32 g_compactMemRewrites;
+
+static void *CompactSlowTarget(bool is_read, u32 size)
+{
+	if (is_read)
+		return size == 1 ? (void *)ReadMem8 : size == 2 ? (void *)ReadMem16 : size == 4 ? (void *)ReadMem32 : (void *)ReadMem64;
+	return size == 1 ? (void *)WriteMem8 : size == 2 ? (void *)WriteMem16 : size == 4 ? (void *)WriteMem32 : (void *)WriteMem64;
+}
+
 bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 {
+	{
+		bool c_read, c_unsigned = false; u32 c_size, c_rt, c_rm;
+		if (DecodeCompactMem(*(u32 *)CC_RX2RW(host_pc), c_read, c_size, c_rt, c_rm, &c_unsigned))
+		{
+			static const bool noSqStubC = getenv("FC_NO_SQ_STUB") != nullptr;
+			void *target = CompactSlowTarget(c_read, c_size);
+			bool stub = false;
+			if (!noSqStubC && !c_read && c_size == 4 && sq_write_stub != nullptr && ((u32)acc >> 26) == 0x38)
+			{
+				target = sq_write_stub;
+				stub = true;
+			}
+			return RewriteCompactMem(host_pc, c_read, c_size, c_rt, c_rm, target, c_unsigned, stub, stub);
+		}
+	}
+
 	//LOGI("ngen_Rewrite pc %zx\n", host_pc);
 	u32 *code_ptr = (u32 *)CC_RX2RW(host_pc);
 	u32 armv8_op = *code_ptr;
@@ -2668,6 +3049,22 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 // point THIS store site at the code-page stub and keep the page protected.
 bool ngen_RewriteCodePageStore(unat& host_pc)
 {
+	{
+		bool c_read; u32 c_size, c_rt, c_rm;
+		if (DecodeCompactMem(*(u32 *)CC_RX2RW(host_pc), c_read, c_size, c_rt, c_rm))
+		{
+			if (c_read)
+				return false;
+			const int cidx = c_size == 1 ? 0 : c_size == 2 ? 1 : c_size == 4 ? 2 : 3;
+			if (codepage_write_stub[cidx] == nullptr)
+				return false;
+			if (!RewriteCompactMem(host_pc, false, c_size, c_rt, c_rm, codepage_write_stub[cidx], false, true))
+				return false;
+			extern u32 g_codePageRewrites;
+			g_codePageRewrites++;
+			return true;
+		}
+	}
 	u32 *code_ptr = (u32 *)CC_RX2RW(host_pc);
 	const u32 masked = *code_ptr & STR_LDR_MASK;
 	u32 size = 0;
@@ -2759,6 +3156,19 @@ void Arm64RegAlloc::Preload_FPU(u32 reg, eFReg nreg)
 void Arm64RegAlloc::Writeback_FPU(u32 reg, eFReg nreg)
 {
 	assembler->Str(VRegister(nreg, 32), assembler->sh4_context_mem_operand(GetRegPtr(reg)));
+}
+
+u16 Arm64RegAlloc::LiveCallerSavedFMask()
+{
+	u16 mask = 0;
+	for (auto const& it : reg_alloced)
+		if (IsFloat(it.first))
+		{
+			eFReg hreg = (eFReg)it.second.host_reg;
+			if (hreg >= S16 && hreg <= S31)
+				mask |= 1 << (hreg - S16);
+		}
+	return mask;
 }
 
 void Arm64RegAlloc::PushCallerSaved()
