@@ -6,6 +6,24 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-09-24): `jit_armv8_a` v0 — correta, ganho pendente
+
+**done (v0, correta e validada)** — backend JIT ARM64 novo em
+`core/rec-ARM64/jit_armv8_a.*`, selecionado por `FC_JIT_ARMV8_A=1` (só sem MMU),
+ao lado do `rec_arm64.cpp` sem alterar o comportamento dele. r0-r7 fixos em
+x19-x26, resto no `Sh4Context`, nativas de ALU/desvio/mov/ifb/FPU(NEON)/memória
+(C++), resto em `shil_chf`. **IDÊNTICO ao backend antigo em Shenmue II, DOA2 e
+MBAA** (`FC_STATE_HASH`+`FC_AUDIO_DUMP`+`state_compare.py`) e auto-determinístico.
+Detalhe em `docs/tech_debits.md` 4.51 e `docs/history.md` 2026-09-24.
+
+**in progress (ganho de velocidade)** — ordem dos próximos passos: (1) fastmem
++ trampolins de fault (item 4.27) para leitura/escrita; (2) T em registrador e
+`bf/bt +0` como `csel`/`fcsel`; (3) blocos maiores (laços); (4) `jsr`/`bsr` como
+`bl` e `rts` como `ret` com checagem; (5) `pref`/SQ inline. Métrica por jogo:
+retrorun `--benchmark`, velocidade + fps + p50/p95/p99. Baseline da v0:
+DOA2 89,3%→40,8%, Shenmue II 60,5%→24,5%, MBAA 100,1%→86,8% (esqueleto correto,
+memória por chamada C++ e flush/reload em toda escrita).
+
 ## Agora (2026-09-22): DOA2 — diagnosticado (emu-bound), sem fix
 
 **diagnóstico done, correção pendente** — Dead or Alive 2 (Dreamcast, 60fps
