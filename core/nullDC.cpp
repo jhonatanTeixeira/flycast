@@ -137,6 +137,11 @@ static void LoadSpecialSettingsCPU(void)
 
 static void LoadSpecialSettings(void)
 {
+   {
+      // Override de clock por jogo (lut_games.sh4clock); zera a cada jogo.
+      extern float g_lutSh4Clock;
+      g_lutSh4Clock = 0.f;
+   }
    unsigned i;
 
    char prod_id[sizeof(ip_meta.product_number) + 1] = {0};
@@ -195,6 +200,12 @@ static void LoadSpecialSettings(void)
          {
          	NOTICE_LOG(BOOT, "[Hack]: Disabling WinCE virtual memory.");
             settings.dynarec.disable_vmem32 = true;
+         }
+         if (lut_games[i].sh4clock > 0.f)
+         {
+            extern float g_lutSh4Clock;
+            g_lutSh4Clock = lut_games[i].sh4clock;
+            NOTICE_LOG(BOOT, "[Hack] SH4 clock multiplier %.2f", g_lutSh4Clock);
          }
          if (lut_games[i].no_rgb_component == 1)
          {

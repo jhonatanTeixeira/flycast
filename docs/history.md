@@ -2366,3 +2366,7 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   cobrado x30 como se fosse espera (25% do tempo emulado). Corrigido: Le Mans
   18,6 → 24,2 fps do jogo no d10; Zombie → 87,5%. Instalado (anterior em
   `.bak-pre-scanfix`).
+- **Le Mans travado nos 30 (4.42):** override de clock por jogo na tabela
+  do core (T15111D 50 → 0.8). Com o cfg d10, Le Mans 30,1 frames/s a 100%;
+  DOA2 inalterado. Usuário: "isso é o le mans que eu me lembro". Instalado
+  (anterior em `.bak-pre-lemanslut`).

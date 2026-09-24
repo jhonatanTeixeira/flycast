@@ -19,6 +19,7 @@
 #define BLOCK_MAX_SH_OPS_HARD 511
 
 static RuntimeBlockInfo* blk;
+float g_lutSh4Clock;	// definido por LoadSpecialSettings (nullDC.cpp)
 
 static const char idle_hash[] =
 	//BIOS
@@ -1399,7 +1400,8 @@ _end:
 	}
 	// Boost dynarec always
 	/*if (mmu_enabled())*/
-	blk->guest_cycles = blk->guest_cycles * settings.dreamcast.sh4clock;
+	// Override por jogo (rom_luts.h, lut_games.sh4clock) vence a opcao do core.
+	blk->guest_cycles = blk->guest_cycles * (g_lutSh4Clock > 0.f ? g_lutSh4Clock : settings.dreamcast.sh4clock);
 
 	//make sure we don't use wayy-too-many cycles
 	blk->guest_cycles = std::min(blk->guest_cycles,max_cycles);

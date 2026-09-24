@@ -17,6 +17,7 @@ struct game_type
    float extra_depth_scale;			/* 1, default */
    int disable_vmem32;				/* 0 = normal, 1 = disable */
    int no_rgb_component;			/* 0 = normal, 1 = disable */
+   float sh4clock;					/* 0 = sem decisao; multiplicador de ciclos (docs/tech_debits.md 4.42) */
 };
 
 struct game_type_naomi
@@ -36,6 +37,12 @@ static struct game_type lut_games[] =
 {
    /* Update mode fullspeed */
    { "T1210N    ",  1, -1, -1, -1,  -1, 1, 0, 0 },           /* Street Fighter III Double Impact */
+
+   /* Clock do SH4 (multiplicador de ciclos por bloco) -- tech_debits 4.42 */
+   /* Le Mans usa o tempo livre do frame num laco de contagem: com o clock
+      nominal (1.0) fica em ~24 frames/s; com 0.8 trava nos 30 do console.
+      Jogos que ESPERAM no tempo livre (DOA2, Shenmue) perdem com isso. */
+   { "T15111D 50", -1, -1, -1, -1,  -1, 1, 0, 0, 0.8f },     /* Le Mans 24 Hours (Europe) */
 
    /* Alpha sort mode */
    { "MK-5100050", -1,  1, -1, -1,  -1, 1, 0, 0 },           /* Sonic Adventure */

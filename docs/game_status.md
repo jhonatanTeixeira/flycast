@@ -259,3 +259,7 @@ Revenge 78%; Shenmue (cena pesada do save) 82%. Ver `tech_debits.md` 4.32-4.35.
 Velocidade 100%, mas o jogo roda a ~16 frames/s em tempo emulado (laço de
 atraso por contagem + SH4 emulado 20% lento). Com `sh4clock = d10` (novo
 padrão): ~19 frames/s. Próximo passo: pular o laço de atraso. Ver 4.39.
+**Atualização 2026-09-24:** Le Mans a **30 fps travados** (o ritmo do
+console), avaliado pelo usuário: "isso é o le mans que eu me lembro".
+Caminho: strlen cobrado x30 corrigido (4.41), laço de atraso pulado (4.40),
+clock 0.8 só para ele (4.42).
