@@ -136,6 +136,54 @@ Achados medidos, em ordem de peso.
     bytes (~7×), o que cabia no I-cache de 16 KB do SH4 transborda aqui. Bate
     com o L1I medido em 4.24 (FMV do RE CV).
 
+## Tabela de despacho (FPCB) e desvio indireto — medido
+
+2026-09-25, Shenmue II, save pesado.
+
+- **Volume:** `FC_JIT_DUMP` também grava a sequência de destinos das saídas
+  dinâmicas (`dyn-<pid>.bin`). São 14 M saídas em 7 s emulados, ~2 M por
+  segundo emulado e **~1,2 M por segundo real** a 60%: **82% `rts`**, 17%
+  `jsr @Rn` e 1% `jmp @Rn`.
+- **Destinos:** 4.903 distintos; 945 cobrem 90% das saídas.
+- **Localidade na tabela:** 715 páginas de 4 KB tocadas, 127 cobrem 90%. Só
+  com a tabela, um TLB de 512 entradas erraria 0,6% das saídas, o L1D 4,2%, o
+  L2 0,1%. O device não tem huge pages: o kernel não tem THP, tudo é 4 KB.
+
+**Custo da tabela** (`tools/fpcb_bench.c`): replay de 8 M saídas reais, com
+carga dependente como `ldr`+`br`, na tabela de 128 MB contra uma tabela
+compacta com os mesmos destinos (38 KB).
+
+| Cenário | FPCB | Compacta | Diferença |
+|---|---|---|---|
+| Só a tabela | 14,0 ns | 8,3 ns | **5,7 ns** |
+| + 16 leituras de RAM em 1 MB | 213,2 ns | 204,7 ns | 8,5 ns |
+| + 16 leituras de RAM em 16 MB | 352,8 ns | 336,9 ns | 16 ns |
+
+As 16 leituras por saída imitam os ~16 acessos à RAM do guest que o
+Shenmue II faz entre duas saídas dinâmicas.
+
+**Custo do desvio indireto** (`tools/dispatch_branch_bench.c` +
+`tools/jit_dyn_offsets.py`): `ret` posto no endereço real do bloco-alvo no
+cache de código, `blr` pela sequência real.
+
+| Cenário | Custo por saída |
+|---|---|
+| Destino fixo | 5,4 ns |
+| Destinos reais, código compacto | 15,5 ns (**~10 ns de previsão errada**) |
+| Destinos reais, layout real | 18,8 ns (+3,3 ns de layout, I-TLB/L1I) |
+
+**Conclusão:** o despacho custa ~20–30 ns a mais que o ideal por saída
+dinâmica: ~6–16 ns da tabela e ~10–13 ns da previsão do desvio. A 1,2 M
+saídas/s, isso é **~2,5–3,5% do tempo da emu thread**.
+- **A hipótese de que a tabela seria cara não se confirma:** o layout de
+  128 MB responde por ~1–2%.
+- **Os microbenchmarks são limite inferior:** isolados, não dividem TLB, BTB
+  e caches com o resto do JIT.
+- **A parte evitável é o `rts`**, 82% das saídas: o SH4 volta sempre para
+  depois do `jsr`/`bsr`. Espelhar a chamada do guest numa chamada do host
+  (`bl`/`ret`) deixa o preditor de retorno do A53 acertar, e dispensa a
+  tabela no caso comum.
+
 ## Implicações para o `jit_armv8_a`
 
 Insumos de desenho, não decisões:
@@ -158,6 +206,10 @@ Insumos de desenho, não decisões:
   caso crítico.
 - **`pref`/SQ inline para o stub do TA, com o ponteiro em registrador fixo:**
   12 instruções → ~5.
+- **Retorno previsível:** `jsr`/`bsr` do guest como chamada do host e `rts`
+  como `ret` com checagem do endereço, ou uma pilha de retorno própria. Tira
+  ~2–3% do despacho e a maior parte das leituras da FPCB. A tabela em si
+  pode ficar.
 - **Continua valendo:** fastmem compacto (~2 instruções por acesso à RAM) e os
   truques de espera (avanço até o evento).
 

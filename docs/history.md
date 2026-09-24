@@ -2417,3 +2417,8 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   T/jdyn pela memória, entrada/saída de bloco pequeno); cache de código não
   estoura, o L1I sim (Shenmue II: 119 KB quentes). Nome do JIT novo, a pedido
   do usuário: `jit_armv8_a` (à parte, sem descartar os existentes).
+- Tabela de despacho medida (4.46): sequência real de 14M saídas dinâmicas do
+  Shenmue II reproduzida no device. Tabela FPCB custa ~1-2%, previsão do
+  desvio indireto ~1-1,5%; total evitável ~2,5-3,5%. O que vale no
+  `jit_armv8_a` é retorno previsível (82% das saídas são `rts`), não trocar
+  a tabela.

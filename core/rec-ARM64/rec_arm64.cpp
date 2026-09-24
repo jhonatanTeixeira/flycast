@@ -160,10 +160,49 @@ void jit_dump_line(const char *fmt, ...)
 	vfprintf(jitDumpFile, fmt, ap);
 	va_end(ap);
 }
+// FC_JIT_DUMP: sequencia de destinos das saidas dinamicas (ret/jmp/call por
+// registrador), que vao pela tabela FPCB. <dir>/dyn-<pid>.bin, u32 por saida,
+// ate 16M saidas; o tipo (BlockType) vai contado a parte.
+static u32 *dynBuf;
+static u32 dynN;
+static u64 dynTotal, dynKind[8];
+static FILE *dynFile;
+static void jit_dump_dyn_write()
+{
+	if (dynFile != nullptr && dynN != 0)
+	{
+		fwrite(dynBuf, sizeof(u32), dynN, dynFile);
+		fflush(dynFile);
+	}
+	dynN = 0;
+}
+static void DYNACALL jit_dump_dyn(u32 pc, u32 kind)
+{
+	if (dynBuf == nullptr)
+	{
+		dynBuf = new u32[1 << 20];
+		char path[512];
+		snprintf(path, sizeof(path), "%s/dyn-%d.bin", getenv("FC_JIT_DUMP"), (int)getpid());
+		dynFile = fopen(path, "wb");
+	}
+	dynKind[kind & 7]++;
+	if (dynTotal++ >= (16u << 20))
+		return;
+	dynBuf[dynN++] = pc;
+	if (dynN == (1 << 20))
+		jit_dump_dyn_write();
+}
 void jit_dump_flush()
 {
 	if (jitDumpState == 1)
+	{
+		jit_dump_dyn_write();
+		fprintf(jitDumpFile, "Y total %llu kind0 %llu kind1 %llu kind2 %llu kind3 %llu kind4 %llu kind5 %llu kind6 %llu kind7 %llu\n",
+				(unsigned long long)dynTotal, (unsigned long long)dynKind[0], (unsigned long long)dynKind[1],
+				(unsigned long long)dynKind[2], (unsigned long long)dynKind[3], (unsigned long long)dynKind[4],
+				(unsigned long long)dynKind[5], (unsigned long long)dynKind[6], (unsigned long long)dynKind[7]);
 		fflush(jitDumpFile);
+	}
 }
 
 #undef do_sqw_nommu
@@ -1607,6 +1646,13 @@ public:
 		case BET_DynamicRet:
 			// next_pc = *jdyn;
 
+			if (jit_dump_enabled())
+			{
+				// Tudo ja foi descarregado; w29 (pc) e x28/x27 sobrevivem a chamada.
+				Mov(w0, w29);
+				Mov(w1, (u32)block->BlockType);
+				GenCallRuntime(jit_dump_dyn);
+			}
 			Str(w29, sh4_context_mem_operand(&next_pc));
 			if (!mmu_enabled())
 			{
