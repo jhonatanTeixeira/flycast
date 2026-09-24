@@ -2499,9 +2499,9 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - Veredito: o diagnóstico do estudo (código quente grande, tráfego de contexto
   entre blocos) se confirma; a execução errou ao reescrever o backend por bloco
   com um contrato que infla o código, sem fazer o que deu o ganho do protótipo,
-  e com dois passos sem medição prévia. Pelo usuário, o `jit_armv8_a` já é mais
-  rápido que o JIT do flyinghead/flycast atual no device (não medido lado a
-  lado nesta sessão). Fica guardado; próximo: nível 2 com otimização de região
+  e com dois passos sem medição prévia. Pelo usuário, o flyinghead/flycast atual roda o
+  MBAA a ~32 fps no device; o `jit_armv8_a` roda a 59,9 fps / 100% (benchmark
+  do retrorun, savestate) — ~1,9× (não é rodada lado a lado na mesma cena). Fica guardado; próximo: nível 2 com otimização de região
   (estilo LTO) em segunda thread, construído a partir de alvos reescritos à
   mão do dump (`docs/current_plan.md`).
 
