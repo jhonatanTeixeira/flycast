@@ -2437,6 +2437,17 @@ public:
 			saved.Combine(d7);
 		if (!saved.IsEmpty())
 			PushCPURegList(saved);
+		// jit_armv8_a: r0-r7 do SH4 vivem em w19-w26 e o contexto so e
+		// atualizado na saida do bloco; o handler de MMIO pode ler o
+		// Sh4Context (pedido de render, FC_STATE_HASH). Grava antes.
+		if (jit_armv8a_enabled())
+		{
+			// r[0] vem logo depois de xffr[32] (sh4_if.h); `r` e macro no core
+			const u32 r0off = offsetof(Sh4Context, xffr) + 32 * sizeof(f32);
+			for (int i = 0; i < 8; i += 2)
+				Stp(Register::GetWRegFromCode(19 + i), Register::GetWRegFromCode(20 + i),
+						MemOperand(x28, r0off + i * 4));
+		}
 		Mov(w0, Register::GetWRegFromCode(rm));
 		if (!is_read)
 		{

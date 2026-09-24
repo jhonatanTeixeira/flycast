@@ -16,8 +16,11 @@ x19-x26, resto no `Sh4Context`, nativas de ALU/desvio/mov/ifb/FPU(NEON)/memória
 MBAA** (`FC_STATE_HASH`+`FC_AUDIO_DUMP`+`state_compare.py`) e auto-determinístico.
 Detalhe em `docs/tech_debits.md` 4.51 e `docs/history.md` 2026-09-24.
 
-**in progress (ganho de velocidade)** — ordem dos próximos passos: (1) fastmem
-+ trampolins de fault (item 4.27) para leitura/escrita; (2) T em registrador e
+**done (passo 1, fastmem, 4.52)** — idêntico ao antigo; Shenmue II 24,6→47,5%,
+DOA2 41,1→65,9%, MBAA 79,2→100% (antigo: 60,5 / 86,8 / 100).
+
+**in progress (ganho de velocidade)** — ordem dos próximos passos: (1) ~~fastmem
++ trampolins de fault (item 4.27) para leitura/escrita~~ feito; (2) T em registrador e
 `bf/bt +0` como `csel`/`fcsel`; (3) blocos maiores (laços); (4) `jsr`/`bsr` como
 `bl` e `rts` como `ret` com checagem; (5) `pref`/SQ inline. Métrica por jogo:
 retrorun `--benchmark`, velocidade + fps + p50/p95/p99. Baseline da v0:

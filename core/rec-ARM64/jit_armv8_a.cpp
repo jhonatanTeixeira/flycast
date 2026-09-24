@@ -42,6 +42,7 @@ using namespace vixl::aarch64;
 #include "hw/sh4/dyna/ngen.h"
 #include "hw/sh4/dyna/shil.h"
 #include "jit_armv8_a.h"
+#include "hw/mem/_vmem.h"
 
 extern "C" void ngen_LinkBlock_Generic_stub();
 extern "C" void ngen_LinkBlock_cond_Branch_stub();
@@ -171,8 +172,24 @@ private:
 
 	// ---- chamadas/saltos absolutos (endereco real, nao buffer) ---------
 
+	// x13 = base da memoria emulada (contexto + sizeof(Sh4Context)), como no
+	// backend antigo: o fault handler e os trampolins de rec_arm64.cpp
+	// reconhecem ldr/str [x13, wN, uxtw]. Chamada C++ ou rotulo invalidam.
+	bool memBaseValid = false;
+	void EnsureMemBase()
+	{
+		if (!memBaseValid)
+		{
+			Add(x13, x28, sizeof(Sh4Context));
+			memBaseValid = true;
+		}
+	}
+	using MacroAssembler::Bind;
+	void Bind(Label *label) { memBaseValid = false; MacroAssembler::Bind(label); }
+
 	void CallRuntime(void *fn)
 	{
+		memBaseValid = false;
 		ptrdiff_t offset = (uintptr_t)fn - (uintptr_t)CC_RW2RX(GetBuffer()->GetStartAddress<void *>());
 		verify(offset >= -128 * 1024 * 1024 && offset <= 128 * 1024 * 1024);
 		verify((offset & 3) == 0);
@@ -324,9 +341,58 @@ private:
 			Str(rd, Ctx(op.rd._reg));
 	}
 
+	// Fastmem (2026-09-25): acesso direto ldr/str [x13, wAddr, uxtw] na
+	// memoria emulada (mapeamento de 4GB). Fora da RAM o acesso da fault uma
+	// vez e ngen_Rewrite troca o site por um trampolim (MMIO, SQ, OCRAM,
+	// pagina de codigo protegida) -- o mesmo mecanismo do backend antigo, que
+	// no modo jit_armv8_a grava r0-r7 no contexto antes de chamar o C++.
+	// FC_NO_COMPACT_MEM=1 volta a chamada C++ em todo acesso.
+	static bool CompactUsable(u32 size)
+	{
+		static int enabled = -1;
+		if (enabled == -1)
+			enabled = getenv("FC_NO_COMPACT_MEM") != nullptr ? 0 : 1;
+		return enabled == 1 && _nvmem_enabled() && _nvmem_4gb_space() && !mmu_enabled()
+				&& (size == 1 || size == 2 || size == 4 || size == 8);
+	}
+	// Endereco em registrador: o fixo direto se nao ha deslocamento, senao w14.
+	Register CompactAddr(const shil_opcode &op)
+	{
+		if (op.rs3.is_null() && op.rs1.is_reg() && op.rs1.is_r32i() && IsPinned(op.rs1._reg))
+			return Pinned(op.rs1._reg);
+		GenMemAddr(op, w14);
+		return w14;
+	}
+
 	void GenReadMemory(shil_opcode &op)
 	{
 		u32 size = op.flags & 0x7f;
+		if (CompactUsable(size) && op.rd.is_reg())
+		{
+			Register addr = CompactAddr(op);
+			EnsureMemBase();
+			MemOperand mo(x13, addr, UXTW);
+			if (size == 8)
+			{
+				Ldr(x15, mo);
+				StoreParam64(op.rd, x15);
+				return;
+			}
+			const bool zx = (op.flags2 & 1) != 0;
+			Register dst = w15;
+			if (op.rd.is_r32i() && IsPinned(op.rd._reg))
+				dst = Pinned(op.rd._reg);
+			switch (size)
+			{
+			case 1: if (zx) Ldrb(dst, mo); else Ldrsb(dst, mo); break;
+			case 2: if (zx) Ldrh(dst, mo); else Ldrsh(dst, mo); break;
+			default: Ldr(dst, mo); break;
+			}
+			if (!dst.Is(w15))
+				return;
+			StoreParam32(op.rd, w15);
+			return;
+		}
 		GenMemAddr(op, w0);
 		switch (size)
 		{
@@ -344,6 +410,31 @@ private:
 	void GenWriteMemory(shil_opcode &op)
 	{
 		u32 size = op.flags & 0x7f;
+		if (CompactUsable(size) && (size != 8 || op.rs2.is_reg()))
+		{
+			Register addr = CompactAddr(op);
+			if (size == 8)
+			{
+				LoadParam64(op.rs2, x15);
+				EnsureMemBase();
+				Str(x15, MemOperand(x13, addr, UXTW));
+				return;
+			}
+			Register data = w15;
+			if (op.rs2.is_reg() && op.rs2.is_r32i() && IsPinned(op.rs2._reg))
+				data = Pinned(op.rs2._reg);
+			else
+				LoadParam32(op.rs2, w15);
+			EnsureMemBase();
+			MemOperand mo(x13, addr, UXTW);
+			switch (size)
+			{
+			case 1: Strb(data, mo); break;
+			case 2: Strh(data, mo); break;
+			default: Str(data, mo); break;
+			}
+			return;
+		}
 		GenMemAddr(op, w0);
 		// Sincroniza os fixos com o contexto antes da escrita: o pedido de
 		// render (e o FC_STATE_HASH) leem o Sh4Context no meio do bloco, e sem

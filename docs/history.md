@@ -2472,3 +2472,11 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   `csel`, blocos maiores, `jsr`/`bsr`→`bl`, `rts`→`ret`).
 - Binário de teste no device: `/home/ark/flycast_armv8a_new.so`. O core ativo
   (`flycast2026_libretro.so`) não foi tocado.
+
+### 2026-09-25 — `jit_armv8_a` passo 1: fastmem
+
+- Leitura/escrita do backend novo viram acesso direto `ldr/str [x13, wN, uxtw]`,
+  com o mesmo tratamento de fault/trampolim do backend antigo; no modo novo o
+  trampolim grava r0-r7 no contexto antes do C++ (4.52).
+- IDÊNTICO ao backend antigo em Shenmue II, DOA2 e MBAA. Velocidade:
+  Shenmue II 24,6 → 47,5%, DOA2 41,1 → 65,9%, MBAA 79,2 → 100%.
