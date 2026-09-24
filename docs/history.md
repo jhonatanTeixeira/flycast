@@ -2380,3 +2380,29 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   assinatura curta ajudou também o Zombie (80,8 → 87,0%). Checagem "só se o
   endereço é RAM" para não passar do ponto em timers de hardware. Instalado
   (anterior em `.bak-pre-shenmue2`).
+
+### 2026-09-24 (noite) — Limites de barramento do device (medido)
+
+- DMC 666MHz (governor performance), barramento de 32 bits → teto teórico
+  666M × 2 × 4B = **5,33 GB/s**, dividido entre CPU e GPU. Benchmark próprio
+  (C estático, 64MB, threads sincronizadas por barreira; a 1ª versão somava
+  o melhor tempo de cada thread e dava 7,4 GB/s, impossível):
+  leitura 2,2 GB/s com 1 núcleo / 4,1 com 2 / 4,5 com 4 (~84% do teto);
+  escrita ~4,2 GB/s (1 núcleo já satura); cópia 2,7 / 3,6 / 3,9 GB/s.
+  NEON não muda a leitura (o limite é a janela de misses do A53, não a
+  instrução). Latência aleatória: L1 2,3ns, L2 13–18ns, DRAM ~165–200ns
+  (~250–300 ciclos a 1,5GHz). Leitura: um núcleo sozinho usa só ~40% do
+  barramento; o que pesa pro JIT é a latência de miss, não a banda.
+
+### 2026-09-25 (madrugada) — Shenmue II save pesado: som em thread própria
+
+- Save novo do usuário: 56,5%, 17 fps. Perfil de blocos plano (sem laço de
+  espera dominante); `FC_REND_SPLIT` achou 13ms/frame no `AicaUpdate` (ARM7
+  2,8 + mixagem das vozes 10,4; ~49 de 64 vozes ativas).
+- Tentativa 1 (mixagem inteira em thread): nula — o driver do ARM7 consulta
+  posição/envelope/KYONB das vozes quase todo bloco. Desenho final (4.44):
+  controle exato na emu thread, render (interpolação/filtro/volume/mixagem)
+  numa thread de som com fila; bloco rápido de controle sem chamadas
+  indiretas. PCM bit a bit idêntico ao original.
+- Shenmue II 56,5 → 60,6%; Shenmue 1 86,5%; Zombie 100%; DOA2 88%; 2D 100%.
+  Instalado (anterior em `.bak-pre-aicathread`).

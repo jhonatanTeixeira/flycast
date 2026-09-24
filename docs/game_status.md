@@ -268,3 +268,6 @@ clock 0.8 só para ele (4.42).
 Save numa cena de ~20 fps. Limitado pela emulação do SH4 (não GPU: 320×240
 idêntico). Com o avanço até o evento nos laços de espera: 68 → 84% de
 velocidade, 20 → 25 fps. Usuário vai criar save de cena mais pesada. 4.43.
+Save novo (pesado, 2026-09-24): 56,5% / 17 fps (jogo pede 30). Com o render
+do som em thread própria: 60,6% / 18,2 fps. O resto é JIT do SH4 (~50ms por
+frame, perfil plano) + 8ms de som/ARM7 na emu thread. 4.44.

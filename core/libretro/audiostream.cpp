@@ -2,10 +2,16 @@
 #include "emulator.h"
 
 #include <libretro.h>
+#include <cstdio>
+#include <cstdlib>
 
 #define SAMPLE_COUNT 512
 
 extern retro_audio_sample_batch_t audio_batch_cb;
+
+// FC_AUDIO_DUMP=arquivo: grava o PCM gerado (diagnostico, compara versoes do mixer)
+static FILE *audioDump;
+static int audioDumpInit;
 
 void WriteSample(s16 r, s16 l)
 {
@@ -13,6 +19,15 @@ void WriteSample(s16 r, s16 l)
    static u32 writePtr; // next sample index
    Buffer[writePtr].r = r;
    Buffer[writePtr].l = l;
+   if (!audioDumpInit)
+   {
+      audioDumpInit = 1;
+      const char *p = getenv("FC_AUDIO_DUMP");
+      if (p != nullptr)
+         audioDump = fopen(p, "wb");
+   }
+   if (audioDump != nullptr)
+      fwrite(&Buffer[writePtr], sizeof(SoundFrame), 1, audioDump);
 
    if (++writePtr == SAMPLE_COUNT)
    {

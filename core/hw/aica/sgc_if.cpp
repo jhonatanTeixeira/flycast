@@ -24,6 +24,10 @@
 #include "aica_if.h"
 #include <math.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <cstdlib>
 #undef FAR
 
 //#define CLIP_WARN
@@ -387,6 +391,7 @@ struct ChannelEx
 	
 		SampleType prev1;
 		SampleType prev2;
+		u32 resetGen;	// ++ a cada KEY_ON (zera prev1/prev2): avisa a thread de render
 		s32 q;
 		u32 AttackRate;
 		u32 Decay1Rate;
@@ -509,6 +514,13 @@ struct ChannelEx
 		}
 	}
 
+	// Metade "controle" do Step: avanca envelopes, LFO e stream (inclui
+	// decodificar ADPCM, que le a RAM de som no instante certo) e registra os
+	// insumos do render desta amostra. Tudo que o jogo enxerga (CA, EG, LP,
+	// KYONB) sai daqui; o render (interpolacao, filtro, volume, mixagem) nao
+	// realimenta nada e roda em aica_render_block.
+	__forceinline bool ControlStep(struct RVoice& v);
+
 	__forceinline void Step(SampleType& mixl, SampleType& mixr)
 	{
 		SampleType oLeft,oRight,oDsp;
@@ -543,6 +555,7 @@ struct ChannelEx
 			FEG.SetValue(ccd->FLV0);
 			FEG.prev1 = 0;
 			FEG.prev2 = 0;
+			FEG.resetGen++;
 		}
 	}
 
@@ -838,6 +851,50 @@ struct ChannelEx
 	} 
 };
 
+// Insumos do render por amostra de voz (todos cabem em 16 bits: amostras
+// decodificadas sao clip16, fp 10 bits, AEG 10 bits, FEG 13 bits).
+struct RVoice
+{
+	s16 s0, s1;
+	u16 fp, aeg, feg;
+	u8 alfo, pad;
+};
+struct RChanHdr
+{
+	u8 ch, n, flags, pad;	// flags: 1 FEG ativo, 2 zerar filtro (KEY_ON), 4 VOFF
+	u32 dl, dr, ds;
+	s32 q;
+};
+// Um bloco de 32 amostras: tudo que o render precisa, lido na emu thread.
+struct RBlock
+{
+	u32 nch;
+	u32 steps;
+	RChanHdr hdr[64];
+	RVoice v[64][32];
+	s16 extsL[32], extsR[32];
+	u8 efsdl16, efpan16, efsdl17, efpan17;
+	u8 cddaMute, mono, dac18b, noSound;
+	u32 mvol;
+};
+
+bool ChannelEx::ControlStep(RVoice& v)
+{
+	if (!enabled)
+		return false;
+	v.s0 = (s16)s0;
+	v.s1 = (s16)s1;
+	v.fp = step.fp;
+	v.aeg = (u16)AEG.GetValue();
+	v.feg = (u16)FEG.GetValue();
+	v.alfo = lfo.alfo;
+	StepAEG(this);
+	StepFEG(this);
+	StepStream(this);
+	lfo.Step(this);
+	return true;
+}
+
 static __forceinline SampleType DecodeADPCM(u32 sample,s32 prev,s32& quant)
 {
 	s32 sign=1-2*(sample/8);
@@ -943,6 +1000,141 @@ s1 = sptr16[next_addr];
 }
 
 
+
+bool g_aicaStatOn;
+
+// Bloco de 32 amostras sem nenhuma transicao de estado (ver FastEligible):
+// mesma aritmetica do ControlStep, sem as chamadas indiretas por amostra.
+// A decodificacao usa a mesma StepDecodeSample, no mesmo instante.
+template<s32 PCMS>
+static void FastControlBlock(ChannelEx* ch, RVoice* v, u32 aegRate, u32 fegDelta, u32 inc)
+{
+	s32 aeg = ch->AEG.val;
+	u32 feg = ch->FEG.value;
+	u32 counter = ch->lfo.counter;
+	const u32 start = ch->lfo.start_value;
+	u8 lstate = ch->lfo.state;
+	const u8 alfo = ch->lfo.alfo;
+	for (int i = 0; i < 32; i++)
+	{
+		RVoice& x = v[i];
+		x.s0 = (s16)ch->s0;
+		x.s1 = (s16)ch->s1;
+		x.fp = ch->step.fp;
+		x.aeg = (u16)(aeg >> EG_STEP_BITS);
+		x.feg = (u16)(feg >> EG_STEP_BITS);
+		x.alfo = alfo;
+		aeg += aegRate;
+		feg += fegDelta;
+		ch->step.full += inc;
+		fp_22_10 sp = ch->step;
+		ch->step.ip = 0;
+		while (sp.ip > 0)
+		{
+			sp.ip--;
+			u32 CA = ch->CA + 1;
+			ch->CA = CA;
+			if (sp.ip == 0)
+				StepDecodeSample<PCMS,true>(ch, CA);
+			else
+				StepDecodeSample<PCMS,false>(ch, CA);
+		}
+		if (--counter == 0)
+		{
+			lstate++;
+			counter = start;
+		}
+	}
+	ch->AEG.val = aeg;
+	ch->FEG.value = feg;
+	ch->lfo.counter = counter;
+	ch->lfo.state = lstate;
+}
+
+static void (* const FAST_CONTROL_LUT[5])(ChannelEx*, RVoice*, u32, u32, u32) =
+{
+	&FastControlBlock<0>, &FastControlBlock<1>, &FastControlBlock<2>, &FastControlBlock<3>, &FastControlBlock<-1>
+};
+
+// Prova, no inicio do bloco, que nas proximas 32 amostras nao ha transicao de
+// AEG/FEG, tick de LFO que mude alguma coisa, nem fim/loop da amostra.
+static __forceinline bool FastEligible(ChannelEx& c, u32& aegRate, u32& fegDelta, u32& inc)
+{
+	s64 lim;
+	switch (c.AEG.state)
+	{
+	case EG_Decay1:
+		aegRate = c.AEG.Decay1Rate;
+		lim = c.AEG.Decay2Value;
+		break;
+	case EG_Decay2:
+		aegRate = c.AEG.Decay2Rate;
+		lim = 0x3FF;
+		break;
+	case EG_Release:
+		aegRate = c.AEG.ReleaseRate;
+		lim = 0x3FF;
+		break;
+	default:	// ataque: divisao por amostra e LPSLNK
+		return false;
+	}
+	if ((((s64)c.AEG.val + 32 * (s64)aegRate) >> EG_STEP_BITS) >= lim)
+		return false;
+
+	fegDelta = 0;
+	if (c.FEG.active)
+	{
+		u32 delta, target;
+		switch (c.FEG.state)
+		{
+		case EG_Attack:
+			delta = c.FEG.AttackRate;
+			target = c.ccd->FLV1;
+			break;
+		case EG_Decay1:
+			delta = c.FEG.Decay1Rate;
+			target = c.ccd->FLV2;
+			break;
+		case EG_Decay2:
+			delta = c.FEG.Decay2Rate;
+			target = c.ccd->FLV3;
+			break;
+		default:
+			delta = c.FEG.ReleaseRate;
+			target = c.ccd->FLV4;
+			break;
+		}
+		target <<= EG_STEP_BITS;
+		u32 val = c.FEG.value;
+		if (val < target)
+		{
+			if (32 * (u64)delta >= (u64)(target - val))
+				return false;
+			fegDelta = delta;
+		}
+		else if (val > target)
+		{
+			if (32 * (u64)delta >= (u64)(val - target))
+				return false;
+			fegDelta = 0u - delta;
+		}
+		else if (c.FEG.state < EG_Decay2)
+			return false;
+	}
+
+	// LFO: sem tick no bloco, ou ticks que so avancam state/counter (ALFOS=0 com
+	// onda != aleatoria da alfo 0; PLFOS=0 da plfo 1024 para qualquer onda)
+	if (c.lfo.counter <= 32
+			&& !(c.lfo.alfo == 0 && c.lfo.alfo_shft == 8 && c.lfo.alfo_calc != ALFOWS_CALC[3]
+				&& c.lfo.plfo_scale == PLFO_Scales[0] && c.lfo.plfo_step.full == 1024))
+		return false;
+
+	inc = (c.update_rate * c.lfo.plfo_step.full) >> 10;
+	u64 adv = ((u64)c.step.full + 32 * (u64)inc) >> 10;
+	if ((u64)c.CA + adv >= c.loop.LEA)
+		return false;
+	return true;
+}
 
 template<s32 PCMS>
 void StepDecodeSampleInitial(ChannelEx* ch)
@@ -1241,8 +1433,16 @@ static u32 CalcAttackEgSteps(float t)
 
 	return (u32)lround(factor);
 }
+// Render das vozes em thread: definido junto de AICA_Sample32.
+static SampleType rPrev1[64], rPrev2[64];	// estado do filtro: dono e o render
+static u32 rSentGen[64];
+static void aica_render_stop();
+
 void sgc_Init()
 {
+	aica_mix_sync();
+	memset(rPrev1, 0, sizeof(rPrev1));
+	memset(rPrev2, 0, sizeof(rPrev2));
 	staticinitialise();
 
 	for (int i=0;i<16;i++)
@@ -1281,6 +1481,7 @@ void sgc_Init()
 
 void sgc_Term()
 {
+	aica_render_stop();
    dsp_term();
 }
 
@@ -1346,35 +1547,98 @@ s16 cdda_sector[CDDA_SIZE]={0};
 u32 cdda_index=CDDA_SIZE<<1;
 
 //no DSP for now in this version
-void AICA_Sample32()
+// ---- Render das vozes em thread (2026-09-24, Shenmue II) -------------------
+// A mixagem das 64 vozes custava ~10ms por frame na emu thread (49 vozes
+// ativas). Metade e controle (envelopes, posicao, loop, decodificar ADPCM) e
+// fica aqui, exata; a outra metade (interpolar, filtrar, volume, mixar e
+// entregar o audio) nao realimenta o estado emulado e vai para a thread de
+// som por uma fila de blocos. O jogo nao enxerga diferenca nenhuma; so a
+// latencia do audio cresce ate FC_AICA_DEPTH blocos (0.73ms cada).
+// FC_AICA_THREAD=0: render na propria emu thread (mesmo codigo, sincrono).
+u64 g_aicaRenderTicks, g_aicaVoiceSteps, g_aicaQueueFullWaits, g_aicaFastBlocks, g_aicaSlowBlocks;
+// FC_AICA_FAST_CTRL=0 desliga o bloco rapido de controle (so o ControlStep)
+static const bool g_aicaFastCtrl = [] { const char *e = getenv("FC_AICA_FAST_CTRL"); return e == nullptr || e[0] != '0'; }();
+static RBlock rqSyncBlock;
+static RBlock *rq;
+static u32 rqCap;
+static std::atomic<u32> rqHead { 0 }, rqTail { 0 };
+static std::thread rqThread;
+static std::atomic<bool> rqQuit { false };
+static int rqMode = -1;	// -1 nao decidido, 0 sincrono, 1 thread
+
+static inline u64 aica_rticks()
 {
+#if defined(__aarch64__)
+	u64 v;
+	asm volatile("mrs %0, cntvct_el0" : "=r"(v));
+	return v;
+#else
+	return 0;
+#endif
+}
+
+static void aica_render_block(const RBlock& b)
+{
+	extern bool g_rendSplitEnabled;
+	u64 k0 = g_rendSplitEnabled ? aica_rticks() : 0;
 	SampleType mxlr[64];
-	memset(mxlr,0,sizeof(mxlr));
+	memset(mxlr, 0, sizeof(mxlr));
 
-	//Generate 32 samples for each channel, before moving to next channel
-	//much more cache efficient !
-	u32 sg=0;
-	for (int ch = 0; ch < 64; ch++)
+	for (u32 k = 0; k < b.nch; k++)
 	{
-		for (int i=0;i<32;i++)
+		const RChanHdr& h = b.hdr[k];
+		const u32 ch = h.ch;
+		if (h.flags & 2)
+			rPrev1[ch] = rPrev2[ch] = 0;
+		SampleType p1 = rPrev1[ch], p2 = rPrev2[ch];
+		const RVoice *v = b.v[k];
+		const bool fegOn = h.flags & 1;
+		const bool voff = h.flags & 4;
+		for (u32 i = 0; i < h.n; i++)
 		{
-			SampleType oLeft,oRight,oDsp;
-			//stop working on this channel if its turned off ...
-			if (!Chans[ch].Step(oLeft, oRight, oDsp))
-				break;
+			const RVoice& x = v[i];
+			SampleType sample = FPMul((SampleType)x.s0, (s32)(1024 - x.fp), 10);
+			sample += FPMul((SampleType)x.s1, (s32)x.fp, 10);
 
-			sg++;
+			// Low-pass filter
+			if (fegOn)
+			{
+				u32 fv = x.feg;
+				s32 f = (((fv & 0xFF) | 0x100) << 4) >> ((fv >> 8) ^ 0x1F);
+				f = std::max(1, f);
+				sample = f * sample + (0x2000 - f + h.q) * p1 - h.q * p2;
+				sample >>= 13;
+				clip16(sample);
+				p2 = p1;
+				p1 = sample;
+			}
 
-         if (oLeft + oRight == 0)
-            oLeft = oRight = oDsp;
+			u32 ofsatt;
+			if (voff)
+				ofsatt = 0;
+			else
+				ofsatt = std::min((u32)x.alfo + ((u32)x.aeg >> 2), (u32)255);
+			u32 const max_att = ((16 << 4) - 1) - ofsatt;
+			s32* logtable = ofsatt + tl_lut;
+			u32 dl = std::min(h.dl, max_att);
+			u32 dr = std::min(h.dr, max_att);
+			u32 ds = std::min(h.ds, max_att);
+
+			SampleType oLeft = FPMul(sample, logtable[dl], 15);
+			SampleType oRight = FPMul(sample, logtable[dr], 15);
+			SampleType oDsp = FPMul(sample, logtable[ds], 11);	// 20 bits
+
+			if (oLeft + oRight == 0)
+				oLeft = oRight = oDsp;
 
 			mxlr[i*2+0] += oLeft;
 			mxlr[i*2+1] += oRight;
 		}
+		rPrev1[ch] = p1;
+		rPrev2[ch] = p2;
 	}
+
 	//OK , generated all Channels  , now DSP/ect + final mix ;p
-	//CDDA EXTS input
-	
 	for (int i=0;i<32;i++)
 	{
 		SampleType mixl,mixr;
@@ -1382,40 +1646,19 @@ void AICA_Sample32()
 		mixl=mxlr[i*2+0];
 		mixr=mxlr[i*2+1];
 
-		if (cdda_index>=CDDA_SIZE)
-		{
-			cdda_index=0;
-			libCore_CDDA_Sector(cdda_sector);
-		}
-		s32 EXTS0L=cdda_sector[cdda_index];
-		s32 EXTS0R=cdda_sector[cdda_index+1];
-		cdda_index+=2;
-
-		//Final MIX ..
-		//Add CDDA / DSP effect(s)
+		//CDDA EXTS input (lido na emu thread)
+		s32 EXTS0L=b.extsL[i];
+		s32 EXTS0R=b.extsR[i];
 
 		//CDDA
-		if (settings.aica.CDDAMute==0) 
+		if (b.cddaMute==0)
 		{
-			VOLPAN(EXTS0L,dsp_out_vol[16].EFSDL,dsp_out_vol[16].EFPAN,mixl,mixr);
-			VOLPAN(EXTS0R,dsp_out_vol[17].EFSDL,dsp_out_vol[17].EFPAN,mixl,mixr);
+			VOLPAN(EXTS0L,b.efsdl16,b.efpan16,mixl,mixr);
+			VOLPAN(EXTS0R,b.efsdl17,b.efpan17,mixl,mixr);
 		}
-
-		/*
-		no dsp for now -- needs special handling of oDSP for ch paraller version ...
-		if (settings.aica.DSPEnabled)
-		{
-			dsp_step();
-
-			for (int i=0;i<16;i++)
-			{
-				VOLPAN( (*(s16*)&DSPData->EFREG[i]) ,dsp_out_vol[i].EFSDL,dsp_out_vol[i].EFPAN,mixl,mixr);
-			}
-		}
-		*/
 
 		//Mono !
-		if (CommonData->Mono)
+		if (b.mono)
 		{
 			//Yay for mono =P
 			mixl+=mixr;
@@ -1424,13 +1667,11 @@ void AICA_Sample32()
 
 		//MVOL !
 		//we want to make sure mix* is *At least* 23 bits wide here, so 64 bit mul !
-		u32 mvol=CommonData->MVOL;
-		s32 val=volume_lut[mvol];
+		s32 val=volume_lut[b.mvol];
 		mixl=(s32)FPMul((s64)mixl,val,15);
 		mixr=(s32)FPMul((s64)mixr,val,15);
 
-
-		if (CommonData->DAC18B)
+		if (b.dac18b)
 		{
 			//If 18 bit output , make it 16b :p
 			mixl=FPs(mixl,2);
@@ -1438,7 +1679,6 @@ void AICA_Sample32()
 		}
 
 		//Sample is ready ! clip/saturate and store :}
-
 #ifdef CLIP_WARN
 	if (((s16)mixl) != mixl || ((s16)mixr) != mixr)
 		printf("Clipped mixl %d mixr %d\n", mixl, mixr);
@@ -1447,8 +1687,164 @@ void AICA_Sample32()
 		clip16(mixl);
 		clip16(mixr);
 
-		if (!settings.aica.NoSound) WriteSample(mixr,mixl);
+		if (!b.noSound) WriteSample(mixr,mixl);
 	}
+	if (g_rendSplitEnabled)
+	{
+		g_aicaRenderTicks += aica_rticks() - k0;
+		g_aicaVoiceSteps += b.steps;
+	}
+}
+
+// Fila vazia: dorme 1ms e confere de novo. Acordar por futex a cada bloco
+// custava ~1ms por frame na emu thread (46 syscalls); assim a emu thread
+// nunca faz syscall e so a thread de som paga os despertares.
+static void aica_render_worker()
+{
+	for (;;)
+	{
+		u32 t = rqTail.load(std::memory_order_relaxed);
+		if (t == rqHead.load(std::memory_order_acquire))
+		{
+			if (rqQuit.load(std::memory_order_acquire))
+				break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			continue;
+		}
+		aica_render_block(rq[t % rqCap]);
+		rqTail.store(t + 1, std::memory_order_release);
+	}
+}
+
+// Espera o render alcancar a emu thread (savestate, reset, term).
+void aica_mix_sync()
+{
+	if (rqMode != 1)
+		return;
+	while (rqTail.load(std::memory_order_acquire) != rqHead.load(std::memory_order_relaxed))
+		std::this_thread::yield();
+}
+
+static void aica_render_stop()
+{
+	aica_mix_sync();
+	if (rqThread.joinable())
+	{
+		rqQuit.store(true, std::memory_order_release);
+		rqThread.join();
+		rqQuit.store(false);
+	}
+}
+
+static RBlock& aica_block_acquire()
+{
+	if (rqMode < 0)
+	{
+		const char *e = getenv("FC_AICA_THREAD");
+		rqMode = (e != nullptr && e[0] == '0') ? 0 : 1;
+		const char *d = getenv("FC_AICA_DEPTH");
+		rqCap = d != nullptr ? (u32)std::max(1, atoi(d)) : 24;
+		if (rqMode == 1)
+			rq = new RBlock[rqCap];
+	}
+	if (rqMode == 0)
+		return rqSyncBlock;
+	if (!rqThread.joinable())
+		rqThread = std::thread(aica_render_worker);
+	u32 h = rqHead.load(std::memory_order_relaxed);
+	if (h - rqTail.load(std::memory_order_acquire) >= rqCap)
+	{
+		extern bool g_rendSplitEnabled;
+		if (g_rendSplitEnabled)
+			g_aicaQueueFullWaits++;
+		while (h - rqTail.load(std::memory_order_acquire) >= rqCap)
+			std::this_thread::yield();
+	}
+	return rq[h % rqCap];
+}
+
+static void aica_block_publish(RBlock& b)
+{
+	if (rqMode == 0)
+	{
+		aica_render_block(b);
+		return;
+	}
+	rqHead.store(rqHead.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+}
+
+void AICA_Sample32()
+{
+	extern bool g_rendSplitEnabled;
+	g_aicaStatOn = g_rendSplitEnabled;
+	RBlock& b = aica_block_acquire();
+	u32 nch = 0, steps = 0;
+
+	//Generate 32 samples for each channel, before moving to next channel
+	//much more cache efficient !
+	for (int ch = 0; ch < 64; ch++)
+	{
+		ChannelEx& c = Chans[ch];
+		if (!c.enabled)
+			continue;
+		RChanHdr& h = b.hdr[nch];
+		h.ch = ch;
+		h.flags = (c.FEG.active ? 1 : 0) | (c.ccd->VOFF == 1 ? 4 : 0);
+		if (c.FEG.resetGen != rSentGen[ch])
+		{
+			rSentGen[ch] = c.FEG.resetGen;
+			h.flags |= 2;
+		}
+		h.dl = c.VolMix.DLAtt;
+		h.dr = c.VolMix.DRAtt;
+		h.ds = c.VolMix.DSPAtt;
+		h.q = c.FEG.q;
+		RVoice *v = b.v[nch];
+		u32 n = 0;
+		u32 aegRate, fegDelta, inc;
+		if (g_aicaFastCtrl && FastEligible(c, aegRate, fegDelta, inc))
+		{
+			FAST_CONTROL_LUT[c.ccd->SSCTL ? 4 : c.ccd->PCMS](&c, v, aegRate, fegDelta, inc);
+			n = 32;
+			g_aicaFastBlocks++;
+		}
+		else
+		{
+			//stop working on this channel if its turned off ...
+			while (n < 32 && c.ControlStep(v[n]))
+				n++;
+			g_aicaSlowBlocks++;
+		}
+		h.n = n;
+		steps += n;
+		nch++;
+	}
+	b.nch = nch;
+	b.steps = steps;
+
+	//CDDA EXTS input
+	for (int i=0;i<32;i++)
+	{
+		if (cdda_index>=CDDA_SIZE)
+		{
+			cdda_index=0;
+			libCore_CDDA_Sector(cdda_sector);
+		}
+		b.extsL[i]=cdda_sector[cdda_index];
+		b.extsR[i]=cdda_sector[cdda_index+1];
+		cdda_index+=2;
+	}
+	b.efsdl16 = dsp_out_vol[16].EFSDL;
+	b.efpan16 = dsp_out_vol[16].EFPAN;
+	b.efsdl17 = dsp_out_vol[17].EFSDL;
+	b.efpan17 = dsp_out_vol[17].EFPAN;
+	b.cddaMute = settings.aica.CDDAMute != 0;
+	b.mono = CommonData->Mono;
+	b.dac18b = CommonData->DAC18B;
+	b.mvol = CommonData->MVOL;
+	b.noSound = settings.aica.NoSound != 0;
+
+	aica_block_publish(b);
 }
 
 void AICA_Sample()
@@ -1543,6 +1939,14 @@ bool channel_serialize(void **data, unsigned int *total_size)
 	int i = 0 ;
 	int addr = 0 ;
 
+	// o filtro vive na thread de render: espera ela alcancar e traz o estado
+	aica_mix_sync();
+	for (i = 0; i < 64; i++)
+	{
+		Chans[i].FEG.prev1 = rPrev1[i];
+		Chans[i].FEG.prev2 = rPrev2[i];
+	}
+
 	for ( i = 0 ; i < 64 ; i++)
 	{
 		addr = Chans[i].SA - (&(aica_ram[0])) ;
@@ -1576,6 +1980,7 @@ bool channel_serialize(void **data, unsigned int *total_size)
 
 bool channel_unserialize(void **data, unsigned int *total_size, serialize_version_enum ver)
 {
+	aica_mix_sync();
 	int i = 0 ;
 	int addr = 0 ;
 	u32 dum;
@@ -1679,6 +2084,13 @@ bool channel_unserialize(void **data, unsigned int *total_size, serialize_versio
 		if (ver < V8)
 			LIBRETRO_US(dum); // Chans[i].ChannelNumber
 
+	}
+
+	for (i = 0; i < 64; i++)
+	{
+		rPrev1[i] = Chans[i].FEG.prev1;
+		rPrev2[i] = Chans[i].FEG.prev2;
+		rSentGen[i] = Chans[i].FEG.resetGen;
 	}
 
 	return true;

@@ -10,6 +10,10 @@ void WriteChannelReg(u32 channel, u32 reg, int size);
 void sgc_Init();
 void sgc_Term();
 
+// Render das vozes em thread (sgc_if.cpp): espera a fila esvaziar. Usado por
+// savestate e reset; o estado emulado nao depende do render.
+void aica_mix_sync();
+
 union fp_22_10
 {
 	struct

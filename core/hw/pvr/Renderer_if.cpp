@@ -234,6 +234,14 @@ void rend_dump_split(const char *path)
 			fprintf(f, "sched_%zu_cb_off\t%zx\tcalls_per_frame\t%.1f\tms_per_frame\t%.3f\n", i, (size_t)off,
 					(double)g_schedCalls[i] / n, g_schedTicks[i] * 1000.0 / freq / n);
 		}
+		extern u64 g_aicaArmTicks, g_aicaCtrlTicks, g_aicaRenderTicks, g_aicaVoiceSteps, g_aicaQueueFullWaits;
+		fprintf(f, "aica_arm7_ms_per_frame\t%.3f\n", g_aicaArmTicks * 1000.0 / freq / n);
+		fprintf(f, "aica_ctrl_ms_per_frame\t%.3f\n", g_aicaCtrlTicks * 1000.0 / freq / n);
+		fprintf(f, "aica_render_ms_per_frame\t%.3f\n", g_aicaRenderTicks * 1000.0 / freq / n);
+		fprintf(f, "aica_voice_steps_per_frame\t%.0f\n", (double)g_aicaVoiceSteps / n);
+		fprintf(f, "aica_queue_full_waits_per_frame\t%.2f\n", (double)g_aicaQueueFullWaits / n);
+		extern u64 g_aicaFastBlocks, g_aicaSlowBlocks;
+		fprintf(f, "aica_fast_blocks_per_frame\t%.1f\naica_slow_blocks_per_frame\t%.1f\n", (double)g_aicaFastBlocks / n, (double)g_aicaSlowBlocks / n);
 	}
 	{
 		extern u64 g_taSqUs;

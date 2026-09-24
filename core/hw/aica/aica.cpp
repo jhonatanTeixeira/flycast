@@ -86,11 +86,33 @@ AicaTimer timers[3];
 int aica_schid = -1;
 const int AICA_TICK = 145125;	// 44.1 KHz / 32
 
+// FC_REND_SPLIT: tempo do ARM7 (driver de som) e do controle das vozes na emu
+// thread; o render das vozes (thread de som) e medido em sgc_if.cpp.
+u64 g_aicaArmTicks, g_aicaCtrlTicks;
+static inline u64 aica_ticks()
+{
+#if defined(__aarch64__)
+	u64 v;
+	asm volatile("mrs %0, cntvct_el0" : "=r"(v));
+	return v;
+#else
+	return 0;
+#endif
+}
+
 static int AicaUpdate(int tag, int c, int j)
 {
+	extern bool g_rendSplitEnabled;
+	u64 k0 = g_rendSplitEnabled ? aica_ticks() : 0;
    aicaarm::run(32);
+	u64 k1 = g_rendSplitEnabled ? aica_ticks() : 0;
 	if (!settings.aica.NoBatch && !settings.aica.DSPEnabled)
 		AICA_Sample32();
+	if (g_rendSplitEnabled)
+	{
+		g_aicaArmTicks += k1 - k0;
+		g_aicaCtrlTicks += aica_ticks() - k1;
+	}
 
 	return AICA_TICK;
 }
@@ -273,6 +295,7 @@ s32 libAICA_Init()
 
 void libAICA_Reset(bool hard)
 {
+	aica_mix_sync();
 	if (hard)
 	{
 		init_mem();
