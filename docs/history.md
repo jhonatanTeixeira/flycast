@@ -2370,3 +2370,13 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   do core (T15111D 50 → 0.8). Com o cfg d10, Le Mans 30,1 frames/s a 100%;
   DOA2 inalterado. Usuário: "isso é o le mans que eu me lembro". Instalado
   (anterior em `.bak-pre-lemanslut`).
+
+### 2026-09-24 (noite) — Shenmue II, o chefão final
+
+- Primeira rodada (save do usuário, ~20 fps): 68,6%, jogo pede 30; 320×240
+  idêntico → não é GPU. Laço de espera igual ao do Shenmue 1 (outra
+  compilação, tarefa vazia) = 54% do JIT, + espera por contador em memória.
+  Avanço até o evento (4.43): **Shenmue II 68,4 → 84,2%** (25 fps); a
+  assinatura curta ajudou também o Zombie (80,8 → 87,0%). Checagem "só se o
+  endereço é RAM" para não passar do ponto em timers de hardware. Instalado
+  (anterior em `.bak-pre-shenmue2`).

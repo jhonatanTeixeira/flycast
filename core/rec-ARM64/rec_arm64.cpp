@@ -507,7 +507,13 @@ public:
 				// before the next event, then end the timeslice so the
 				// intc_sched call below handles that event right now.
 				// Nothing is register-allocated yet at this point.
-				GenCallRuntime(sh4_sched_idle_fastforward);
+				if (block->idle_ff_ram_reg != 0)
+				{
+					Mov(w0, block->idle_ff_ram_reg - 1);
+					GenCallRuntime(sh4_sched_idle_fastforward_if_ram);
+				}
+				else
+					GenCallRuntime(sh4_sched_idle_fastforward);
 				Mov(w27, 0);
 			}
 			Subs(w27, w27, block->guest_cycles);

@@ -263,3 +263,8 @@ padrão): ~19 frames/s. Próximo passo: pular o laço de atraso. Ver 4.39.
 console), avaliado pelo usuário: "isso é o le mans que eu me lembro".
 Caminho: strlen cobrado x30 corrigido (4.41), laço de atraso pulado (4.40),
 clock 0.8 só para ele (4.42).
+
+### Shenmue II (DC, Europe) — medido 2026-09-24
+Save numa cena de ~20 fps. Limitado pela emulação do SH4 (não GPU: 320×240
+idêntico). Com o avanço até o evento nos laços de espera: 68 → 84% de
+velocidade, 20 → 25 fps. Usuário vai criar save de cena mais pesada. 4.43.

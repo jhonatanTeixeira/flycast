@@ -66,6 +66,7 @@ struct IdleFFSig
 	u32 count;
 	u16 ops[32];
 	u16 mask[32];
+	u8 ram_reg;		// 0 = sempre; n = so se r[n-1] aponta para a RAM principal
 };
 
 #define M_ 0xFFFF
@@ -112,12 +113,31 @@ static const IdleFFSig idle_ff_sigs[] = {
 	    0x3326, 0x8B01, 0x0000, 0x0000, 0xD318, 0x6232, 0x2228, 0x8BEB },
 	  { M_, M_, M_, M_, M_, M_, M_, M_,
 	    M_, M_, 0x0000, 0x0000, M_, M_, M_, M_ } },
+	// Shenmue II (Europe): o mesmo laco do Shenmue, outra compilacao
+	// (enderecos relativos a registrador). 8C209F44 chama uma tarefa VAZIA
+	// (8C20F060: salva/restaura r14, rts), 8C209F4C compara contadores,
+	// 8C209F5A testa o flag. ~54% do trabalho do JIT e ~50% do tempo emulado
+	// na cena do save. Assinatura = comparacao + teste; entrada no teste.
+	{ "shenmue2-wait-flag-loop", 0x0E, 10,
+	  { 0x528C, 0x518B, 0x321C, 0x7201, 0x519E, 0x3126, 0x89B2, 0x519F,
+	    0x2118, 0x8BF1 },
+	  { M_, M_, M_, M_, M_, M_, M_, M_, M_, M_ } },
+	// Espera ate um contador em memoria alcancar um valor (Shenmue II,
+	// 8C053F7A, 27% do tempo emulado): L: mov.l @r1,r0; cmp/hi r0,r4; bt L.
+	// So le o mesmo endereco e compara com um registrador que nao muda: so um
+	// agente externo (interrupcao/DMA/ARM7 -- todos em eventos agendados) pode
+	// encerrar o laco, entao pular ate o proximo evento e exato.
+	{ "poll-until-counter-r1-r4", 0x00, 3,
+	  { 0x6012, 0x3406, 0x89FC },
+	  { M_, M_, M_ }, 2 /* r1 na RAM */ },
 };
 #undef M_
 #undef MB
 
+static u8 idle_ff_last_ram_reg;
 static bool idle_ff_match(u32 addr)
 {
+	idle_ff_last_ram_reg = 0;
 	static int enabled = -1;
 	if (enabled == -1)
 	{
@@ -139,6 +159,7 @@ static bool idle_ff_match(u32 addr)
 		if (i == sig.count)
 		{
 			INFO_LOG(DYNAREC, "Idle fast-forward: %s at %08X", sig.name, addr);
+			idle_ff_last_ram_reg = sig.ram_reg;
 			return true;
 		}
 	}
@@ -1294,7 +1315,10 @@ _end:
 	if (settings.dynarec.idleskip)
 	{
 		if (!mmu_enabled() && idle_ff_match(blk->addr))
+		{
 			blk->idle_fastforward = true;
+			blk->idle_ff_ram_reg = idle_ff_last_ram_reg;
+		}
 		if (!mmu_enabled() && delay_loop_match(blk->addr))
 			blk->delay_skip = true;
 

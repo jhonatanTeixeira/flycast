@@ -50,6 +50,10 @@ struct RuntimeBlockInfo: RuntimeBlockInfo_Core
 	// Reaching this block proves the guest is only waiting (decoder.cpp,
 	// idle fast-forward signatures): the JIT jumps time to the next event.
 	bool idle_fastforward;
+	// !=0: so avanca se o registrador (idle_ff_ram_reg-1) aponta para a RAM
+	// principal -- espera em registrador de hardware (ex.: TCNT do TMU, que
+	// muda continuamente com o tempo) passaria do ponto. tech_debits 4.43.
+	u8 idle_ff_ram_reg;
 	// Laco de atraso por contagem reconhecido (decoder.cpp, delay_loop_match):
 	// o JIT chama sh4_delay_loop_skip na entrada. docs/tech_debits.md 4.40.
 	bool delay_skip;

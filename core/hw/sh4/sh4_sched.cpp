@@ -92,6 +92,20 @@ void sh4_sched_idle_fastforward()
 	g_idleFFCycles += skip;
 }
 
+// Variante com checagem (tech_debits 4.43): so avanca se o endereco lido
+// (r[reg]) esta na RAM principal (area 3, 0x0C000000-0x0FFFFFFF em qualquer
+// espelho P0-P3). Registrador de hardware (TMU etc.) muda com o tempo e o
+// avanco passaria do ponto em que o laco sairia.
+u64 g_idleFFSkippedHw;
+void DYNACALL sh4_sched_idle_fastforward_if_ram(u32 reg)
+{
+	const u32 a = r[reg & 15];
+	if (a < 0xE0000000 && (a & 0x1C000000) == 0x0C000000)
+		sh4_sched_idle_fastforward();
+	else
+		g_idleFFSkippedHw++;
+}
+
 // Pulo do laco de atraso (decoder.cpp delay_loop_match, tech_debits 4.40).
 // Chamado na entrada do bloco, antes de qualquer registrador ser alocado:
 // r4 e o contador de voltas no contexto. `cyc` = ciclos cobrados por volta.
