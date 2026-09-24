@@ -250,3 +250,7 @@ agora espera o render; ver `tech_debits.md` 4.29). Reavaliar jogando.
 ### Soulcalibur — congela no boot pelo ES (2026-09-23)
 Com o flycast2026 lançado pelo ES (boot do zero). Pelo savestate roda. Ver
 `tech_debits.md` 4.30.
+
+### Atualização 2026-09-24 (benchmark, 1 rodada por jogo — reavaliar jogando)
+KOF Evolution chuva 58,8 fps a 100%; DOA2 83% de velocidade (43 fps); Zombie
+Revenge 78%; Shenmue (cena pesada do save) 82%. Ver `tech_debits.md` 4.32-4.35.

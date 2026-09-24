@@ -215,6 +215,22 @@ void rend_dump_split(const char *path)
 	fprintf(f, "emu_frame_interval_ms_avg\t%.3f\n", g_emuFrameCount ? g_emuFrameIntervalUs / 1000.0 / g_emuFrameCount : 0.0);
 	fprintf(f, "emu_frames\t%u\n", g_emuFrameCount);
 	fprintf(f, "early_releases\t%u\n", g_earlyReleases);
+	{
+		extern u64 g_rsUs[12];
+		extern u32 g_rsShaders, g_rsSingleDraws, g_rsBatchDraws, g_rsProgramSwitches, g_rsTexBinds;
+		static const char *nm[8] = { "setup", "uniform_loop", "upload", "opaque", "punch", "modvol", "transl", "post" };
+		for (int i = 0; i < 8; i++)
+			fprintf(f, "rs_%s_ms\t%.3f\n", nm[i], g_rsUs[i] / 1000.0 / n);
+		fprintf(f, "rs_sort_ms\t%.3f\n", g_rsUs[8] / 1000.0 / n);
+		fprintf(f, "rs_batch_upload_ms\t%.3f\n", g_rsUs[10] / 1000.0 / n);
+		fprintf(f, "rs_batch_draw_ms\t%.3f\n", g_rsUs[11] / 1000.0 / n);
+		fprintf(f, "rs_tr_strips\t%.1f\n", (double)g_rsUs[9] / n);
+		fprintf(f, "rs_shaders\t%u\n", g_rsShaders);
+		fprintf(f, "rs_single_draws\t%.1f\n", (double)g_rsSingleDraws / n);
+		fprintf(f, "rs_batch_draws\t%.1f\n", (double)g_rsBatchDraws / n);
+		fprintf(f, "rs_program_switches\t%.1f\n", (double)g_rsProgramSwitches / n);
+		fprintf(f, "rs_tex_binds\t%.1f\n", (double)g_rsTexBinds / n);
+	}
 	fprintf(f, "emu_re_waits\t%u\n", g_emuReWaits);
 	fprintf(f, "emu_re_wait_ms_avg\t%.3f\n", g_emuReWaits ? g_emuReWaitUs / 1000.0 / g_emuReWaits : 0.0);
 	fprintf(f, "emu_re_wait_ms_total\t%.1f\n", g_emuReWaitUs / 1000.0);

@@ -2329,3 +2329,8 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   99,8%/59,2.
 - Instalado como `flycast2026_libretro.so` (md5 3ed1ac55); o estável anterior
   em `flycast2026_libretro.so.bak-estavel-2026-09-24` e no snapshot.
+- **Encurtar o render (passo 1):** instrumentado o render por etapa; 87% do
+  Render do KOF Evo eram translúcidos, e 1,93ms só na subida de index buffer
+  por draw em lote. Um upload por lista (4.35): KOF Evo **58,8 fps a 100%**,
+  DOA2 83,3%, Zombie 77,9%, Shenmue 81,6%; 2D iguais. Instalado como
+  flycast2026 (anterior em `.bak-pre-oneupload`).

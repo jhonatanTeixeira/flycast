@@ -909,8 +909,18 @@ static void upload_vertex_indices()
 
 static void fc_dump_framebuffer();
 
+extern u64 g_rsUs[12];
+extern u32 g_rsShaders;
+extern bool g_rendSplitEnabled;
+static inline u64 rf_now_us()
+{
+	return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 static bool RenderFrame(void)
 {
+	u64 rfT0 = g_rendSplitEnabled ? rf_now_us() : 0;
 	int vmu_screen_number = 0 ;
 	int lightgun_port = 0 ;
 
@@ -991,10 +1001,19 @@ static bool RenderFrame(void)
 
 	ShaderUniforms.PT_ALPHA=(PT_ALPHA_REF&0xFF)/255.0f;
 
+	u64 rfT1 = g_rendSplitEnabled ? rf_now_us() : 0;
 	for (const auto& it : gl.shaders)
 	{
 		glcache.UseProgram(it.second.program);
 		ShaderUniforms.Set(&it.second);
+	}
+	if (g_rendSplitEnabled)
+	{
+		u64 t = rf_now_us();
+		g_rsUs[0] += rfT1 - rfT0;
+		g_rsUs[1] += t - rfT1;
+		g_rsShaders = (u32)gl.shaders.size();
+		rfT0 = t;
 	}
 
 	//setup render target first
@@ -1063,9 +1082,12 @@ static bool RenderFrame(void)
 		glBindBuffer(GL_ARRAY_BUFFER, gl.vbo.geometry); glCheck();
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs); glCheck();
 
+		u64 rfU0 = g_rendSplitEnabled ? rf_now_us() : 0;
+		if (g_rendSplitEnabled) g_rsUs[0] += rfU0 - rfT0;
 		glBufferData(GL_ARRAY_BUFFER,pvrrc.verts.bytes(),pvrrc.verts.head(),GL_STREAM_DRAW); glCheck();
 
 		upload_vertex_indices();
+		if (g_rendSplitEnabled) g_rsUs[2] += rf_now_us() - rfU0;
 
 		//Modvol VBO
 		if (pvrrc.modtrig.used())
@@ -1144,6 +1166,7 @@ static bool RenderFrame(void)
 		}
 
 		DrawStrips();
+		rfT0 = g_rendSplitEnabled ? rf_now_us() : 0;
 		if (settings.rend.PowerVR2Filter && !is_rtt)
 			postProcessor.Render(hw_render.get_current_framebuffer());
 	}
@@ -1170,6 +1193,8 @@ static bool RenderFrame(void)
 			DrawGunCrosshair(lightgun_port);
 	}
 
+	if (g_rendSplitEnabled && rfT0 != 0)
+		g_rsUs[7] += rf_now_us() - rfT0;
 	KillTex = false;
 
 	if (is_rtt)

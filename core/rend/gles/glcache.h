@@ -10,6 +10,7 @@ public:
 	void BindTexture(GLenum target,  GLuint texture) {
 		if (target == GL_TEXTURE_2D && !_disable_cache) {
 			if (texture != _texture) {
+				extern u32 g_rsTexBinds; g_rsTexBinds++;
 				glBindTexture(target, texture);
 				_texture = texture;
 			}
@@ -139,6 +140,7 @@ public:
 
 	void UseProgram(GLuint program) {
 		if (program != _program || _disable_cache) {
+			extern u32 g_rsProgramSwitches; g_rsProgramSwitches++;
 			_program = program;
 			glUseProgram(program);
 		}

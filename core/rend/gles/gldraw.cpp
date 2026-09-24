@@ -1,10 +1,25 @@
 #include "gles.h"
 #include <unordered_set>
+#include <chrono>
 
 // FC_REND_SPLIT: draw calls issued per frame (every glDraw* below is counted).
 // Comma form so it also works as the body of an unbraced if.
 u32 g_glDrawCalls;
 #define FC_COUNT_DRAW g_glDrawCalls++,
+
+// FC_REND_SPLIT (2026-09-24, KOF Evolution): onde vao os ~14ms do Render.
+// Tempos de CPU (a render thread e limitada pela CPU/driver, nao pela GPU).
+// idx: 0 setup (inicio do RenderFrame ate o upload), 1 laco de uniforms em
+// todos os shaders, 2 upload vert/idx, 3 opacos, 4 punch-through, 5 modvols,
+// 6 translucidos (sort+draw), 7 depois do DrawStrips ate o fim.
+u64 g_rsUs[12];
+u32 g_rsShaders;
+u32 g_rsSingleDraws, g_rsBatchDraws, g_rsProgramSwitches, g_rsTexBinds;
+static inline u64 rs_now_us()
+{
+	return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // FC_REND_SPLIT (opt-in, DOA2 2026-09-22): por que o batching (PP_SameGPUState)
 // nao funde mais strips. Conta, para cada par adjacente que interrompe uma
@@ -317,6 +332,87 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 	static std::vector<u32> batchIdx;
 	const u32 *idx_base = pvrrc.idx.head();
 
+	// Um unico upload de indices por lista (docs/tech_debits.md 4.35). Antes,
+	// cada draw em lote subia seu proprio index buffer (glBindBuffer +
+	// glBufferData + rebind): no KOF Evolution na chuva, 154 subidas por frame
+	// = 1,93ms so disso. Agora uma primeira passada monta os indices de TODOS
+	// os draws da lista (simples e em lote, mesma segmentacao por
+	// PP_SameGPUState) num array so, sobe uma vez, e a segunda passada so aplica
+	// estado e desenha por offset, sem trocar de buffer. FC_NO_ONE_UPLOAD=1
+	// volta ao caminho anterior.
+	static int oneUpload = -1;
+	if (oneUpload == -1)
+		oneUpload = getenv("FC_NO_ONE_UPLOAD") != nullptr ? 0 : 1;
+	if (canBatch && oneUpload && gl.index_type == GL_UNSIGNED_INT)
+	{
+		struct Run { PolyParam* pp; u32 offset, count, lo, hi; };
+		static std::vector<Run> runs;
+		static std::vector<u32> allIdx;
+		runs.clear();
+		allIdx.clear();
+		PolyParam* end = params + count;
+		PolyParam* p0 = params;
+		while (p0 < end)
+		{
+			if (p0->count <= 2)
+			{
+				p0++;
+				continue;
+			}
+			PolyParam* runEnd = p0 + 1;
+			while (runEnd < end && runEnd->count > 2 && PP_SameGPUState(runEnd, p0))
+				runEnd++;
+			if (g_rendSplitEnabled)
+			{
+				g_opaqueRuns++;
+				if (runEnd < end && runEnd->count > 2)
+				{
+					g_batchBreakTotal++;
+					if ((p0->pcw.full & PCW_DRAW_MASK) != (runEnd->pcw.full & PCW_DRAW_MASK)) g_batchBreakPcw++;
+					if (p0->isp.full != runEnd->isp.full) g_batchBreakIsp++;
+					if (p0->tcw.full != runEnd->tcw.full) g_batchBreakTcw++;
+					if (p0->tsp.full != runEnd->tsp.full) g_batchBreakTsp++;
+					if (p0->tileclip != runEnd->tileclip) g_batchBreakTileclip++;
+				}
+				if (runEnd - p0 == 1) g_rsSingleDraws++; else g_rsBatchDraws++;
+			}
+			Run r = { p0, (u32)allIdx.size(), 0, 0xFFFFFFFF, 0 };
+			for (PolyParam* p = p0; p < runEnd; p++)
+			{
+				const u32 *src = idx_base + p->first;
+				for (u32 i = 0; i < p->count; i++)
+				{
+					const u32 v = src[i];
+					r.lo = std::min(r.lo, v);
+					r.hi = std::max(r.hi, v);
+					allIdx.push_back(v);
+				}
+				if (p + 1 < runEnd)
+					allIdx.push_back(0xFFFFFFFF);
+			}
+			r.count = (u32)allIdx.size() - r.offset;
+			runs.push_back(r);
+			p0 = runEnd;
+		}
+		if (!runs.empty())
+		{
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs2);
+			glBufferData(GL_ELEMENT_ARRAY_BUFFER, allIdx.size() * sizeof(u32), allIdx.data(), GL_STREAM_DRAW);
+			for (const Run& r : runs)
+			{
+				SetGPState<Type,SortingEnabled>(r.pp);
+				const GLvoid *offs = (const GLvoid *)(uintptr_t)(r.offset * sizeof(u32));
+				if (glDrawRangeElements_ != nullptr)
+					FC_COUNT_DRAW glDrawRangeElements_(GL_TRIANGLE_STRIP, r.lo, r.hi, (GLsizei)r.count, GL_UNSIGNED_INT, offs);
+				else
+					FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)r.count, GL_UNSIGNED_INT, offs);
+			}
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs);
+		}
+		(glDisable)(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+		return;
+	}
+
 	PolyParam* end = params + count;
 	while (params < end)
 	{
@@ -370,6 +466,7 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 
 		if (runEnd - params == 1)
 		{
+			if (g_rendSplitEnabled) g_rsSingleDraws++;
 			if (glDrawRangeElements_ != nullptr)
 			{
 				const u32 *pi = idx_base + params->first;
@@ -392,6 +489,7 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 			// the fixed restart index so each strip keeps its own topology
 			// (GL starts a fresh strip right after a restart index, exactly
 			// like a new, independent glDrawElements call would).
+			if (g_rendSplitEnabled) g_rsBatchDraws++;
 			batchIdx.clear();
 			u32 lo = 0xFFFFFFFF, hi = 0;
 			for (PolyParam* p = params; p < runEnd; p++)
@@ -406,6 +504,7 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 				if (p + 1 < runEnd)
 					batchIdx.push_back(0xFFFFFFFF);
 			}
+			u64 rsB = g_rendSplitEnabled ? rs_now_us() : 0;
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs2);
 			if (gl.index_type == GL_UNSIGNED_SHORT)
 			{
@@ -419,10 +518,13 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 			{
 				glBufferData(GL_ELEMENT_ARRAY_BUFFER, batchIdx.size() * sizeof(u32), batchIdx.data(), GL_STREAM_DRAW);
 			}
+			u64 rsD = g_rendSplitEnabled ? rs_now_us() : 0;
+			if (g_rendSplitEnabled) g_rsUs[10] += rsD - rsB;
 			if (glDrawRangeElements_ != nullptr)
 				FC_COUNT_DRAW glDrawRangeElements_(GL_TRIANGLE_STRIP, lo, hi, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
 			else
 				FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)batchIdx.size(), gl.index_type, (GLvoid*)0);
+			if (g_rendSplitEnabled) g_rsUs[11] += rs_now_us() - rsD;
 			// Re-bind the main index buffer so unrelated draws (and the next
 			// DrawList call) keep using the un-batched geometry as before.
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs);
@@ -759,18 +861,25 @@ void DrawStrips()
 		glcache.Enable(GL_DEPTH_TEST);
 		glcache.DepthMask(GL_TRUE);
 
+		u64 rs0 = g_rendSplitEnabled ? rs_now_us() : 0;
 		//Opaque
 		DrawList<ListType_Opaque, false>(pvrrc.global_param_op, 
 			previous_pass.op_count, current_pass.op_count - previous_pass.op_count);
+		u64 rs1 = g_rendSplitEnabled ? rs_now_us() : 0;
+		if (g_rendSplitEnabled) g_rsUs[3] += rs1 - rs0;
 
 		//Alpha tested
 		DrawList<ListType_Punch_Through, false>(pvrrc.global_param_pt,
 			previous_pass.pt_count, current_pass.pt_count - previous_pass.pt_count);
+		u64 rs2 = g_rendSplitEnabled ? rs_now_us() : 0;
+		if (g_rendSplitEnabled) g_rsUs[4] += rs2 - rs1;
 
 		// Modifier volumes
 		if (gl.stencil_present && settings.rend.ModifierVolumes)
 			DrawModVols(previous_pass.mvo_count, current_pass.mvo_count - previous_pass.mvo_count);
 
+		u64 rs3 = g_rendSplitEnabled ? rs_now_us() : 0;
+		if (g_rendSplitEnabled) g_rsUs[5] += rs3 - rs2;
 		//Alpha blended
 		// Frame-budget speedhack v2 (settings.rend.FrameBudgetVblankMultiplier):
 		// when active, draw only a FRACTION of this pass's Translucent
@@ -797,7 +906,9 @@ void DrawStrips()
 				}
 				else
 				{
+					u64 rsS = g_rendSplitEnabled ? rs_now_us() : 0;
 					SortPParams(previous_pass.tr_count, trCount);
+					if (g_rendSplitEnabled) { g_rsUs[8] += rs_now_us() - rsS; g_rsUs[9] += trCount; }
 					int drawCount = render_reduce_translucent_this_frame
 						? (int)(trCount * render_translucent_draw_fraction) : trCount;
 					DrawList<ListType_Translucent, true>(pvrrc.global_param_tr, previous_pass.tr_count, drawCount);
@@ -810,6 +921,7 @@ void DrawStrips()
 				DrawList<ListType_Translucent, false>(pvrrc.global_param_tr, previous_pass.tr_count, drawCount);
 			}
 		}
+		if (g_rendSplitEnabled) g_rsUs[6] += rs_now_us() - rs3;
 
 		previous_pass = current_pass;
 		}
