@@ -10,6 +10,7 @@
 	.global sq_stub
 	.global g_membase
 	.global g_sink
+	.global g_cycles
 
 // fipr f3 <- fv0 . fv12, na mesma ordem do JIT atual: (p0+p1)+(p2+p3)
 .macro FIPR_F3
@@ -215,6 +216,8 @@ X_8C84:
 	mov w0, #0x8C84
 	movk w0, #0x8C1D, lsl #16
 X_common:
+	adrp x9, g_cycles
+	str w12, [x9, :lo12:g_cycles]
 	stp w19, w20, [x28, #128]
 	stp w21, w22, [x28, #136]
 	stp w23, w24, [x28, #144]
@@ -256,3 +259,4 @@ sq_stub:
 	.align 3
 g_membase: .quad 0
 g_sink: .quad 0
+g_cycles: .word 0

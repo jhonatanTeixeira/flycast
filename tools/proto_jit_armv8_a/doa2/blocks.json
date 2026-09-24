@@ -1,0 +1,269 @@
+{
+ "8C101BC2": {
+  "cycles": 7,
+  "hex": "7b1f0071e5000054b33dfd97a00000355d7883521d82b1729d0b01b9af3dfd179abb40b98d030791af497af88f2b00f95a230011af497af88f2f00f95a230011999b40b9f803192a989f00b99f5f40bde103271efe2b211e9e4b00bd1f102e1e9f5f00bd39030111999b00b9fd03271e9d4f00bd979740b9f7820011979700b9af497af88f2300f95a2300119abb00b9894301912079404c890300912179df4c2279df4c2379df4c2479df4c2590804f4510a04f6518804f8518a04f894301912579004cfc03271e9c6f00bd968f40b9d6060051968f00b9df020071f5179f1a951701b9949340b9b34974b8938300b994120011949300b9f303152afd03132a930f01b9f6031a2a968700b9",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0x140  // b.any",
+   "mov\tx9, #0x6a40                \t// #27200",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe84e0",
+   "mov\tx9, #0x6a44                \t// #27204",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe84e8"
+  ],
+  "cond": [
+   "8C101C5C",
+   "8C101BE2"
+  ]
+ },
+ "8C101BC4": {
+  "cycles": 7,
+  "hex": "7b1f0071e50000541e3cfd97a00000359d7883521d82b1729d0b01b91a3cfd179abb40b98d030791af497af88f2f00f95a230011999b40b9f803192a989f00b99f5f40bde103271efe2b211e9e4b00bd1f102e1e9f5f00bd39030111999b00b9fd03271e9d4f00bd979740b9f7820011979700b9af497af88f2300f95a2300119abb00b9894301912079404c890300912179df4c2279df4c2379df4c2479df4c2590804f4510a04f6518804f8518a04f894301912579004cfc03271e9c6f00bd968f40b9d6060051968f00b9df020071f5179f1a951701b9949340b9b34974b8938300b994120011949300b9f303152afd03132a930f01b9f6031a2a968700b9",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0x128  // b.any",
+   "mov\tx9, #0xb570                \t// #46448",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe7e80",
+   "mov\tx9, #0xb574                \t// #46452",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe7e88"
+  ],
+  "cond": [
+   "8C101C5C",
+   "8C101BE2"
+  ]
+ },
+ "8C101BE2": {
+  "cycles": 3,
+  "hex": "7b0f0071e50000545f3dfd97a00000355d7c83521d82b1729d0b01b95b3dfd17890301912079404c89c301912179404c00dc216e01d4206e3fd8307e9f4f00bd9a8340b95f030072f9179f1a991701b9989340b98d030791b74978b897bb00b918130011989300b9f603192afd03162a960f01b91e102e1e9e5f00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0xa4  // b.any",
+   "mov\tx9, #0x6bf0                \t// #27632",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe8384",
+   "mov\tx9, #0x6bf4                \t// #27636",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe838c"
+  ],
+  "cond": [
+   "8C101C0C",
+   "8C101BEC"
+  ]
+ },
+ "8C101BEC": {
+  "cycles": 4,
+  "hex": "7b130071e5000054033bfd97a00000359d7d83521d82b1729d0b01b9ff3afd179f5f40bd9e5340bdff1b3e1e9f5f00bd9a9340b9417f1a533fe00071e1000054e0031a2a892301d1290140f9810301d120013fd604000014e1031a2a21000791806ba1f89d4f40bd9c6f40bda0233c1ef9d79f1a991701b998bb40b918031a0b98bb00b99b7f40bd7703261e970701b9898301912079404c890301912179404c00dc216e01d4206e3cd8307e9c6f00bd017f1a533fe00071e1000054e003182a892301d1290140f9810301d120013fd604000014e103182a21000791806ba1f8f603192afd03162a960f01b9fa02271e9a4b00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0x11c  // b.any",
+   "mov\tx9, #0xa30                 \t// #2608",
+   "movk\tx9, #0x651c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe7a14",
+   "mov\tx9, #0xa34                 \t// #2612",
+   "movk\tx9, #0x651c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe7a1c"
+  ],
+  "cond": [
+   "8C101C38",
+   "8C101BFE"
+  ]
+ },
+ "8C101BFE": {
+  "cycles": 1,
+  "hex": "7b070071e5000054b53afd97a0000035dd7f83521d82b1729d0b01b9b13afd179f4b40bd9e4f40bdff2b3e1e9f4b00bdfe03271e9e4f00bd9d6f40bdba03381e9a0701b9",
+  "exit": [
+   "bl\t0xfe78ec"
+  ],
+  "next": "8C101C26"
+ },
+ "8C101C0C": {
+  "cycles": 5,
+  "hex": "7b170071e50000542f3dfd97a00000359d8183521d82b1729d0b01b92b3dfd179f5f40bd9e5340bdff1b3e1e9f5f00bd9a9340b95a6300119a9300b99d4f40bd9c6f40bda0233c1ef9d79f1a991701b99b7f40bd7803261e980701b9898301912079404c890301912179404c00dc216e01d4206e3cd8307e9c6f00bdf00380125703100b97bb00b9417f1a533fe00071e1000054e0031a2a892301d1290140f9810301d120013fd604000014e1031a2a21000791806ba1f8f603192afd03162a960f01b91a03271e9a4b00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0xf4  // b.any",
+   "mov\tx9, #0x9280                \t// #37504",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe82c4",
+   "mov\tx9, #0x9284                \t// #37508",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe82cc"
+  ],
+  "cond": [
+   "8C101C38",
+   "8C101C20"
+  ]
+ },
+ "8C101C20": {
+  "cycles": 4,
+  "hex": "7b130071e5000054eb3cfd97a00000351d8483521d82b1729d0b01b9e73cfd179f4b40bd9e4f40bdff2b3e1e9f4b00bd9d6f40bdba03381e9a0701b9fe03271e9e4f00bd998b40b95f03196bf8d79f1a981701b957771e53978300b9",
+  "exit": [
+   "ldr\tw11, [x28, #276]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0x84  // b.any",
+   "mov\tx9, #0xaa50                \t// #43600",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe81b4",
+   "mov\tx9, #0xaa54                \t// #43604",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe81bc"
+  ],
+  "cond": [
+   "8C101C3A",
+   "8C101C2E"
+  ]
+ },
+ "8C101C26": {
+  "cycles": 4,
+  "hex": "7b130071e5000054a33afd97a0000035dd8483521d82b1729d0b01b99f3afd179a0741b9998b40b95f03196bf8d79f1a981701b957771e53978300b9",
+  "exit": [
+   "ldr\tw11, [x28, #276]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0x64  // b.any",
+   "mov\tx9, #0x6e0                 \t// #1760",
+   "movk\tx9, #0x651c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe7894",
+   "mov\tx9, #0x6e4                 \t// #1764",
+   "movk\tx9, #0x651c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe789c"
+  ],
+  "cond": [
+   "8C101C3A",
+   "8C101C2E"
+  ]
+ },
+ "8C101C2E": {
+  "cycles": 1,
+  "hex": "7b070071e5000054cd3bfd97a0000035dd8583521d82b1729d0b01b9c93bfd179a1b41b95a030c5299a340b9988340b92e03180b8d030791af496eb8ff01271e9f4f00bd5a030c529a1b01b9",
+  "exit": [
+   "bl\t0xfe7d4c"
+  ],
+  "next": "8C101C3A"
+ },
+ "8C101C38": {
+  "cycles": 3,
+  "hex": "7b0f0071e5000054833afd97a00000351d8783521d82b1729d0b01b97f3afd17ff03271e9f4f00bd9a8740b98d030791af497af88f2300f99e5b40bd9d5f40bdde0b3d1e9e5b00bd999b40b9392300518f2740f9af4939f89c5740bd9c0b3d1e9c5700bd392300518f2340f9af4939f8988f40b91f03186af7179f1a971701b9392300518f2f40f9af4939f839230051999b00b98f2b40f9af4939f8f603172afd03162a960f01b9959f40b9b54939b8",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0xd8  // b.any",
+   "mov\tx9, #0x62b0                \t// #25264",
+   "movk\tx9, #0x651c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe7814",
+   "mov\tx9, #0x62b4                \t// #25268",
+   "movk\tx9, #0x651c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe781c"
+  ],
+  "cond": [
+   "8C101C52",
+   "8C101C4E"
+  ]
+ },
+ "8C101C3A": {
+  "cycles": 3,
+  "hex": "7b0f0071e5000054c33cfd97a00000355d8783521d82b1729d0b01b9bf3cfd179a8740b98d030791af497af88f2300f99f5b40bd9e5f40bdff0b3e1e9f5b00bd999b40b9392300518f2740f9af4939f89d5740bdbd0b3e1e9d5700bd392300518f2340f9af4939f8988f40b91f03186af7179f1a971701b9392300518f2f40f9af4939f839230051999b00b98f2b40f9af4939f8f603172afd03162a960f01b9959f40b9b54939b8",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0xd0  // b.any",
+   "mov\tx9, #0xb4d0                \t// #46288",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe8114",
+   "mov\tx9, #0xb4d4                \t// #46292",
+   "movk\tx9, #0x651b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0xfe811c"
+  ],
+  "cond": [
+   "8C101C52",
+   "8C101C4E"
+  ]
+ },
+ "8C101C4E": {
+  "cycles": 2,
+  "hex": "7b0b0071e50000543a3cfd97a0000035dd8983521d82b1729d0b01b9363cfd179abb40b98d030791af497af88f2b00f95a2300119abb00b9999b40b9217f1a533fe00071e1000054e003192a892301d1290140f9810301d120013fd604000014e103192a21000791806ba1f8",
+  "exit": [
+   "bl\t0xfe7f00"
+  ],
+  "next": "8C101BC4"
+ }
+}

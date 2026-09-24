@@ -14,12 +14,14 @@ extern uint32_t cur_run(void *ctx, uint32_t cycles);
 extern uint32_t new_run(void *ctx, uint32_t cycles);
 extern void sq_stub(void);
 extern uint64_t g_membase, g_sink;
+extern uint32_t g_cycles;	// ciclos restantes na saida (os dois lados gravam)
 static double now(){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
 static uint8_t cap[448], ctxA[448], ctxB[448];
 static uint8_t sinkA[1<<16], sinkB[1<<16];
 int main(int argc,char**argv){
   const char*dir=argc>1?argv[1]:".";
-  char p[512]; snprintf(p,sizeof p,"%s/cap-8C1D8BDA-ctx.bin",dir); FILE*f=fopen(p,"rb"); if(!f||fread(cap,1,448,f)!=448){puts("ctx?");return 1;} fclose(f);
+  const char*cap_name=argc>3?argv[3]:"8C1D8BDA";	// bloco da captura (FC_CAPTURE_BLOCK)
+  char p[512]; snprintf(p,sizeof p,"%s/cap-%s-ctx.bin",dir,cap_name); FILE*f=fopen(p,"rb"); if(!f||fread(cap,1,448,f)!=448){puts("ctx?");return 1;} fclose(f);
   size_t RES=0x100000000ull+0x20000;
   uint8_t*reg=mmap(0,RES,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,-1,0);
   uint8_t*base=reg+0x10000; uint8_t*ctx=base-0x1c0;
@@ -28,16 +30,22 @@ int main(int argc,char**argv){
   uint32_t mir[]={0x0C,0x0D,0x0E,0x0F,0x8C,0x8D,0x8E,0x8F,0xAC,0xAD,0xAE,0xAF};
   for(int i=0;i<12;i++) if(mmap(base+((uint64_t)mir[i]<<24),16<<20,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_FIXED,fd,0)==MAP_FAILED){puts("mmap ram");return 1;}
   uint8_t*sq=base+0xE0000000ull; if(mmap(sq,64<<20,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED|MAP_NORESERVE,-1,0)==MAP_FAILED){puts("mmap sq");return 1;}
-  snprintf(p,sizeof p,"%s/cap-8C1D8BDA-ram.bin",dir); f=fopen(p,"rb"); uint8_t*ram=base+0x0C000000ull; if(!f||fread(ram,1,16<<20,f)!=(16u<<20)){puts("ram?");return 1;} fclose(f);
+  snprintf(p,sizeof p,"%s/cap-%s-ram.bin",dir,cap_name); f=fopen(p,"rb"); uint8_t*ram=base+0x0C000000ull; if(!f||fread(ram,1,16<<20,f)!=(16u<<20)){puts("ram?");return 1;} fclose(f);
   *(void**)(ctx-0x48)=(void*)sq_stub; g_membase=(uint64_t)base;
   uint32_t r6=*(uint32_t*)(cap+128+6*4);
   uint8_t*sqwin=sq+((r6&0x03FFFFFF)&~0xFFFFu)-0x10000; size_t sqlen=0x30000;
   // 1) equivalencia
   static uint8_t sqA[0x30000], sqB[0x30000];
-  memset(sqwin,0,sqlen); memcpy(ctx,cap,448); g_sink=(uint64_t)sinkA; uint32_t eA=cur_run(ctx,1u<<30); memcpy(ctxA,ctx,448); size_t nA=g_sink-(uint64_t)sinkA; memcpy(sqA,sqwin,sqlen);
-  memset(sqwin,0,sqlen); memcpy(ctx,cap,448); g_sink=(uint64_t)sinkB; uint32_t eB=new_run(ctx,1u<<30); memcpy(ctxB,ctx,448); size_t nB=g_sink-(uint64_t)sinkB; memcpy(sqB,sqwin,sqlen);
-  printf("saida: atual %08X  nova %08X | bytes enviados ao TA: %zu x %zu\n",eA,eB,nA,nB);
+  uint8_t*ramA=malloc(16<<20), *ram0=malloc(16<<20); memcpy(ram0,ram,16<<20);
+  memset(sqwin,0,sqlen); memcpy(ctx,cap,448); g_sink=(uint64_t)sinkA; uint32_t eA=cur_run(ctx,1u<<30); uint32_t cA=g_cycles; memcpy(ctxA,ctx,448); size_t nA=g_sink-(uint64_t)sinkA; memcpy(sqA,sqwin,sqlen); memcpy(ramA,ram,16<<20); memcpy(ram,ram0,16<<20);
+  memset(sqwin,0,sqlen); memcpy(ctx,cap,448); g_sink=(uint64_t)sinkB; uint32_t eB=new_run(ctx,1u<<30); uint32_t cB=g_cycles; memcpy(ctxB,ctx,448); size_t nB=g_sink-(uint64_t)sinkB; memcpy(sqB,sqwin,sqlen);
+  printf("saida: atual %08X  nova %08X | bytes enviados ao TA: %zu x %zu | ciclos usados: %u x %u\n",eA,eB,nA,nB,(1u<<30)-cA,(1u<<30)-cB);
   int bad=0;
+  if(eA!=eB){printf("  saida difere\n");bad++;}
+  if(cA!=cB){printf("  ciclos diferem\n");bad++;}
+  if(memcmp(ramA,ram,16<<20)){printf("  RAM difere\n");bad++;}
+  // resto do contexto (fora r/fr/xf/fpul/T, conferidos abaixo; 264 next_pc e 268 jdyn sao rascunho do JIT)
+  for(int o=192;o<448;o+=4){ if(o==260||o==276||o==264||o==268) continue; uint32_t a=*(uint32_t*)(ctxA+o), b=*(uint32_t*)(ctxB+o); if(a!=b){printf("  contexto +%d difere: %08X x %08X\n",o,a,b);bad++;} }
   for(int i=0;i<16;i++){ uint32_t a=*(uint32_t*)(ctxA+128+4*i), b=*(uint32_t*)(ctxB+128+4*i); if(a!=b){printf("  r%d difere: %08X x %08X\n",i,a,b);bad++;} }
   for(int i=0;i<32;i++){ uint32_t a=*(uint32_t*)(ctxA+4*i), b=*(uint32_t*)(ctxB+4*i); if(a!=b){printf("  %s%d difere: %08X x %08X\n",i<16?"xf":"fr",i&15,a,b);bad++;} }
   if(*(uint32_t*)(ctxA+260)!=*(uint32_t*)(ctxB+260)){printf("  fpul difere\n");bad++;}

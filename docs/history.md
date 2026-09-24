@@ -2505,3 +2505,17 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   (estilo LTO) em segunda thread, construído a partir de alvos reescritos à
   mão do dump (`docs/current_plan.md`).
 
+### 2026-09-24 — nível 2: regiões quentes e primeira região escrita à mão (DOA2)
+
+- `tools/region_study.py`: no dump do JIT antigo, o laço de vértices do DOA2
+  (10-12 blocos) tem ~45% do custo do JIT do jogo; no Shenmue II, 18 regiões
+  dão 50% (4.54).
+- Captura no início da strip do DOA2 (8C101BC2), extrator salvo
+  (`tools/proto_jit_armv8_a/extract_blocks.py`), harness parametrizado e agora
+  comparando ciclos, contexto inteiro e RAM.
+- Região do DOA2 escrita à mão: IDÊNTICA ao JIT atual incluindo ciclos, 1,85×
+  (18 vértices) e 1,76× (5 vértices), código quente 3,5× menor; nove regras
+  para o gerador (4.55, README do protótipo).
+- O protótipo antigo do Shenmue falha na conferência de ciclos (602 × 257):
+  a checagem única por volta não era a soma dos blocos. A refazer.
+

@@ -49,3 +49,63 @@ O código do laço fica 3,8× menor (2740 → 724 bytes).
 - **Carga e descarga do estado:** a versão nova carrega e descarrega o estado
   a cada entrada. Num JIT de verdade, com registradores fixos, isso sairia do
   caminho quente.
+
+## Correção de 2026-09-24: o protótipo do Shenmue não conferia ciclos
+
+O harness agora também compara o contador de ciclos na saída, o contexto
+inteiro e a RAM. Com isso, o `new.S` do Shenmue **falha**: 602 ciclos usados
+contra 257 do JIT atual (uma checagem de 86 por volta não é a soma dos blocos
+executados). Registradores, TA e SQ continuam iguais; os números de tempo
+acima valem só para o código, não para a contabilidade de ciclos. Falta
+refazer com a regra 1 do DOA2 abaixo.
+
+## Região do DOA2 (nível 2): laço de vértices, 12 blocos
+
+`doa2/`: `blocks.json` (extraído com `extract_blocks.py`) e `new.S` (região
+escrita à mão). Captura no início da strip (8C101BC2), core com `FC_JIT_DUMP`:
+```
+FC_JIT_DUMP=<dir> FC_CAPTURE_BLOCK=8C101BC2:3000
+python3 extract_blocks.py <dir>/jit-<pid>.txt doa2/blocks.json 8C101BC2 8C101BC4 8C101BE2 \
+    8C101BEC 8C101BFE 8C101C0C 8C101C20 8C101C26 8C101C2E 8C101C38 8C101C3A 8C101C4E
+python3 gen_cur.py doa2/blocks.json 8C101BC2 cur_doa2.S
+aarch64-linux-gnu-gcc-13 -O2 -static -o proto_doa2 harness.c cur_doa2.S doa2/new.S
+./proto_doa2 <dir> 200000 8C101BC2
+```
+
+| Captura | Atual | Região | Ganho |
+|---|---|---|---|
+| strip de 18 vértices | 4625 ns | 2499 ns | **1,85×** |
+| strip de 5 vértices | 1167 ns | 662 ns | 1,76× |
+
+**IDÊNTICO** nas duas: registradores, contexto inteiro, RAM, SQ, dados do TA e
+ciclos (341 × 341, 87 × 87). Código quente 2000 → 564 bytes (3,5× menor),
+mais 180 de saídas e os caminhos frios da SQ fora da linha.
+
+Regras usadas (candidatas ao gerador do nível 2; cada uma só usa o que se vê
+na compilação):
+1. **Ciclos:** guarda em cada ponto de entrada com o custo do caminho mais
+   longo até a próxima guarda; passou, cada bloco original só subtrai; falhou,
+   sai antes de executar para o bloco do JIT antigo. Exatamente equivalente a
+   checar por bloco.
+2. **Registradores:** SH4 vivo através de chamada C em callee-saved (x19-x26,
+   s8-s15 para floats só lidos); o resto em caller-saved; XMTRX (só leitura)
+   recarregada com um `ld1` depois de cada chamada.
+3. **T vira desvio;** o valor de T em cada saída é conhecido estaticamente.
+4. **Registrador derivado** (r7 = r6 da cabeça = r6 − 32 no ponto de uso) não
+   ocupa registrador nem é gravado na volta, só na saída.
+5. **Stores com pré-decremento consecutivos** (4× `fmov @-r6`) numa base só,
+   com guarda contra wrap de 32 bits.
+6. **Descarga da SQ = chamada C completa;** carga de RAM independente pode
+   passar para depois dela (a descarga só lê a SQ).
+7. **Blocos com as mesmas ops** (8C101BFE+8C101C26 ≡ 8C101C20; 8C101C38 =
+   `fldi0` + 8C101C3A) compartilham código; os ciclos diferentes ficam antes
+   da junção.
+8. **Leitura rara de registrador só lido** (r8) direto do contexto.
+9. **`pref` de RAM:** checagem de SQ em linha, caminho da SQ fora da linha
+   (salva só o que está vivo em caller-saved).
+
+Limites: cache quente e laço isolado (sem o ganho de L1I); o stub da SQ do
+harness é barato (no jogo a descarga chama o TA de verdade, o mesmo custo nos
+dois lados, o que dilui o ganho); as escritas na SQ vão direto para a memória
+nos dois lados (no emulador o JIT atual usa trampolim).
+
