@@ -9,6 +9,9 @@
 #include "cheats.h"
 #include "spg.h"
 #include "hw/sh4/sh4_sched.h"
+#include "hw/sh4/sh4_mem.h"
+#include "hw/aica/aica_if.h"
+#include "deps/xxhash/xxhash.h"
 
 /*
 
@@ -502,6 +505,22 @@ void rend_resize(int width, int height)
 	renderer->Resize(width, height);
 }
 
+// FC_STATE_HASH: estado compartilhado com o savestate (state_hash_mark_load)
+FILE *g_stateHashFile;
+int g_stateHashState = -1;
+u32 g_stateHashFrame;
+// Carga de savestate: marca no arquivo e zera o contador de pedidos, para
+// comparar rodadas a partir do mesmo ponto (o boot antes da carga varia).
+void state_hash_mark_load()
+{
+   if (g_stateHashState == 1)
+   {
+      fprintf(g_stateHashFile, "L\n");
+      fflush(g_stateHashFile);
+   }
+   g_stateHashFrame = 0;
+}
+
 void rend_start_render(void)
 {
    render_called = true;
@@ -526,6 +545,68 @@ void rend_start_render(void)
       g_lastReqCycles = nowC;
    }
    TA_context* ctx = tactx_Pop(CORE_CURRENT_CTX);
+
+   // FC_STATE_HASH=<arquivo> (diagnostico, 2026-09-25): hash por pedido de
+   // render dos dados que o SH4 mandou ao TA no frame, e a cada 60 pedidos
+   // da RAM principal, VRAM e RAM de som. Duas rodadas do mesmo savestate
+   // devem bater linha a linha se a emulacao for deterministica -- base para
+   // validar um JIT novo contra o atual.
+   {
+      extern FILE *g_stateHashFile;
+      extern int g_stateHashState;
+      extern u32 g_stateHashFrame;
+      FILE *&hashFile = g_stateHashFile;
+      int &hashState = g_stateHashState;
+      u32 &hashFrame = g_stateHashFrame;
+      if (hashState < 0)
+      {
+         const char *p = getenv("FC_STATE_HASH");
+         hashFile = p != nullptr ? fopen(p, "w") : nullptr;
+         hashState = hashFile != nullptr ? 1 : 0;
+      }
+      if (hashState == 1 && ctx != nullptr)
+      {
+         u8 *end = ctx->tad.End();
+         size_t n = end - ctx->tad.thd_root;
+         fprintf(hashFile, "F %u %llu %zu %016llx", hashFrame, (unsigned long long)sh4_sched_now64(), n,
+               (unsigned long long)XXH64(ctx->tad.thd_root, n, 0));
+         // FC_STATE_HASH_EVERY=N: RAM/VRAM/ARAM/contexto a cada N pedidos (padrao 60)
+         static int every = -1;
+         if (every < 0)
+         {
+            const char *e = getenv("FC_STATE_HASH_EVERY");
+            every = e != nullptr ? std::max(1, atoi(e)) : 60;
+         }
+         if (hashFrame % every == 0)
+            fprintf(hashFile, " ram %016llx vram %016llx aram %016llx ctx %016llx",
+                  (unsigned long long)XXH64(mem_b.data, mem_b.size, 0),
+                  (unsigned long long)XXH64(vram.data, vram.size, 0),
+                  (unsigned long long)XXH64(aica_ram.data, aica_ram.size, 0),
+                  (unsigned long long)XXH64(&p_sh4rcb->cntx, sizeof(Sh4Context), 0));
+         // FC_STATE_HASH_RAMDUMP=F: grava a RAM principal inteira no pedido F
+         static int dumpAt = -2;
+         if (dumpAt == -2)
+         {
+            const char *e = getenv("FC_STATE_HASH_RAMDUMP");
+            dumpAt = e != nullptr ? atoi(e) : -1;
+         }
+         if ((int)hashFrame == dumpAt)
+         {
+            char path[600];
+            snprintf(path, sizeof(path), "%s.ram%u", getenv("FC_STATE_HASH"), hashFrame);
+            FILE *rf = fopen(path, "wb");
+            if (rf != nullptr)
+            {
+               fwrite(mem_b.data, 1, mem_b.size, rf);
+               fclose(rf);
+            }
+         }
+         fputc('\n', hashFile);
+         if (hashFrame % 30 == 0)
+            fflush(hashFile);
+         hashFrame++;
+      }
+   }
 
    // No end of render interrupt when rendering the framebuffer
 	if (!ctx || !ctx->rend.isRenderFramebuffer)

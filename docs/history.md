@@ -2422,3 +2422,14 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   desvio indireto ~1-1,5%; total evitável ~2,5-3,5%. O que vale no
   `jit_armv8_a` é retorno previsível (82% das saídas são `rts`), não trocar
   a tabela.
+
+### 2026-09-25 — Passos 1, 3 e 5 do plano do `jit_armv8_a`
+
+- Passo 1 (PMU, 4.47): IPC 0,43; 21% dos ciclos esperando instrução (L1I),
+  13-18% esperando load; ~15% da emu thread do Shenmue II é descompressão
+  de CHD (LZMA + ECC), achado fora do JIT.
+- Passo 3: auditoria de todo C++ que toca o contexto do SH4 durante o JIT
+  (`docs/jit_armv8_a_context_audit.md`).
+- Passo 5 (4.48): emulação determinística a partir do savestate depois de
+  fixar o RTC (não está no savestate); `FC_STATE_HASH` +
+  `tools/state_compare.py` detectam diferença e servem de teste do JIT novo.

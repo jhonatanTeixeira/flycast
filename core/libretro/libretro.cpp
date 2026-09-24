@@ -3252,6 +3252,24 @@ void UpdateInputState(u32 port)
    if (gl_ctx_resetting)
 	  return;
 
+   // FC_INPUT_NEUTRAL (diagnostico, 2026-09-25): controle parado, ignorando o
+   // frontend. Os analogicos do device oscilam em repouso e isso chega ao jogo
+   // (Shenmue II guarda o eixo na RAM; DOA2 muda de caminho no frame 5): sem
+   // isto duas rodadas do mesmo savestate nao sao comparaveis.
+   static int neutral = -1;
+   if (neutral < 0)
+      neutral = getenv("FC_INPUT_NEUTRAL") != nullptr ? 1 : 0;
+   if (neutral)
+   {
+      for (int i = 0; i < 4; i++)
+      {
+         kcode[i] = 0xFFFFFFFF;
+         rt[i] = lt[i] = 0;
+         joyx[i] = joyy[i] = joyrx[i] = joyry[i] = 0;
+      }
+      return;
+   }
+
    if (settings.System == DC_PLATFORM_NAOMI || settings.System == DC_PLATFORM_ATOMISWAVE)
    {
       UpdateInputStateNaomi(0);

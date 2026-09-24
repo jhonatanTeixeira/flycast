@@ -184,6 +184,87 @@ saídas/s, isso é **~2,5–3,5% do tempo da emu thread**.
   (`bl`/`ret`) deixa o preditor de retorno do A53 acertar, e dispensa a
   tabela no caso comum.
 
+## Ciclos: contadores do A53 na emu thread (passo 1) — medido
+
+2026-09-25, `tools/pmu_game.sh` (perf stat -t na emu thread + perf record,
+~14 s por grupo de eventos, cena do savestate).
+
+| | Shenmue II | DOA2 |
+|---|---|---|
+| clock real | 1,28 GHz | 1,25 GHz |
+| IPC | 0,43 | 0,44 |
+| **fila vazia por falta no L1I (0xE1)** | **21,0%** dos ciclos | **19,1%** |
+| **espera de load que faltou (0xE7)** | **17,6%** | **13,0%** |
+| fila vazia, outros (previsão de desvio etc., 0xE0) | 8,2% | 6,0% |
+| dependência de endereço (0xE5) | 5,6% | 7,4% |
+| dependência geral (0xE4) | 3,9% | 3,5% |
+| dependência FP/NEON (0xE6) | 3,6% | 7,3% |
+| store e micro-TLB de instrução | 1,3% | 1,3% |
+| sobra (trabalho útil) | ~39% | ~42% |
+| L1I refill / 1000 instr | 7,6 | 5,6 |
+| L2 refill / 1000 instr | 5,9 | 6,4 |
+| desvios errados / 1000 instr | 13,1 (indiretos 2,0) | 8,4 (indiretos 1,4) |
+
+**Onde o tempo vai** (amostragem de ciclos, Shenmue II):
+- **JIT (`SH4_TCB`):** 65,7%.
+- **Descompressão do CHD na emu thread:** 14,8% (`LzmaDec_DecodeReal2`
+  9,7%, `ecc_compute_bytes` 4,2%, `crc16` 0,9%). **Achado fora do JIT:** o
+  Shenmue II lê do disco sem parar nessa cena.
+- **Som:** AICA ~8%, ARM7 ~3%.
+- **DOA2:** JIT 69,5%, CHD ~1%.
+
+**Faltas no L1I:** 83% (Shenmue II) e 67% (DOA2) das paradas por falta no
+L1I são no código do JIT.
+
+**Espera de load:** 72% e 49% delas.
+
+**No tempo do JIT, Shenmue II:**
+
+| Parte do tempo do JIT | Parte |
+|---|---|
+| esperando instrução (L1I) | ~26% |
+| esperando dado | ~19% |
+| executando (inclui dependências e desvios errados) | ~55% |
+
+**Consequência:** cortar as instruções de overhead ganha sobre os ~55%. A
+densidade do código e agrupar o código quente atacam os ~26% de L1I. As
+esperas de dado são do jogo (RAM emulada) e só mudam com layout ou prefetch.
+
+## Validação por comparação exata (passo 5) — funciona
+
+- **Ferramentas:**
+  - `FC_STATE_HASH=<arq>`: hash dos dados do TA por pedido de render e, a cada
+    `FC_STATE_HASH_EVERY` pedidos, de RAM, VRAM, RAM de som e contexto do SH4;
+    `L` marca a carga do savestate;
+  - `FC_AUDIO_DUMP` recomeça na carga;
+  - `FC_RTC_FIXED=<s>`: o RTC não entra no savestate e começava na hora do
+    host, a única fonte de variação encontrada;
+  - `FC_INPUT_NEUTRAL=1`: controle parado;
+  - `tools/state_compare.py`: alinha pelo ciclo emulado e sai com código 1 se
+    houver diferença.
+- **Resultado:** com RTC fixo, duas rodadas do mesmo savestate saem
+  **idênticas** em Shenmue II, DOA2 e MBAA (TA de todo frame, RAM, VRAM,
+  RAM de som, contexto e PCM), com render em thread e sem.
+- **Diferenças inofensivas ignoradas:** um pedido de render vazio a mais numa
+  das rodadas do DOA2, e o primeiro frame depois da carga no modo sem thread
+  (leva sobra do boot).
+- **Sensibilidade conferida:**
+  - `FC_NO_ZX_LOAD=1` (otimização neutra) → IDÊNTICOS;
+  - `FC_IDLE_FF=0` (muda o tempo emulado) → DIFERENTES.
+- **Consequência:** o `jit_armv8_a` pode ser validado automaticamente contra o
+  JIT atual, jogo por jogo.
+
+## Onde o contexto precisa estar em memória (passo 3)
+
+Ver `docs/jit_armv8_a_context_audit.md`. Pontos principais:
+- **Sem MMU, os caminhos de memória não leem o banco SH4.** Sem flush; o
+  custo é preservar os registradores fixos pelo ABI.
+- **Flush e reload completos:** ifb, HLE (padrão no device), interrupção,
+  exceção, `sync_sr`/`sync_fpscr` e compilação.
+- **MMU:** passar para o JIT antigo.
+- **ABI:** só x19–x28 e a metade baixa de v8–v15 são preservados; o banco
+  inteiro não cabe.
+
 ## Implicações para o `jit_armv8_a`
 
 Insumos de desenho, não decisões:

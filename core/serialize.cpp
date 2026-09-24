@@ -1139,5 +1139,12 @@ bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_si
 	if (version >= V7)
 		gd_hle_state.Unserialize(data, total_size);
 
+	extern void aica_rtc_fix();
+	aica_rtc_fix();	// FC_RTC_FIXED: o RTC nao esta no savestate
+	extern void state_hash_mark_load();
+	extern void audio_dump_restart();
+	state_hash_mark_load();	// FC_STATE_HASH
+	audio_dump_restart();	// FC_AUDIO_DUMP
+
 	return true ;
 }

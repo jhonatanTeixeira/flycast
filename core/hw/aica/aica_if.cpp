@@ -164,9 +164,20 @@ static int DreamcastSecond(int tag, int c, int j)
 }
 
 //Init/res/term
+// FC_RTC_FIXED=<segundos> (diagnostico): relogio fixo no boot e ao carregar
+// savestate (o RTC nao entra no savestate e comeca na hora do host) --
+// torna duas rodadas do mesmo savestate comparaveis.
+void aica_rtc_fix()
+{
+	const char *e = getenv("FC_RTC_FIXED");
+	if (e != nullptr)
+		RealTimeClock = (u32)strtoul(e, nullptr, 10);
+}
+
 void aica_Init()
 {
 	RealTimeClock = GetRTC_now();
+	aica_rtc_fix();
 	if (rtc_schid == -1)
 	{
 		rtc_schid = sh4_sched_register(0, &DreamcastSecond);
