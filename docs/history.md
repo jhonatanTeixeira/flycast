@@ -2359,3 +2359,6 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   ciclos de todo bloco (SH4 a ~167MHz efetivos). `d10`: Le Mans 16,1 → 18,8
   frames/s do jogo sem perda; DOA2/Zombie/Shenmue/KOF Evo/2D iguais.
   Aplicado no cfg oficial (retrorun e RetroArch).
+- **Pulo do laço de atraso (4.40):** Le Mans com d8 agora 25,4 frames/s a
+  100% (d12 original: 16,1). Assinatura só casa no Le Mans. Instalado
+  (anterior em `.bak-pre-delayskip`). Padrão do cfg continua d10.

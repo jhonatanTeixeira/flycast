@@ -49,6 +49,7 @@ void sh4_sched_ffts();
 	so the event is handled immediately.
 */
 void sh4_sched_idle_fastforward();
+void DYNACALL sh4_delay_loop_skip(u32 pc, u32 cyc);
 extern u64 g_idleFFCalls, g_idleFFCycles;
 
 struct sched_list

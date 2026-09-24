@@ -144,6 +144,35 @@ static bool idle_ff_match(u32 addr)
 	return false;
 }
 
+// Laco de ATRASO por contagem (docs/tech_debits.md 4.40), achado no Le Mans
+// 24h (8C1730F6, 54% do tempo emulado e 69% do trabalho do JIT):
+//   L: mov.l @(disp,PC),r1 ; mov.l @r1,r2 ; add #1,r2 ; mov.l r2,@r1
+//      tst r4,r4 ; bf.s L ; add #-1,r4
+// = while (r4-- != 0) (*contador)++  (N+1 voltas, r4 termina em -1). Nao
+// espera evento nenhum: o numero de voltas e fixo. O JIT pula k voltas de uma
+// vez na entrada (contador += k, r4 -= k, k*ciclos cobrados), sem passar do
+// proximo evento e deixando ao menos uma volta real para a saida normal.
+// So o deslocamento do literal pode variar; o desvio tem de voltar ao bloco.
+static bool delay_loop_match(u32 addr)
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_NO_DELAY_SKIP") != nullptr ? 0 : 1;
+	if (!enabled)
+		return false;
+	static const u16 ops[7]  = { 0xD100, 0x6212, 0x7201, 0x2122, 0x2448, 0x8FF9, 0x74FF };
+	static const u16 mask[7] = { 0xFF00, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+	const u16 *code = (const u16 *)GetMemPtr(addr, 14);
+	if (code == nullptr)
+		return false;
+	for (int i = 0; i < 7; i++)
+		if ((code[i] & mask[i]) != ops[i])
+			return false;
+	// bf.s em addr+10 com disp -7: alvo = addr+10+4-14 = addr (volta ao bloco)
+	INFO_LOG(DYNAREC, "Delay loop skip at %08X", addr);
+	return true;
+}
+
 static inline shil_param mk_imm(u32 immv)
 {
 	return shil_param(FMT_IMM,immv);
@@ -1265,6 +1294,8 @@ _end:
 	{
 		if (!mmu_enabled() && idle_ff_match(blk->addr))
 			blk->idle_fastforward = true;
+		if (!mmu_enabled() && delay_loop_match(blk->addr))
+			blk->delay_skip = true;
 
 		// FC_IDLE_LOG: registra cada bloco que um truque de ciclos marcou
 		// (docs/tech_debits.md 4.38) -- o hash le so metade do bloco, em bytes.

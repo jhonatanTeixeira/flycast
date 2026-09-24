@@ -1556,6 +1556,9 @@ void retro_run (void)
                fprintf(f, "ff_cycles\t%llu\n", (unsigned long long)g_idleFFCycles);
                fprintf(f, "ff_calls_per_frame\t%.1f\n", (double)g_idleFFCalls / idleFrames);
                fprintf(f, "ff_cycles_per_frame\t%.0f\n", (double)g_idleFFCycles / idleFrames);
+               extern u64 g_delaySkipCalls, g_delaySkipIters;
+               fprintf(f, "delay_skip_calls_per_frame\t%.1f\n", (double)g_delaySkipCalls / idleFrames);
+               fprintf(f, "delay_skip_iters_per_frame\t%.0f\n", (double)g_delaySkipIters / idleFrames);
                extern u32 g_queueDrops, g_queueOk;
                fprintf(f, "queued_frames\t%u\n", g_queueOk);
                fprintf(f, "dropped_frames_rqueue_busy\t%u\n", g_queueDrops);

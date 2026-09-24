@@ -50,6 +50,9 @@ struct RuntimeBlockInfo: RuntimeBlockInfo_Core
 	// Reaching this block proves the guest is only waiting (decoder.cpp,
 	// idle fast-forward signatures): the JIT jumps time to the next event.
 	bool idle_fastforward;
+	// Laco de atraso por contagem reconhecido (decoder.cpp, delay_loop_match):
+	// o JIT chama sh4_delay_loop_skip na entrada. docs/tech_debits.md 4.40.
+	bool delay_skip;
 
 	u32 BranchBlock; /* if not 0xFFFFFFFF then jump target */
 	u32 NextBlock;   /* if not 0xFFFFFFFF then next block (by position) */

@@ -3,6 +3,7 @@
 #include "sh4_interrupts.h"
 #include "sh4_core.h"
 #include "sh4_sched.h"
+#include "sh4_mem.h"
 #include <cstdlib>
 
 
@@ -89,6 +90,31 @@ void sh4_sched_idle_fastforward()
 	Sh4cntx.sh4_sched_next -= skip;
 	g_idleFFCalls++;
 	g_idleFFCycles += skip;
+}
+
+// Pulo do laco de atraso (decoder.cpp delay_loop_match, tech_debits 4.40).
+// Chamado na entrada do bloco, antes de qualquer registrador ser alocado:
+// r4 e o contador de voltas no contexto. `cyc` = ciclos cobrados por volta.
+u64 g_delaySkipCalls, g_delaySkipIters;
+void DYNACALL sh4_delay_loop_skip(u32 pc, u32 cyc)
+{
+	const u32 n = r[4];	// `r` e a macro do banco de registradores (sh4_core.h)
+	if (n == 0 || n > 0x7FFFFFFF || cyc == 0)
+		return;		// ultima volta, ou contagem absurda (deixa o laco real)
+	const s32 avail = Sh4cntx.sh4_sched_next - 1;	// ate o proximo evento
+	if (avail < (s32)cyc)
+		return;
+	u32 k = (u32)avail / cyc;
+	if (k > n)
+		k = n;		// sobra >= 1 volta real (r4 >= 0), que faz a saida normal
+	const u16 op = ReadMem16(pc);
+	const u32 lit = (pc & ~3u) + 4 + (op & 0xFF) * 4;
+	const u32 ctr = ReadMem32(lit);
+	WriteMem32(ctr, ReadMem32(ctr) + k);
+	r[4] = n - k;
+	Sh4cntx.sh4_sched_next -= (s32)(k * cyc);
+	g_delaySkipCalls++;
+	g_delaySkipIters += k;
 }
 
 int sh4_sched_register(int tag, sh4_sched_callback* ssc)

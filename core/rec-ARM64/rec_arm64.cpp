@@ -493,6 +493,14 @@ public:
 		}
 		else
 		{
+			if (block->delay_skip)
+			{
+				// Laco de atraso (4.40): pula voltas ate o proximo evento.
+				// Nada alocado ainda; r4 esta no contexto.
+				Mov(w0, block->vaddr);
+				Mov(w1, block->guest_cycles);
+				GenCallRuntime(sh4_delay_loop_skip);
+			}
 			if (block->idle_fastforward)
 			{
 				// Proven idle (decoder.cpp signatures): jump time to just
