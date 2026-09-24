@@ -102,9 +102,9 @@ Achados medidos, em ordem de peso.
      "recargas fora do alocador".
    - No SH4 o T é um bit; aqui vira um load/store por comparação.
 3. **Saída de bloco: 11–21%.** A saída condicional são ~4 instruções (`ldr`,
-   `cmp`, `b.ne`, `b`). A dinâmica são 5, lendo a tabela `FPCB` de ~64 MB
-   indexada pelo PC. Essa tabela pode custar em cache/TLB mais do que as
-   instruções sugerem (hipótese, não medida).
+   `cmp`, `b.ne`, `b`). A dinâmica são 5, lendo a tabela `FPCB` de 128 MB
+   indexada pelo PC. Custo medido na seção "Tabela de despacho": ~2,5–3,5% do
+   tempo, mais pela previsão do desvio indireto que pela tabela.
 4. **Entrada: ~2 instruções por bloco** (`subs w27` + `b.pl`), mais a checagem
    anti-SMC nos blocos em RAM desprotegida. Pouco por bloco, mas com blocos de
    5–9 instruções SH4 vira 6–10%.
