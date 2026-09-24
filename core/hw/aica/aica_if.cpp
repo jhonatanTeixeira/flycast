@@ -23,6 +23,14 @@ int rtc_schid = -1;
 
 u32 GetRTC_now(void)
 {
+	// FC_RTC_FIXED (diagnostico): fixa o RTC tambem aqui. Antes so o
+	// RealTimeClock era fixado (aica_rtc_fix), mas FixUpFlash() (sb_mem.cpp)
+	// usa GetRTC_now() direto e gravava a hora do host no flashrom, tornando
+	// duas rodadas nao-deterministicas (byte em RAM 0x78).
+	const char *fixed = getenv("FC_RTC_FIXED");
+	if (fixed != nullptr)
+		return (u32)strtoul(fixed, nullptr, 10);
+
 	// The Dreamcast Epoch time is 1/1/50 00:00 but without support for time zone or DST.
 	// We compute the TZ/DST current time offset and add it to the result
 	// as if we were in the UTC time zone (as well as the DC Epoch)

@@ -519,6 +519,8 @@ void state_hash_mark_load()
       fflush(g_stateHashFile);
    }
    g_stateHashFrame = 0;
+   extern void jit_trace_start();
+   jit_trace_start();	// FC_JIT_TRACE: so traca a partir da carga
 }
 
 void rend_start_render(void)
@@ -578,11 +580,21 @@ void rend_start_render(void)
             every = e != nullptr ? std::max(1, atoi(e)) : 60;
          }
          if (hashFrame % every == 0)
+         {
+            // jdyn (reg_pc_dyn) e' scratch interno do dynarec, nao registrador
+            // do SH4: zera antes do hash. Sem isso, um bloco antigo compilado
+            // antes de um patch de codigo via DMA (que nao dispara SMC) deixa
+            // jdyn num valor diferente do bloco correto, sem diferenca real de
+            // emulacao. Ver docs/jit_armv8_a_context_audit.md.
+            static u8 ctxbuf[sizeof(Sh4Context)];
+            memcpy(ctxbuf, &p_sh4rcb->cntx, sizeof(Sh4Context));
+            memset(ctxbuf + offsetof(Sh4Context, jdyn), 0, 4);
             fprintf(hashFile, " ram %016llx vram %016llx aram %016llx ctx %016llx",
                   (unsigned long long)XXH64(mem_b.data, mem_b.size, 0),
                   (unsigned long long)XXH64(vram.data, vram.size, 0),
                   (unsigned long long)XXH64(aica_ram.data, aica_ram.size, 0),
-                  (unsigned long long)XXH64(&p_sh4rcb->cntx, sizeof(Sh4Context), 0));
+                  (unsigned long long)XXH64(ctxbuf, sizeof(Sh4Context), 0));
+         }
          // FC_STATE_HASH_RAMDUMP=F: grava a RAM principal inteira no pedido F
          static int dumpAt = -2;
          if (dumpAt == -2)
@@ -590,17 +602,35 @@ void rend_start_render(void)
             const char *e = getenv("FC_STATE_HASH_RAMDUMP");
             dumpAt = e != nullptr ? atoi(e) : -1;
          }
-         if ((int)hashFrame == dumpAt)
-         {
-            char path[600];
-            snprintf(path, sizeof(path), "%s.ram%u", getenv("FC_STATE_HASH"), hashFrame);
-            FILE *rf = fopen(path, "wb");
-            if (rf != nullptr)
-            {
-               fwrite(mem_b.data, 1, mem_b.size, rf);
-               fclose(rf);
-            }
-         }
+          if ((int)hashFrame == dumpAt)
+          {
+             char path[600];
+             snprintf(path, sizeof(path), "%s.ram%u", getenv("FC_STATE_HASH"), hashFrame);
+             FILE *rf = fopen(path, "wb");
+             if (rf != nullptr)
+             {
+                fwrite(mem_b.data, 1, mem_b.size, rf);
+                fclose(rf);
+             }
+          }
+          // FC_STATE_HASH_CTXDUMP=F: grava o Sh4Context inteiro no pedido F
+          static int ctxDumpAt = -2;
+          if (ctxDumpAt == -2)
+          {
+             const char *e = getenv("FC_STATE_HASH_CTXDUMP");
+             ctxDumpAt = e != nullptr ? atoi(e) : -1;
+          }
+          if ((int)hashFrame == ctxDumpAt)
+          {
+             char path[600];
+             snprintf(path, sizeof(path), "%s.ctx%u", getenv("FC_STATE_HASH"), hashFrame);
+             FILE *rf = fopen(path, "wb");
+             if (rf != nullptr)
+             {
+                fwrite(&p_sh4rcb->cntx, 1, sizeof(Sh4Context), rf);
+                fclose(rf);
+             }
+          }
          fputc('\n', hashFile);
          if (hashFrame % 30 == 0)
             fflush(hashFile);

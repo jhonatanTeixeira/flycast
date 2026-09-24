@@ -110,6 +110,8 @@ void DumpIfbCounts()
 #include "hw/sh4/sh4_sched.h"
 #include "hw/mem/vmem32.h"
 #include "arm64_regalloc.h"
+#include "jit_armv8_a.h"
+#include "deps/xxhash/xxhash.h"
 #include <dlfcn.h>
 #include <array>
 #include <cstdarg>
@@ -342,6 +344,107 @@ struct DynaRBI : RuntimeBlockInfo
 static jmp_buf jmp_env;
 static u32 cycle_counter;
 
+// FC_JIT_TRACE=<arquivo> (diagnostico): a cada bloco executado, grava
+// "vaddr phase hash(Sh4Context)" (phase 0 = entrada, 1 = saida). Comparando
+// duas rodadas (JIT atual x jit_armv8_a) acha-se o primeiro bloco cujo
+// contexto de saida diverge -- o bloco culpado. So ativo com a env setada.
+static bool JitTraceEnabled()
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_JIT_TRACE") != nullptr ? 1 : 0;
+	return enabled == 1;
+}
+static FILE *jitTraceFile;
+static u64 jitTraceCount;
+static bool jitTraceActive;
+bool jit_trace_enabled() { return JitTraceEnabled(); }
+// Chamado no load do savestate: so traca a partir dai (o boot antes da carga
+// varia e nao interessa).
+void jit_trace_start() { if (JitTraceEnabled()) jitTraceActive = true; }
+void DYNACALL jit_trace_block(u32 vaddr, u32 phase)
+{
+	static bool bootInit;
+	if (!bootInit)
+	{
+		bootInit = true;
+		if (JitTraceEnabled() && getenv("FC_JIT_TRACE_BOOT") != nullptr)
+			jitTraceActive = true;
+	}
+	if (!jitTraceActive)
+		return;
+	if (jitTraceFile == nullptr)
+	{
+		char path[512];
+		snprintf(path, sizeof(path), "%s", getenv("FC_JIT_TRACE"));
+		jitTraceFile = fopen(path, "w");
+	}
+	if (jitTraceFile == nullptr)
+		return;
+	if (jitTraceCount >= (2u << 20))
+		return;
+	jitTraceCount++;
+	// Ignora os campos volateis/derivados (pc de despacho, contadores do
+	// scheduler) para nao gerar falso positivo por staleness de pc.
+	static u8 buf[sizeof(Sh4Context)];
+	memcpy(buf, &p_sh4rcb->cntx, sizeof(Sh4Context));
+	memset(buf + offsetof(Sh4Context, pc), 0, 4);
+	memset(buf + offsetof(Sh4Context, CpuRunning), 0, 4);
+	memset(buf + offsetof(Sh4Context, sh4_sched_next), 0, 4);
+	memset(buf + offsetof(Sh4Context, interrupt_pend), 0, 4);
+	memset(buf + offsetof(Sh4Context, exception_pc), 0, 8);
+	// jdyn e' scratch interno do dynarec (nao e' registrador do SH4): nao
+	// entra no hash de estado.
+	memset(buf + offsetof(Sh4Context, jdyn), 0, 4);
+	u64 h = XXH64(buf, sizeof(Sh4Context), 0);
+	// Hash de um pequeno trecho de RAM (0x00-0x100) para achar onde uma
+	// escrita diverge sem precisar de dump inteiro por bloco.
+	u64 rh = 0;
+	if (mem_b.data != nullptr)
+		rh = XXH64(mem_b.data, 0x100, 0);
+	// FC_JIT_CTXDUMP=<vaddr>: no primeiro exit desse bloco, grava o contexto
+	// inteiro em <FC_JIT_TRACE>.ctx, para diff campo a campo.
+	static u32 ctxDumpVaddr = 0xFFFFFFFF;
+	static bool ctxDumpInit, ctxDumped0, ctxDumped1;
+	if (!ctxDumpInit)
+	{
+		ctxDumpInit = true;
+		const char *e = getenv("FC_JIT_CTXDUMP");
+		if (e != nullptr)
+			ctxDumpVaddr = (u32)strtoul(e, nullptr, 16);
+	}
+	if (vaddr == ctxDumpVaddr && ((phase == 0 && !ctxDumped0) || (phase == 1 && !ctxDumped1)))
+	{
+		if (phase == 0) ctxDumped0 = true; else ctxDumped1 = true;
+		char path[600];
+		snprintf(path, sizeof(path), "%s.ctx%u", getenv("FC_JIT_TRACE"), phase);
+		FILE *f = fopen(path, "wb");
+		if (f != nullptr)
+		{
+			fwrite(&p_sh4rcb->cntx, 1, sizeof(Sh4Context), f);
+			fclose(f);
+		}
+		snprintf(path, sizeof(path), "%s.ram%u", getenv("FC_JIT_TRACE"), phase);
+		f = fopen(path, "wb");
+		if (f != nullptr)
+		{
+			fwrite(mem_b.data, 1, 0x100, f);
+			fclose(f);
+		}
+	}
+	// So grava quando a RAM 0x00-0x100 muda (escrita nessa regiao), para o
+	// arquivo nao explodir no boot. FC_JIT_TRACE_ALL=1 grava todo bloco.
+	static u64 lastRh = 1;
+	static bool traceAll = getenv("FC_JIT_TRACE_ALL") != nullptr;
+	if (traceAll || rh != lastRh)
+	{
+		lastRh = rh;
+		fprintf(jitTraceFile, "%08X %u %016llx %016llx\n", vaddr, phase, (unsigned long long)h, (unsigned long long)rh);
+		if ((jitTraceCount & 0xFFFF) == 0)
+			fflush(jitTraceFile);
+	}
+}
+
 static void (*mainloop)(void *context);
 static int (*arm64_intc_sched)();
 static void (*arm64_no_update)();
@@ -448,6 +551,11 @@ void ngen_ResetBlocks()
 
 void ngen_GetFeatures(ngen_features* dst)
 {
+	if (jit_armv8a_enabled())
+	{
+		ngen_GetFeatures_a(dst);
+		return;
+	}
 	dst->InterpreterFallback = false;
 	dst->OnlyDynamicEnds     = false;
 	dst->FpscrGuard          = true;	// shop_sync_fpscr implements the PR/SZ runtime guard below
@@ -743,6 +851,13 @@ public:
 		GenBranch(*arm64_no_update);
 		Bind(&cpu_running);
 		Bind(&cycles_remaining);
+
+		if (JitTraceEnabled())
+		{
+			Mov(w0, block->vaddr);
+			Mov(w1, 0);
+			GenCallRuntime(jit_trace_block);
+		}
 
 		const bool jitDump = jit_dump_enabled();
 		if (jitDump)
@@ -1495,6 +1610,13 @@ public:
 		if (jitDump)
 			jitDumpLoopEnd = (u32)GetBuffer()->GetCursorOffset();
 		regalloc.Cleanup();
+
+		if (JitTraceEnabled())
+		{
+			Mov(w0, block->vaddr);
+			Mov(w1, 1);
+			GenCallRuntime(jit_trace_block);
+		}
 
 		block->relink_offset = (u32)GetBuffer()->GetCursorOffset();
 		block->relink_data = 0;
@@ -3232,6 +3354,11 @@ static Arm64Assembler* compiler;
 
 void ngen_Compile(RuntimeBlockInfo* block, bool force_checks, bool reset, bool staging, bool optimise)
 {
+	if (jit_armv8a_enabled())
+	{
+		ngen_Compile_a(block, force_checks, reset, staging, optimise);
+		return;
+	}
 	verify(emit_FreeSpace() >= 16 * 1024);
 
 	compiler = new Arm64Assembler();
@@ -3244,21 +3371,41 @@ void ngen_Compile(RuntimeBlockInfo* block, bool force_checks, bool reset, bool s
 
 void ngen_CC_Start(shil_opcode* op)
 {
+	if (jit_armv8a_enabled())
+	{
+		ngen_CC_Start_a(op);
+		return;
+	}
 	compiler->ngen_CC_Start(op);
 }
 
 void ngen_CC_Param(shil_opcode* op, shil_param* par, CanonicalParamType tp)
 {
+	if (jit_armv8a_enabled())
+	{
+		ngen_CC_Param_a(op, par, tp);
+		return;
+	}
 	compiler->ngen_CC_Param(*op, *par, tp);
 }
 
 void ngen_CC_Call(shil_opcode*op, void* function)
 {
+	if (jit_armv8a_enabled())
+	{
+		ngen_CC_Call_a(op, function);
+		return;
+	}
 	compiler->ngen_CC_Call(op, function);
 }
 
 void ngen_CC_Finish(shil_opcode* op)
 {
+	if (jit_armv8a_enabled())
+	{
+		ngen_CC_Finish_a(op);
+		return;
+	}
 
 }
 
@@ -3556,8 +3703,14 @@ static void generate_mainloop()
 RuntimeBlockInfo* ngen_AllocateBlock()
 {
 	generate_mainloop();
+	if (jit_armv8a_enabled())
+		return ngen_AllocateBlock_a();
 	return new DynaRBI();
 }
+
+// Acesso do jit_armv8_a ao mainloop compartilhado.
+void* jit_armv8a_no_update() { return (void*)arm64_no_update; }
+int (*jit_armv8a_intc_sched())() { return arm64_intc_sched; }
 
 void ngen_HandleException()
 {

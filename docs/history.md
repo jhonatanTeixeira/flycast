@@ -2438,3 +2438,37 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - Passo 2 (4.50): protótipo à mão do laço de vértices do Shenmue II no
   estilo `jit_armv8_a`, sobre estado real capturado: resultado idêntico,
   1,46-1,70× mais rápido, código 3,8× menor.
+
+### 2026-09-24 — `jit_armv8_a` v0: backend novo, selecionável, IDÊNTICO nos 3 jogos
+
+- Objetivo da sessão: escrever o `jit_armv8_a` (backend JIT ARM64 à parte, ao
+  lado do `rec_arm64.cpp`, selecionado por `FC_JIT_ARMV8_A=1`), começando
+  pequeno e validando a cada passo (docs/jit_study.md, jit_armv8_a_context_audit.md,
+  tools/proto_jit_armv8_a/).
+- **Implementado** `core/rec-ARM64/jit_armv8_a.cpp`/`.h`: r0-r7 fixos em
+  x19-x26 entre ops, resto no `Sh4Context`; nativas de ALU/desvio/mov/ifb/FPU
+  (NEON, mesmas instruções do backend antigo) e leitura/escrita de memória por
+  chamada C++; o resto em `shil_chf` canônico. Dispatch nas funções globais do
+  ngen em `rec_arm64.cpp`; `FC_JIT_ARMV8_A=1` liga, só sem MMU. Mainloop
+  compartilhado. Ver item 4.51 em `tech_debits.md`.
+- **Validado com a ferramenta obrigatória:** duas rodadas do mesmo savestate
+  (uma com o JIT atual, outra com o novo), `FC_RTC_FIXED=600000000
+  FC_INPUT_NEUTRAL=1 FC_STATE_HASH=... FC_AUDIO_DUMP=...`, comparadas com
+  `tools/state_compare.py` — **IDÊNTICOS em Shenmue II, DOA2 e MBAA** (TA de
+  todo frame, RAM/VRAM/ARAM/contexto, PCM). O backend novo também é
+  auto-determinístico (2 rodadas idênticas).
+- **Bugs corrigidos durante a validação** (cada um achado com trace por bloco,
+  `FC_JIT_TRACE`/`FC_JIT_CTXDUMP`): FPU canônica divergia do NEON; `jdyn` não
+  era gravado no `jcond`/`jdyn`; guarda PR/SZ ignorada; `writem` desprotegia
+  página de código que o backend antigo mantém protegida; fixos não iam ao
+  contexto antes da escrita (o `FC_STATE_HASH` lê o contexto no meio do bloco).
+  No harness: `FC_RTC_FIXED` agora fixa `GetRTC_now()` (o `FixUpFlash` usava a
+  hora do host, quebrando o determinismo entre rodadas ~13s distantes), e
+  `jdyn` (scratch interno do dynarec) sai do hash de contexto.
+- **Velocidade (retrorun, 30s/10s):** ainda muito mais lento que o atual —
+  DOA2 89,3%→40,8%, Shenmue II 60,5%→24,5%, MBAA 100,1%→86,8%. Esperado: é o
+  esqueleto correto (memória por chamada C++, `shil_chf`, flush/reload em toda
+  escrita). Os ganhos vêm nos próximos passos (fastmem, T em registrador,
+  `csel`, blocos maiores, `jsr`/`bsr`→`bl`, `rts`→`ret`).
+- Binário de teste no device: `/home/ark/flycast_armv8a_new.so`. O core ativo
+  (`flycast2026_libretro.so`) não foi tocado.
