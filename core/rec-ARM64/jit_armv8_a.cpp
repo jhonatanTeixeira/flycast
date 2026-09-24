@@ -59,6 +59,9 @@ void DYNACALL bm_WriteMemCodePage32(u32 addr, u32 data);
 void DYNACALL bm_WriteMemCodePage64(u32 addr, u64 data);
 // Diagnostico FC_JIT_TRACE (definidos em rec_arm64.cpp).
 bool jit_trace_enabled();
+// rec_arm64.cpp: slots vivos (o trampolim salva) e sujos com offset no
+// contexto (o trampolim de MMIO grava antes do C++) de um acesso compacto.
+void jit_armv8a_record_site(uintptr_t pc, u16 live, const u8 *slots, const u16 *offs, int n);
 void DYNACALL jit_trace_block(u32 vaddr, u32 phase);
 
 // ---------------------------------------------------------------------------
@@ -76,6 +79,20 @@ bool jit_armv8a_enabled()
 // r0-r7 do SH4 ficam em x19-x26.
 static const int kPinnedBase = 19;
 static const int kPinnedCount = 8;
+
+// Entrada fria do bloco = carga dos 8 fixos (despachante, FPCB, stubs de
+// ligacao); entrada quente logo depois, usada pelos saltos diretos entre
+// blocos, que mantem r0-r7 em x19-x26 sem passar pelo contexto.
+static const u32 kColdEntryBytes = kPinnedCount * 4;
+
+// Saida ainda nao ligada: `bl` para um destes stubs, que grava os fixos e
+// salta (LR intacto) para o stub de ligacao de sempre. Mesmo tamanho que o
+// `b` da saida ligada, entao o RelinkBlock reescreve no lugar.
+static void *linkStubGeneric, *linkStubCondBranch, *linkStubCondNext;
+void jit_armv8a_reset_stubs()
+{
+	linkStubGeneric = linkStubCondBranch = linkStubCondNext = nullptr;
+}
 
 static inline bool IsPinned(Sh4RegType reg)
 {
@@ -98,6 +115,7 @@ public:
 	RuntimeBlockInfo *block = nullptr;
 
 	void Compile(RuntimeBlockInfo *blk, bool force_checks, bool reset, bool staging, bool optimise);
+	void GenLinkStubs();
 	void Finalize(bool rewrite = false);
 	u32 RelinkBlock(RuntimeBlockInfo *blk);
 
@@ -116,10 +134,121 @@ private:
 	}
 	MemOperand Ctx(Sh4RegType reg) { return Ctx(GetRegPtr(reg)); }
 
+	// ---- cache de registradores inteiros (2026-09-25) --------------------
+	// r8-r15, T, pr, fpul, mac... (o que nao e fixo) ficam em w2-w8 dentro
+	// do bloco, com escrita adiada, como o cache de FP. Sem isso cada op ia
+	// ao contexto (r15 = pilha: str seguido de ldr do mesmo endereco). Op que
+	// nao conhece os caches roda com gcacheOn=false (contexto direto).
+	// Trampolins de memoria (modo jit_armv8_a) salvam x2-x9 e gravam os sujos.
+	struct GSlot { int reg; bool dirty; u32 lru; };
+	GSlot gslot[7];
+	u32 gclock = 0;
+	u8 glocked = 0;
+	bool gcacheOn = true;
+	static Register GS(int i) { return Register::GetWRegFromCode(2 + i); }
+	void GReset()
+	{
+		for (auto &g : gslot) { g.reg = -1; g.dirty = false; g.lru = 0; }
+		glocked = 0;
+	}
+	int GFind(int reg)
+	{
+		for (int i = 0; i < 7; i++)
+			if (gslot[i].reg == reg)
+				return i;
+		return -1;
+	}
+	void GSpill(int i)
+	{
+		if (gslot[i].reg >= 0 && gslot[i].dirty)
+		{
+			Str(GS(i), Ctx(GetRegPtr(gslot[i].reg)));
+			gslot[i].dirty = false;
+		}
+	}
+	int GAlloc(int reg)
+	{
+		int best = -1;
+		for (int i = 0; i < 7 && best < 0; i++)
+			if (gslot[i].reg < 0 && !(glocked & (1 << i)))
+				best = i;
+		if (best < 0)
+		{
+			u32 oldest = ~0u;
+			for (int i = 0; i < 7; i++)
+				if (!(glocked & (1 << i)) && gslot[i].lru < oldest)
+				{
+					oldest = gslot[i].lru;
+					best = i;
+				}
+		}
+		verify(best >= 0);
+		GSpill(best);
+		gslot[best].reg = reg;
+		gslot[best].dirty = false;
+		return best;
+	}
+	Register GRd(int reg)
+	{
+		int i = GFind(reg);
+		if (i < 0)
+		{
+			i = GAlloc(reg);
+			Ldr(GS(i), Ctx(GetRegPtr(reg)));
+		}
+		gslot[i].lru = ++gclock;
+		glocked |= 1 << i;
+		return GS(i);
+	}
+	Register GWr(int reg)
+	{
+		int i = GFind(reg);
+		if (i < 0)
+			i = GAlloc(reg);
+		gslot[i].dirty = true;
+		gslot[i].lru = ++gclock;
+		glocked |= 1 << i;
+		return GS(i);
+	}
+	void GFlushAll(bool invalidate)
+	{
+		for (int i = 0; i < 7; i++)
+		{
+			GSpill(i);
+			if (invalidate)
+				gslot[i].reg = -1;
+		}
+	}
+	void GInvalidate(int reg)
+	{
+		int i = GFind(reg);
+		if (i >= 0)
+		{
+			gslot[i].reg = -1;
+			gslot[i].dirty = false;
+		}
+	}
+	// destino inteiro: fixo, slot do cache, ou rascunho + GCommit (cache off)
+	Register GDst(Sh4RegType reg)
+	{
+		if (IsPinned(reg))
+			return Pinned(reg);
+		if (gcacheOn)
+			return GWr(reg);
+		return ScratchR(12);
+	}
+	void GCommit(Sh4RegType reg, const Register &val)
+	{
+		if (!IsPinned(reg) && !gcacheOn)
+			Str(val, Ctx(reg));
+	}
+
 	void LoadGPR(Sh4RegType reg, const Register &dst)
 	{
 		if (IsPinned(reg))
 			Mov(dst, Pinned(reg));
+		else if (gcacheOn)
+			Mov(dst, GRd(reg));
 		else
 			Ldr(dst, Ctx(reg));
 	}
@@ -127,16 +256,20 @@ private:
 	{
 		if (IsPinned(reg))
 			return Pinned(reg);
+		if (gcacheOn)
+			return GRd(reg);
 		Ldr(scratch, Ctx(reg));
 		return scratch;
 	}
-	// Le um param de 32 bits (int fixo no host ou float no contexto/imediato).
+	// Le um param de 32 bits (int fixo/cache no host ou float no contexto/imediato).
 	void LoadParam32(shil_param &p, const Register &tmp)
 	{
 		if (p.is_imm())
 			Mov(tmp, p._imm);
 		else if (p.is_r32i() && IsPinned(p._reg))
 			Mov(tmp, Pinned(p._reg));
+		else if (p.is_r32i() && gcacheOn)
+			Mov(tmp, GRd(p._reg));
 		else
 			Ldr(tmp, Ctx(p.reg_ptr()));
 	}
@@ -144,6 +277,8 @@ private:
 	{
 		if (p.is_r32i() && IsPinned(p._reg))
 			Mov(Pinned(p._reg), src);
+		else if (p.is_r32i() && gcacheOn)
+			Mov(GWr(p._reg), src);
 		else
 			Str(src, Ctx(p.reg_ptr()));
 	}
@@ -246,29 +381,26 @@ private:
 
 	void BinaryRRO(shil_opcode &op, void (MacroAssembler::*f)(const Register &, const Register &, const Operand &))
 	{
-		Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
 		Register r1 = GPR(op.rs1._reg, w10);
 		Operand o2 = op.rs2.is_imm() ? Operand(op.rs2._imm) : Operand(GPR(op.rs2._reg, w11));
+		Register rd = GDst(op.rd._reg);
 		((*this).*f)(rd, r1, o2);
-		if (!IsPinned(op.rd._reg))
-			Str(rd, Ctx(op.rd._reg));
+		GCommit(op.rd._reg, rd);
 	}
 	void BinaryAddSub(shil_opcode &op, void (MacroAssembler::*f)(const Register &, const Register &, const Operand &, FlagsUpdate))
 	{
-		Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
 		Register r1 = GPR(op.rs1._reg, w10);
 		Operand o2 = op.rs2.is_imm() ? Operand(op.rs2._imm) : Operand(GPR(op.rs2._reg, w11));
+		Register rd = GDst(op.rd._reg);
 		((*this).*f)(rd, r1, o2, LeaveFlags);
-		if (!IsPinned(op.rd._reg))
-			Str(rd, Ctx(op.rd._reg));
+		GCommit(op.rd._reg, rd);
 	}
 	void Unary(shil_opcode &op, void (MacroAssembler::*f)(const Register &, const Register &))
 	{
-		Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
 		Register r1 = GPR(op.rs1._reg, w10);
+		Register rd = GDst(op.rd._reg);
 		((*this).*f)(rd, r1);
-		if (!IsPinned(op.rd._reg))
-			Str(rd, Ctx(op.rd._reg));
+		GCommit(op.rd._reg, rd);
 	}
 	void TestSet(shil_opcode &op)
 	{
@@ -289,8 +421,12 @@ private:
 		}
 		static const Condition conds[] = { eq, eq, ge, gt, hs, hi };
 		Condition cond = conds[op.op - shop_test];
-		if (op.rd.is_r32i() && IsPinned(op.rd._reg))
-			Cset(Pinned(op.rd._reg), cond);
+		if (op.rd.is_r32i())
+		{
+			Register rd = GDst(op.rd._reg);
+			Cset(rd, cond);
+			GCommit(op.rd._reg, rd);
+		}
 		else
 		{
 			Cset(ScratchR(12), cond);
@@ -301,8 +437,11 @@ private:
 	// kind: 0 = lsl, 1 = lsr, 2 = asr, 3 = ror.
 	void ShiftOp(shil_opcode &op, int kind)
 	{
-		Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
 		Register r1 = GPR(op.rs1._reg, w10);
+		Register r2 = w11;
+		if (!op.rs2.is_imm())
+			r2 = GPR(op.rs2._reg, w11);
+		Register rd = GDst(op.rd._reg);
 		if (op.rs2.is_imm())
 		{
 			int sh = (int)op.rs2._imm;
@@ -316,7 +455,6 @@ private:
 		}
 		else
 		{
-			Register r2 = GPR(op.rs2._reg, w11);
 			switch (kind)
 			{
 			case 0: Lsl(rd, r1, r2); break;
@@ -325,20 +463,18 @@ private:
 			default: Ror(rd, r1, r2); break;
 			}
 		}
-		if (!IsPinned(op.rd._reg))
-			Str(rd, Ctx(op.rd._reg));
+		GCommit(op.rd._reg, rd);
 	}
 
 	void ExtOp(shil_opcode &op, bool s8)
 	{
-		Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
 		Register r1 = GPR(op.rs1._reg, w10);
+		Register rd = GDst(op.rd._reg);
 		if (s8)
 			Sxtb(rd, r1);
 		else
 			Sxth(rd, r1);
-		if (!IsPinned(op.rd._reg))
-			Str(rd, Ctx(op.rd._reg));
+		GCommit(op.rd._reg, rd);
 	}
 
 	// Fastmem (2026-09-25): acesso direto ldr/str [x13, wAddr, uxtw] na
@@ -358,8 +494,8 @@ private:
 	// Endereco em registrador: o fixo direto se nao ha deslocamento, senao w14.
 	Register CompactAddr(const shil_opcode &op)
 	{
-		if (op.rs3.is_null() && op.rs1.is_reg() && op.rs1.is_r32i() && IsPinned(op.rs1._reg))
-			return Pinned(op.rs1._reg);
+		if (op.rs3.is_null() && op.rs1.is_reg() && op.rs1.is_r32i())
+			return GPR(op.rs1._reg, w14);
 		GenMemAddr(op, w14);
 		return w14;
 	}
@@ -374,14 +510,33 @@ private:
 			MemOperand mo(x13, addr, UXTW);
 			if (size == 8)
 			{
+				FRecordSite();
 				Ldr(x15, mo);
-				StoreParam64(op.rd, x15);
+				if (op.rd.is_r64f())
+				{
+					Fmov(FWr(op.rd._reg), w15);
+					Lsr(x15, x15, 32);
+					Fmov(FWr(op.rd._reg + 1), w15);
+				}
+				else
+				{
+					FInvalidateRange(op.rd._reg, 2);
+					StoreParam64(op.rd, x15);
+				}
+				return;
+			}
+			if (op.rd.is_r32f())
+			{
+				FRecordSite();
+				Ldr(w15, mo);
+				Fmov(FWr(op.rd._reg), w15);
 				return;
 			}
 			const bool zx = (op.flags2 & 1) != 0;
 			Register dst = w15;
 			if (op.rd.is_r32i() && IsPinned(op.rd._reg))
 				dst = Pinned(op.rd._reg);
+			FRecordSite();
 			switch (size)
 			{
 			case 1: if (zx) Ldrb(dst, mo); else Ldrsb(dst, mo); break;
@@ -415,17 +570,28 @@ private:
 			Register addr = CompactAddr(op);
 			if (size == 8)
 			{
-				LoadParam64(op.rs2, x15);
+				if (op.rs2.is_r64f())
+				{
+					Fmov(w15, FRd(op.rs2._reg));
+					Fmov(w9, FRd(op.rs2._reg + 1));
+					Orr(x15, x15, Operand(x9, LSL, 32));
+				}
+				else
+					LoadParam64(op.rs2, x15);
 				EnsureMemBase();
+				FRecordSite();
 				Str(x15, MemOperand(x13, addr, UXTW));
 				return;
 			}
 			Register data = w15;
-			if (op.rs2.is_reg() && op.rs2.is_r32i() && IsPinned(op.rs2._reg))
-				data = Pinned(op.rs2._reg);
+			if (op.rs2.is_reg() && op.rs2.is_r32i())
+				data = GPR(op.rs2._reg, w15);
+			else if (op.rs2.is_r32f())
+				Fmov(w15, FRd(op.rs2._reg));
 			else
 				LoadParam32(op.rs2, w15);
 			EnsureMemBase();
+			FRecordSite();
 			MemOperand mo(x13, addr, UXTW);
 			switch (size)
 			{
@@ -463,57 +629,205 @@ private:
 
 	// ---- FPU nativa (mesmas instrucoes NEON do backend antigo, para o
 	// resultado ser bit a bit igual; o fallback canonico C++ diverge em
-	// FMA/fixNaN). Floats ficam sempre no contexto; usamos v16-v23 como
-	// scratch (caller-saved, mas sem chamadas no meio de uma op).
-	VRegister FLoad(shil_param &p, const VRegister &scratch)
+	// FMA/fixNaN).
+	//
+	// Cache de ponto flutuante (2026-09-25): os floats do SH4 (fr/xf) ficam em
+	// v16-v31 dentro do bloco, com escrita adiada (sujo -> contexto so quando
+	// sai do cache, no fim do bloco ou antes de op que nao conhece o cache).
+	// LRU; as fontes da op corrente ficam travadas. v0-v5 sao rascunho.
+	// Acesso a memoria registra os slots vivos (o trampolim salva) e os sujos
+	// com o offset no contexto (o trampolim de MMIO grava antes do C++).
+	struct FSlot { int reg; bool dirty; u32 lru; };
+	FSlot fslot[16];
+	u32 fclock = 0;
+	u16 flocked = 0;
+	static bool IsFReg(int reg) { return reg >= reg_fr_0 && reg <= reg_xf_15; }
+	static VRegister FS(int slot) { return VRegister::GetSRegFromCode(16 + slot); }
+	void FReset()
+	{
+		for (auto &f : fslot) { f.reg = -1; f.dirty = false; f.lru = 0; }
+		flocked = 0;
+	}
+	int FFind(int reg)
+	{
+		for (int i = 0; i < 16; i++)
+			if (fslot[i].reg == reg)
+				return i;
+		return -1;
+	}
+	void FSpill(int i)
+	{
+		if (fslot[i].reg >= 0 && fslot[i].dirty)
+		{
+			Str(FS(i), Ctx(GetRegPtr(fslot[i].reg)));
+			fslot[i].dirty = false;
+		}
+	}
+	int FAlloc(int reg)
+	{
+		int best = -1;
+		for (int i = 0; i < 16 && best < 0; i++)
+			if (fslot[i].reg < 0 && !(flocked & (1 << i)))
+				best = i;
+		if (best < 0)
+		{
+			u32 oldest = ~0u;
+			for (int i = 0; i < 16; i++)
+				if (!(flocked & (1 << i)) && fslot[i].lru < oldest)
+				{
+					oldest = fslot[i].lru;
+					best = i;
+				}
+		}
+		verify(best >= 0);
+		FSpill(best);
+		fslot[best].reg = reg;
+		fslot[best].dirty = false;
+		return best;
+	}
+	VRegister FRd(int reg)
+	{
+		int i = FFind(reg);
+		if (i < 0)
+		{
+			i = FAlloc(reg);
+			Ldr(FS(i), Ctx(GetRegPtr(reg)));
+		}
+		fslot[i].lru = ++fclock;
+		flocked |= 1 << i;
+		return FS(i);
+	}
+	VRegister FWr(int reg)
+	{
+		int i = FFind(reg);
+		if (i < 0)
+			i = FAlloc(reg);
+		fslot[i].dirty = true;
+		fslot[i].lru = ++fclock;
+		flocked |= 1 << i;
+		return FS(i);
+	}
+	// operando de 32 bits: imediato vai para um rascunho (bits exatos)
+	VRegister FRdP(shil_param &p, const VRegister &scratch)
 	{
 		if (p.is_imm())
-			Fmov(scratch, reinterpret_cast<f32 &>(p._imm));
-		else
-			Ldr(scratch, Ctx(p.reg_ptr()));
-		return scratch;
+		{
+			Mov(w9, p._imm);
+			Fmov(scratch, w9);
+			return scratch;
+		}
+		return FRd(p._reg);
 	}
-	void FStore(shil_param &p, const VRegister &src)
+	void FFlushAll(bool invalidate)
 	{
-		Str(src, Ctx(p.reg_ptr()));
+		for (int i = 0; i < 16; i++)
+		{
+			FSpill(i);
+			if (invalidate)
+				fslot[i].reg = -1;
+		}
 	}
+	void FFlushRange(int reg, int n)
+	{
+		for (int rr = reg; rr < reg + n; rr++)
+		{
+			int i = FFind(rr);
+			if (i >= 0)
+				FSpill(i);
+		}
+	}
+	void FInvalidateRange(int reg, int n)
+	{
+		for (int rr = reg; rr < reg + n; rr++)
+		{
+			int i = FFind(rr);
+			if (i >= 0)
+			{
+				fslot[i].reg = -1;
+				fslot[i].dirty = false;
+			}
+		}
+	}
+	// antes de emitir um ldr/str da memoria emulada
+	void FRecordSite()
+	{
+		u16 live = 0;
+		u8 codes[32];
+		u16 offs[32];
+		int n = 0;
+		for (int i = 0; i < 16; i++)
+		{
+			if (fslot[i].reg < 0)
+				continue;
+			live |= 1 << i;
+			if (fslot[i].dirty)
+			{
+				codes[n] = (u8)(16 + i);	// s16-s31
+				offs[n] = (u16)Ctx(GetRegPtr(fslot[i].reg)).GetOffset();
+				n++;
+			}
+		}
+		for (int i = 0; i < 7; i++)
+			if (gslot[i].reg >= 0 && gslot[i].dirty)
+			{
+				codes[n] = (u8)(0x80 | (2 + i));	// w2-w8
+				offs[n] = (u16)Ctx(GetRegPtr(gslot[i].reg)).GetOffset();
+				n++;
+			}
+		if (live != 0 || n != 0)
+			jit_armv8a_record_site((uintptr_t)CC_RW2RX(GetCursorAddress<void *>()), live, codes, offs, n);
+	}
+	static bool ParamTouchesFP(const shil_param &p)
+	{
+		return p.is_r32f() || p.is_r64f() || p.is_vector();
+	}
+	static bool OpTouchesFP(const shil_opcode &op)
+	{
+		return ParamTouchesFP(op.rd) || ParamTouchesFP(op.rd2) || ParamTouchesFP(op.rs1)
+				|| ParamTouchesFP(op.rs2) || ParamTouchesFP(op.rs3);
+	}
+
 	void FBinOp(shil_opcode &op, int kind)
 	{
-		VRegister a = FLoad(op.rs1, VixlS(16));
-		VRegister b = FLoad(op.rs2, VixlS(17));
+		VRegister a = FRdP(op.rs1, VixlS(0));
+		VRegister b = FRdP(op.rs2, VixlS(1));
+		VRegister d = FWr(op.rd._reg);
 		switch (kind)
 		{
-		case 0: Fadd(VixlS(18), a, b); break;
-		case 1: Fsub(VixlS(18), a, b); break;
-		case 2: Fmul(VixlS(18), a, b); break;
-		default: Fdiv(VixlS(18), a, b); break;
+		case 0: Fadd(d, a, b); break;
+		case 1: Fsub(d, a, b); break;
+		case 2: Fmul(d, a, b); break;
+		default: Fdiv(d, a, b); break;
 		}
-		FStore(op.rd, VixlS(18));
 	}
 	void FUnOp(shil_opcode &op, int kind)
 	{
-		VRegister a = FLoad(op.rs1, VixlS(16));
+		VRegister a = FRdP(op.rs1, VixlS(0));
+		VRegister d = FWr(op.rd._reg);
 		switch (kind)
 		{
-		case 0: Fabs(VixlS(18), a); break;
-		case 1: Fneg(VixlS(18), a); break;
-		case 2: Fsqrt(VixlS(18), a); break;
+		case 0: Fabs(d, a); break;
+		case 1: Fneg(d, a); break;
+		case 2: Fsqrt(d, a); break;
 		default:	// fsrra = 1/sqrt
-			Fsqrt(VixlS(18), a);
-			Fmov(VixlS(17), 1.f);
-			Fdiv(VixlS(18), VixlS(17), VixlS(18));
+			Fsqrt(VixlS(2), a);
+			Fmov(VixlS(1), 1.f);
+			Fdiv(d, VixlS(1), VixlS(2));
 			break;
 		}
-		FStore(op.rd, VixlS(18));
 	}
 	void FCmpSet(shil_opcode &op)
 	{
-		VRegister a = FLoad(op.rs1, VixlS(16));
-		VRegister b = FLoad(op.rs2, VixlS(17));
+		VRegister a = FRdP(op.rs1, VixlS(0));
+		VRegister b = FRdP(op.rs2, VixlS(1));
 		Fcmp(a, b);
 		Condition cond = op.op == shop_fsetgt ? gt : eq;
-		if (op.rd.is_r32i() && IsPinned(op.rd._reg))
-			Cset(Pinned(op.rd._reg), cond);
+		if (op.rd.is_r32i())
+		{
+			Register rd = GDst(op.rd._reg);
+			Cset(rd, cond);
+			GCommit(op.rd._reg, rd);
+		}
 		else
 		{
 			Cset(ScratchR(12), cond);
@@ -574,6 +888,7 @@ void Armv8AAssembler::CheckBlock(bool force_checks, RuntimeBlockInfo *blk)
 	Label success;
 	B(&success);
 	Bind(&fail);
+	StorePinned();
 	Mov(w0, blk->addr);
 	BranchAbs((void *)ngen_blockcheckfail);
 	Bind(&success);
@@ -583,19 +898,28 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 {
 	this->block = blk;
 
+	// entrada fria (block->code): carrega os fixos
+	LoadPinned();
+	verify(GetBuffer()->GetCursorOffset() == kColdEntryBytes);
+	// entrada quente (blocos ligados direto): os fixos ja estao em x19-x26
+
 	CheckBlock(force_checks, blk);
 
-	// Truques de ciclos deste fork: pulo do laco de atraso / avanco ate o evento.
+	// Truques de ciclos deste fork: pulo do laco de atraso / avanco ate o
+	// evento. Leem (e o delay skip escreve) r4/r[reg] no contexto.
 	if (blk->delay_skip)
 	{
+		StorePinned();
 		Mov(w0, blk->vaddr);
 		Mov(w1, blk->guest_cycles);
 		CallRuntime((void *)sh4_delay_loop_skip);
+		LoadPinned();
 	}
 	if (blk->idle_fastforward)
 	{
 		if (blk->idle_ff_ram_reg != 0)
 		{
+			StorePinned();
 			Mov(w0, blk->idle_ff_ram_reg - 1);
 			CallRuntime((void *)sh4_sched_idle_fastforward_if_ram);
 		}
@@ -608,6 +932,7 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 	Subs(w27, w27, blk->guest_cycles);
 	Label cycles_remaining;
 	B(&cycles_remaining, pl);
+	StorePinned();
 	CallRuntime((void *)jit_armv8a_intc_sched());
 	Label cpu_running;
 	Cbnz(w0, &cpu_running);
@@ -615,16 +940,19 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 	Str(w29, Ctx(&next_pc));
 	BranchAbs(jit_armv8a_no_update());
 	Bind(&cpu_running);
+	LoadPinned();
 	Bind(&cycles_remaining);
 
 	if (jit_trace_enabled())
 	{
+		StorePinned();
 		Mov(w0, blk->vaddr);
 		Mov(w1, 0);
 		CallRuntime((void *)jit_trace_block);
 	}
 
-	LoadPinned();
+	FReset();
+	GReset();
 
 	// FC_ARMV8A_ALL_FALLBACK=1 (diagnostico): manda as ops de ALU para o
 	// fallback canonico, deixando nativas so as que nao tem implementacao
@@ -634,6 +962,52 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 	for (size_t i = 0; i < blk->oplist.size(); i++)
 	{
 		shil_opcode &op = blk->oplist[i];
+		flocked = 0;
+		glocked = 0;
+		gcacheOn = true;
+		// Quem nao conhece o cache de FP: descarrega e invalida antes (le/grava
+		// o contexto ou chama C++, que suja v16-v31).
+		{
+			bool aware;
+			switch (op.op)
+			{
+			case shop_fadd: case shop_fsub: case shop_fmul: case shop_fdiv:
+			case shop_fabs: case shop_fneg: case shop_fsqrt: case shop_fsrra:
+			case shop_fmac: case shop_fsetgt: case shop_fseteq:
+			case shop_cvt_f2i_t: case shop_cvt_i2f_n: case shop_cvt_i2f_z:
+			case shop_mov32: case shop_fipr: case shop_ftrv: case shop_fsca:
+				aware = true;
+				break;
+			case shop_mov64:
+				aware = !op.rs1.is_imm();
+				break;
+			case shop_pref:
+				aware = op.rs1.is_reg() && op.rs1.is_r32i() && !mmu_enabled();
+				break;
+			case shop_readm:
+				aware = CompactUsable(op.flags & 0x7f) && op.rd.is_reg();
+				break;
+			case shop_writem:
+				aware = CompactUsable(op.flags & 0x7f) && ((op.flags & 0x7f) != 8 || op.rs2.is_reg());
+				break;
+			case shop_neg: case shop_not: case shop_and: case shop_or: case shop_xor:
+			case shop_add: case shop_sub: case shop_shl: case shop_shr: case shop_sar:
+			case shop_ror: case shop_ext_s8: case shop_ext_s16: case shop_test:
+			case shop_seteq: case shop_setge: case shop_setgt: case shop_setae:
+			case shop_setab: case shop_mul_i32: case shop_jdyn: case shop_jcond:
+				aware = !OpTouchesFP(op);
+				break;
+			default:
+				aware = false;
+				break;
+			}
+			if (allFallback || !aware)
+			{
+				FFlushAll(true);
+				GFlushAll(true);
+				gcacheOn = false;
+			}
+		}
 		if (allFallback)
 		{
 			switch (op.op)
@@ -695,30 +1069,50 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 				Add(w29, w29, op.rs2._imm);
 			// O fim de bloco condicional (has_jcond) le jdyn do contexto; no
 			// backend antigo quem gravava era o Cleanup() do regalloc.
+			GInvalidate(reg_pc_dyn);
 			Str(w29, Ctx(reg_pc_dyn));
 			break;
 
 		case shop_mov32:
-			if (op.rd.is_r32i() && IsPinned(op.rd._reg))
+			if (op.rd.is_r32f() && op.rs1.is_r32f())
 			{
-				if (op.rs1.is_imm())
-					Mov(Pinned(op.rd._reg), op.rs1._imm);
-				else
-				{
-					LoadParam32(op.rs1, w9);
-					Mov(Pinned(op.rd._reg), w9);
-				}
+				VRegister src = FRd(op.rs1._reg);
+				Fmov(FWr(op.rd._reg), src);
+			}
+			else if (op.rd.is_r32f())
+			{
+				LoadParam32(op.rs1, w9);
+				Fmov(FWr(op.rd._reg), w9);
+			}
+			else if (op.rs1.is_r32f())
+			{
+				VRegister src = FRd(op.rs1._reg);
+				Fmov(w9, src);
+				StoreParam32(op.rd, w9);
 			}
 			else
 			{
 				LoadParam32(op.rs1, w9);
-				Str(w9, Ctx(op.rd.reg_ptr()));
+				StoreParam32(op.rd, w9);
 			}
 			break;
 
 		case shop_mov64:
-			LoadParam64(op.rs1, x9);
-			StoreParam64(op.rd, x9);
+			if (op.rs1.is_r64f() && op.rd.is_r64f())
+			{
+				Fmov(VixlS(0), FRd(op.rs1._reg));
+				Fmov(VixlS(1), FRd(op.rs1._reg + 1));
+				Fmov(FWr(op.rd._reg), VixlS(0));
+				Fmov(FWr(op.rd._reg + 1), VixlS(1));
+			}
+			else
+			{
+				FFlushRange(op.rs1.is_reg() ? op.rs1._reg : 0, op.rs1.is_reg() ? 2 : 0);
+				LoadParam64(op.rs1, x9);
+				if (op.rd.is_reg())
+					FInvalidateRange(op.rd._reg, 2);
+				StoreParam64(op.rd, x9);
+			}
 			break;
 
 		case shop_readm:
@@ -731,14 +1125,13 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 		case shop_neg:
 		case shop_not:
 			{
-				Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
 				Register r1 = GPR(op.rs1._reg, w10);
+				Register rd = GDst(op.rd._reg);
 				if (op.op == shop_neg)
 					Neg(rd, r1);
 				else
 					Mvn(rd, r1);
-				if (!IsPinned(op.rd._reg))
-					Str(rd, Ctx(op.rd._reg));
+				GCommit(op.rd._reg, rd);
 			}
 			break;
 		case shop_and: BinaryRRO(op, &MacroAssembler::And); break;
@@ -762,16 +1155,15 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 			break;
 		case shop_mul_i32:
 			{
-				Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
 				Register r1 = GPR(op.rs1._reg, w10);
 				Register r2 = ScratchR(11);
 				if (op.rs2.is_imm())
 					Mov(r2, op.rs2._imm);
 				else
-					LoadGPR(op.rs2._reg, r2);
+					r2 = GPR(op.rs2._reg, w11);
+				Register rd = GDst(op.rd._reg);
 				Mul(rd, r1, r2);
-				if (!IsPinned(op.rd._reg))
-					Str(rd, Ctx(op.rd._reg));
+				GCommit(op.rd._reg, rd);
 			}
 			break;
 
@@ -785,11 +1177,10 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 		case shop_fsrra: FUnOp(op, 3); break;
 		case shop_fmac:
 			{
-				VRegister a = FLoad(op.rs1, VixlS(16));
-				VRegister b = FLoad(op.rs2, VixlS(17));
-				VRegister c = FLoad(op.rs3, VixlS(18));
-				Fmadd(VixlS(19), c, b, a);
-				FStore(op.rd, VixlS(19));
+				VRegister a = FRdP(op.rs1, VixlS(0));
+				VRegister b = FRdP(op.rs2, VixlS(1));
+				VRegister c = FRdP(op.rs3, VixlS(2));
+				Fmadd(FWr(op.rd._reg), c, b, a);
 			}
 			break;
 		case shop_fsetgt:
@@ -798,47 +1189,53 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 			break;
 		case shop_fsca:
 			{
-				Mov(x1, (uintptr_t)&sin_table);
+				Mov(x10, (uintptr_t)&sin_table);
 				if (op.rs1.is_reg())
-					Add(x1, x1, Operand(GPR(op.rs1._reg, w9), UXTH, 3));
+					Add(x10, x10, Operand(GPR(op.rs1._reg, w9), UXTH, 3));
 				else
-					Add(x1, x1, Operand(op.rs1.imm_value() << 3));
-				Ldr(x2, MemOperand(x1));
-				Str(x2, Ctx(op.rd.reg_ptr()));
+					Add(x10, x10, Operand(op.rs1.imm_value() << 3));
+				Ldr(x9, MemOperand(x10));
+				FInvalidateRange(op.rd._reg, 2);
+				Str(x9, Ctx(op.rd.reg_ptr()));
 			}
 			break;
 		case shop_fipr:
 			{
+				// vetores lidos do contexto: grava antes o que estiver sujo
+				FFlushRange(op.rs1._reg, 4);
+				FFlushRange(op.rs2._reg, 4);
 				Add(x9, x28, Ctx(op.rs1.reg_ptr()).GetOffset());
-				Ld1(v16.V4S(), MemOperand(x9));
+				Ld1(v0.V4S(), MemOperand(x9));
 				if (op.rs1._reg != op.rs2._reg)
 				{
 					Add(x9, x28, Ctx(op.rs2.reg_ptr()).GetOffset());
-					Ld1(v17.V4S(), MemOperand(x9));
-					Fmul(v16.V4S(), v16.V4S(), v17.V4S());
+					Ld1(v1.V4S(), MemOperand(x9));
+					Fmul(v0.V4S(), v0.V4S(), v1.V4S());
 				}
 				else
-					Fmul(v16.V4S(), v16.V4S(), v16.V4S());
-				Faddp(v17.V4S(), v16.V4S(), v16.V4S());
-				Faddp(VixlS(18), v17.V2S());
-				FStore(op.rd, VixlS(18));
+					Fmul(v0.V4S(), v0.V4S(), v0.V4S());
+				Faddp(v1.V4S(), v0.V4S(), v0.V4S());
+				Faddp(FWr(op.rd._reg), v1.V2S());
 			}
 			break;
 		case shop_ftrv:
 			{
+				FFlushRange(op.rs1._reg, 4);
+				FFlushRange(op.rs2._reg, 16);
 				Add(x9, x28, Ctx(op.rs1.reg_ptr()).GetOffset());
-				Ld1(v16.V4S(), MemOperand(x9));		// fn
+				Ld1(v0.V4S(), MemOperand(x9));		// fn
 				Add(x9, x28, Ctx(op.rs2.reg_ptr()).GetOffset());
-				Ld1(v17.V4S(), MemOperand(x9, 16, PostIndex));	// fm
-				Ld1(v18.V4S(), MemOperand(x9, 16, PostIndex));
-				Ld1(v19.V4S(), MemOperand(x9, 16, PostIndex));
-				Ld1(v20.V4S(), MemOperand(x9, 16, PostIndex));
-				Fmul(v21.V4S(), v17.V4S(), VixlS(16), 0);
-				Fmla(v21.V4S(), v18.V4S(), VixlS(16), 1);
-				Fmla(v21.V4S(), v19.V4S(), VixlS(16), 2);
-				Fmla(v21.V4S(), v20.V4S(), VixlS(16), 3);
+				Ld1(v1.V4S(), MemOperand(x9, 16, PostIndex));	// fm
+				Ld1(v2.V4S(), MemOperand(x9, 16, PostIndex));
+				Ld1(v3.V4S(), MemOperand(x9, 16, PostIndex));
+				Ld1(v4.V4S(), MemOperand(x9, 16, PostIndex));
+				Fmul(v5.V4S(), v1.V4S(), VixlS(0), 0);
+				Fmla(v5.V4S(), v2.V4S(), VixlS(0), 1);
+				Fmla(v5.V4S(), v3.V4S(), VixlS(0), 2);
+				Fmla(v5.V4S(), v4.V4S(), VixlS(0), 3);
+				FInvalidateRange(op.rd._reg, 4);
 				Add(x9, x28, Ctx(op.rd.reg_ptr()).GetOffset());
-				St1(v21.V4S(), MemOperand(x9));
+				St1(v5.V4S(), MemOperand(x9));
 			}
 			break;
 		case shop_frswap:
@@ -853,18 +1250,84 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 			break;
 		case shop_cvt_f2i_t:
 			{
-				Register rd = IsPinned(op.rd._reg) ? Pinned(op.rd._reg) : ScratchR(12);
-				Fcvtzs(rd, FLoad(op.rs1, VixlS(16)));
-				if (!IsPinned(op.rd._reg))
-					Str(rd, Ctx(op.rd._reg));
+				VRegister src = FRdP(op.rs1, VixlS(0));
+				Register rd = GDst(op.rd._reg);
+				Fcvtzs(rd, src);
+				GCommit(op.rd._reg, rd);
 			}
 			break;
 		case shop_cvt_i2f_n:
 		case shop_cvt_i2f_z:
 			{
 				Register r1 = GPR(op.rs1._reg, w9);
-				Scvtf(VixlS(18), r1);
-				FStore(op.rd, VixlS(18));
+				Scvtf(FWr(op.rd._reg), r1);
+			}
+			break;
+
+		case shop_pref:
+			if (op.rs1.is_reg() && op.rs1.is_r32i() && !mmu_enabled())
+			{
+				// Igual ao backend antigo: endereco da SQ -> do_sqw (ponteiro no
+				// Sh4RCB); senao prfm. O do_sqw pode acabar em C++ do TA: salva o
+				// que esta vivo nos caches (x2-x9 e os v16-v31 com valor).
+				Register addr = GPR(op.rs1._reg, w0);
+				Label not_sqw, done;
+				Lsr(w9, addr, 26);
+				Cmp(w9, 0x38);
+				B(&not_sqw, ne);
+				bool gLive = false;
+				for (int k = 0; k < 7; k++)
+					gLive |= gslot[k].reg >= 0;
+				CPURegList fsave(CPURegister::kVRegister, 64, 0);
+				for (int k = 0; k < 16; k++)
+					if (fslot[k].reg >= 0)
+						fsave.Combine(VRegister::GetDRegFromCode(16 + k));
+				if ((fsave.GetCount() % 2) != 0)
+					fsave.Combine(d7);
+				if (gLive)
+				{
+					Stp(x2, x3, MemOperand(sp, -64, PreIndex));
+					Stp(x4, x5, MemOperand(sp, 16));
+					Stp(x6, x7, MemOperand(sp, 32));
+					Stp(x8, x9, MemOperand(sp, 48));
+				}
+				if (!fsave.IsEmpty())
+					PushCPURegList(fsave);
+				Mov(w0, addr);
+				if (CCN_MMUCR.AT)
+					Mov(x9, reinterpret_cast<uintptr_t>(&do_sqw_mmu));
+				else
+				{
+					// do_sqw_nommu (macro em sh4_if.h) fica logo antes do sq_buffer no Sh4RCB
+					Sub(x9, x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, sq_buffer) + sizeof(void *));
+					Ldr(x9, MemOperand(x9));
+					Sub(x1, x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, sq_buffer));
+				}
+				MacroAssembler::Blr(x9);
+				memBaseValid = false;
+				if (!fsave.IsEmpty())
+					PopCPURegList(fsave);
+				if (gLive)
+				{
+					Ldp(x4, x5, MemOperand(sp, 16));
+					Ldp(x6, x7, MemOperand(sp, 32));
+					Ldp(x8, x9, MemOperand(sp, 48));
+					Ldp(x2, x3, MemOperand(sp, 64, PostIndex));
+				}
+				B(&done);
+				MacroAssembler::Bind(&not_sqw);
+				// prefetch de RAM (como o backend antigo)
+				Mov(w1, addr);
+				Add(x1, x1, sizeof(Sh4Context));
+				Prfm(PLDL1KEEP, MemOperand(x28, x1));
+				MacroAssembler::Bind(&done);
+				memBaseValid = false;
+			}
+			else
+			{
+				StorePinned();
+				shil_chf[op.op](&op);
+				LoadPinned();
 			}
 			break;
 
@@ -899,6 +1362,12 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 		}
 	}
 
+	// os caches voltam ao contexto antes da saida (o RelinkBlock reemite
+	// a saida sem saber deles)
+	gcacheOn = true;
+	FFlushAll(true);
+	GFlushAll(true);
+
 	block->relink_offset = (u32)GetBuffer()->GetCursorOffset();
 	block->relink_data = 0;
 	RelinkBlock(blk);
@@ -910,12 +1379,12 @@ u32 Armv8AAssembler::RelinkBlock(RuntimeBlockInfo *blk)
 {
 	ptrdiff_t start_offset = GetBuffer()->GetCursorOffset();
 
-	// Sempre grava os fixos antes de sair: a entrada fria pelo mainloop
-	// recarrega do contexto.
-	StorePinned();
-
+	// Saida direta para bloco ligado: vai a entrada quente sem passar pelo
+	// contexto. Todo o resto (stub de ligacao, despachante, FPCB, C++) grava
+	// os fixos antes; a entrada fria do destino recarrega.
 	if (jit_trace_enabled())
 	{
+		StorePinned();
 		Mov(w0, blk->vaddr);
 		Mov(w1, 1);
 		CallRuntime((void *)jit_trace_block);
@@ -926,9 +1395,9 @@ u32 Armv8AAssembler::RelinkBlock(RuntimeBlockInfo *blk)
 	case BET_StaticJump:
 	case BET_StaticCall:
 		if (blk->pBranchBlock == nullptr)
-			CallRuntime((void *)ngen_LinkBlock_Generic_stub);
+			CallRuntime(linkStubGeneric);
 		else
-			BranchRW((void *)blk->pBranchBlock->code);
+			BranchRW((u8 *)blk->pBranchBlock->code + kColdEntryBytes);
 		break;
 
 	case BET_Cond_0:
@@ -942,20 +1411,21 @@ u32 Armv8AAssembler::RelinkBlock(RuntimeBlockInfo *blk)
 			Label branch_not_taken;
 			B(ne, &branch_not_taken);
 			if (blk->pBranchBlock != nullptr)
-				BranchRW((void *)blk->pBranchBlock->code);
+				BranchRW((u8 *)blk->pBranchBlock->code + kColdEntryBytes);
 			else
-				CallRuntime((void *)ngen_LinkBlock_cond_Branch_stub);
+				CallRuntime(linkStubCondBranch);
 			Bind(&branch_not_taken);
 			if (blk->pNextBlock != nullptr)
-				BranchRW((void *)blk->pNextBlock->code);
+				BranchRW((u8 *)blk->pNextBlock->code + kColdEntryBytes);
 			else
-				CallRuntime((void *)ngen_LinkBlock_cond_Next_stub);
+				CallRuntime(linkStubCondNext);
 		}
 		break;
 
 	case BET_DynamicJump:
 	case BET_DynamicCall:
 	case BET_DynamicRet:
+		StorePinned();
 		Str(w29, Ctx(&next_pc));
 		{
 			Sub(x2, x28, offsetof(Sh4RCB, cntx));
@@ -971,6 +1441,7 @@ u32 Armv8AAssembler::RelinkBlock(RuntimeBlockInfo *blk)
 
 	case BET_DynamicIntr:
 	case BET_StaticIntr:
+		StorePinned();
 		if (blk->BlockType == BET_StaticIntr)
 			Mov(w29, blk->NextBlock);
 		Str(w29, Ctx(&next_pc));
@@ -986,6 +1457,24 @@ u32 Armv8AAssembler::RelinkBlock(RuntimeBlockInfo *blk)
 	return GetBuffer()->GetCursorOffset() - start_offset;
 }
 
+void Armv8AAssembler::GenLinkStubs()
+{
+	void *const targets[3] = { (void *)ngen_LinkBlock_Generic_stub,
+			(void *)ngen_LinkBlock_cond_Branch_stub, (void *)ngen_LinkBlock_cond_Next_stub };
+	void **const out[3] = { &linkStubGeneric, &linkStubCondBranch, &linkStubCondNext };
+	for (int i = 0; i < 3; i++)
+	{
+		*out[i] = CC_RW2RX(GetCursorAddress<void *>());	// RX: CallRuntime usa endereco real
+		StorePinned();
+		BranchAbs(targets[i]);
+	}
+	FinalizeCode();
+	emit_Skip(GetBuffer()->GetSizeInBytes());
+	vmem_platform_flush_cache(
+		CC_RW2RX(GetBuffer()->GetStartAddress<void *>()), CC_RW2RX(GetBuffer()->GetEndAddress<void *>()),
+		GetBuffer()->GetStartAddress<void *>(), GetBuffer()->GetEndAddress<void *>());
+}
+
 void Armv8AAssembler::Finalize(bool rewrite)
 {
 	Label code_end;
@@ -997,6 +1486,9 @@ void Armv8AAssembler::Finalize(bool rewrite)
 		block->code = GetBuffer()->GetStartAddress<DynarecCodeEntryPtr>();
 		block->host_code_size = GetBuffer()->GetSizeInBytes();
 		block->host_opcodes = GetLabelAddress<u32 *>(&code_end) - GetBuffer()->GetStartAddress<u32 *>();
+		// FC_PERF_MAP: nome dos blocos para o perf (rec_arm64.cpp)
+		extern void EmitPerfMapEntry(void *code, u32 size, u32 vaddr);
+		EmitPerfMapEntry(CC_RW2RX(block->code), block->host_code_size, block->vaddr);
 		{
 			static const char *dumpList = getenv("FC_DUMP_BLOCK");
 			if (dumpList != nullptr)
@@ -1132,6 +1624,13 @@ RuntimeBlockInfo *ngen_AllocateBlock_a()
 void ngen_Compile_a(RuntimeBlockInfo *block, bool force_checks, bool reset, bool staging, bool optimise)
 {
 	verify(emit_FreeSpace() >= 16 * 1024);
+
+	if (linkStubGeneric == nullptr)
+	{
+		Armv8AAssembler *stubs = new Armv8AAssembler();
+		stubs->GenLinkStubs();
+		delete stubs;
+	}
 
 	Armv8AAssembler *compiler = new Armv8AAssembler();
 	g_compiler = compiler;

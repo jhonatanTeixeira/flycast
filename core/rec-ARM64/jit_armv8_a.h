@@ -22,6 +22,8 @@ void ngen_CC_Start_a(shil_opcode* op);
 void ngen_CC_Param_a(shil_opcode* op, shil_param* par, CanonicalParamType tp);
 void ngen_CC_Call_a(shil_opcode* op, void* function);
 void ngen_CC_Finish_a(shil_opcode* op);
+// cache de codigo zerado: os stubs de ligacao do jit_armv8_a somem junto
+void jit_armv8a_reset_stubs();
 
 // Mainloop gerado pelo backend antigo (generate_mainloop); o jit_armv8_a o
 // compartilha (mesma convencao x28/w27/w29).

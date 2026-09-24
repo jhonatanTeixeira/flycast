@@ -468,6 +468,23 @@ extern void *ta_sq_stub;
 // faria. Entrada velha de codigo descartado so faz salvar a mais -- nunca a
 // menos, porque todo site emitido com mascara != 0 sobrescreve a sua.
 static std::unordered_map<uintptr_t, u16> compact_live_fregs;
+// jit_armv8_a: floats sujos do cache (slot de v16-v31 + offset no contexto)
+// em cada acesso compacto, gravados pelo trampolim de MMIO antes do C++.
+struct Armv8aSpill { u8 code; u16 off; };	// code: 16-31 = sN, 0x80|n = wN
+static std::unordered_map<uintptr_t, std::vector<Armv8aSpill>> armv8a_site_spills;
+void jit_armv8a_record_site(uintptr_t pc, u16 live, const u8 *slots, const u16 *offs, int n)
+{
+	compact_live_fregs[pc] = live;
+	if (n > 0)
+	{
+		std::vector<Armv8aSpill> &v = armv8a_site_spills[pc];
+		v.clear();
+		for (int i = 0; i < n; i++)
+			v.push_back({ slots[i], offs[i] });	// slots = codes
+	}
+	else
+		armv8a_site_spills.erase(pc);
+}
 extern u8 bm_code_page_locked[];
 extern u8 bm_code_chunks[];
 extern u8 *bm_ram_alias;
@@ -489,7 +506,7 @@ static bool restarting;
 // -- this is the same mechanism V8/JVM JITs use. Off by default (only
 // enabled by setting FC_PERF_MAP in the environment before launching) since
 // it's a debug/profiling aid, not something a normal player's session needs.
-static void EmitPerfMapEntry(void *code, u32 size, u32 vaddr)
+void EmitPerfMapEntry(void *code, u32 size, u32 vaddr)
 {
 	static int enabled = -1; // -1: not checked yet, 0: disabled, 1: enabled
 	static FILE *perf_map_file = nullptr;
@@ -529,6 +546,8 @@ void ngen_ResetBlocks()
 {
 	mainloop = NULL;
 	compact_live_fregs.clear();
+	armv8a_site_spills.clear();
+	jit_armv8a_reset_stubs();
 	// do_sqw_nommu mora no Sh4RCB e sobrevive ao reset do cache de codigo;
 	// o stub nao. Volta para o C ate o stub ser gerado de novo.
 	if (ta_sq_stub != nullptr && (void *)p_sh4rcb->do_sqw_nommu == ta_sq_stub)
@@ -2427,7 +2446,8 @@ public:
 	// pagina de codigo se protegem sozinhos -- o chamador passa 0 para eles.
 	// LR nao e salvo: como no rewrite antigo, o codigo do bloco nao mantem x30
 	// vivo (todo GenCallRuntime o destroi).
-	void GenCompactTrampoline(bool is_read, u32 size, u32 rt, u32 rm, void *target, void *return_rx, bool is_unsigned = false, u16 live_fregs = 0)
+	void GenCompactTrampoline(bool is_read, u32 size, u32 rt, u32 rm, void *target, void *return_rx, bool is_unsigned = false, u16 live_fregs = 0,
+			const std::vector<Armv8aSpill> *spills = nullptr)
 	{
 		CPURegList saved(CPURegister::kVRegister, 64, 0);
 		for (int i = 0; i < 16; i++)
@@ -2440,13 +2460,28 @@ public:
 		// jit_armv8_a: r0-r7 do SH4 vivem em w19-w26 e o contexto so e
 		// atualizado na saida do bloco; o handler de MMIO pode ler o
 		// Sh4Context (pedido de render, FC_STATE_HASH). Grava antes.
-		if (jit_armv8a_enabled())
+		const bool armv8a = jit_armv8a_enabled();
+		if (armv8a)
 		{
+			// cache de inteiros do jit_armv8_a (w2-w8) sobrevive ao C++
+			Stp(x2, x3, MemOperand(sp, -64, PreIndex));
+			Stp(x4, x5, MemOperand(sp, 16));
+			Stp(x6, x7, MemOperand(sp, 32));
+			Stp(x8, x9, MemOperand(sp, 48));
 			// r[0] vem logo depois de xffr[32] (sh4_if.h); `r` e macro no core
 			const u32 r0off = offsetof(Sh4Context, xffr) + 32 * sizeof(f32);
 			for (int i = 0; i < 8; i += 2)
 				Stp(Register::GetWRegFromCode(19 + i), Register::GetWRegFromCode(20 + i),
 						MemOperand(x28, r0off + i * 4));
+			// valores sujos dos caches do jit_armv8_a
+			if (spills != nullptr)
+				for (const Armv8aSpill &sp : *spills)
+				{
+					if (sp.code & 0x80)
+						Str(Register::GetWRegFromCode(sp.code & 0x1f), MemOperand(x28, sp.off));
+					else
+						Str(VRegister::GetSRegFromCode(sp.code), MemOperand(x28, sp.off));
+				}
 		}
 		Mov(w0, Register::GetWRegFromCode(rm));
 		if (!is_read)
@@ -2467,6 +2502,13 @@ public:
 			{
 				if (is_unsigned) Uxth(w0, w0); else Sxth(w0, w0);
 			}
+		}
+		if (armv8a)
+		{
+			Ldp(x4, x5, MemOperand(sp, 16));
+			Ldp(x6, x7, MemOperand(sp, 32));
+			Ldp(x8, x9, MemOperand(sp, 48));
+			Ldp(x2, x3, MemOperand(sp, 64, PostIndex));
 		}
 		if (!saved.IsEmpty())
 			PopCPURegList(saved);
@@ -3512,7 +3554,11 @@ static bool RewriteCompactMem(unat host_pc, bool is_read, u32 size, u32 rt, u32 
 	else if (is_sq)
 		a->GenCompactTrampolineSQ(rt, rm, (void *)(host_pc + 4), live, size);
 	else
-		a->GenCompactTrampoline(is_read, size, rt, rm, target, (void *)(host_pc + 4), is_unsigned, live);
+	{
+		auto sp = armv8a_site_spills.find((uintptr_t)host_pc);
+		a->GenCompactTrampoline(is_read, size, rt, rm, target, (void *)(host_pc + 4), is_unsigned, live,
+				sp != armv8a_site_spills.end() ? &sp->second : nullptr);
+	}
 	a->FinalizeStub();
 	delete a;
 
