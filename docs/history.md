@@ -2353,3 +2353,9 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   fecha: ~116M instr SH4/s de trabalho real × ~11 ciclos ARM por instrução =
   o núcleo inteiro. Próximo "paaaw" só vem de baratear o JIT por instrução.
   Instalado (anteriores em `.bak-pre-doa2ff` e `.bak-pre-shenff`).
+- **Le Mans como "método Demóstenes" (4.39):** velocidade 100% mas o jogo
+  pede 16 frames/s em tempo emulado; 54% do tempo emulado num laço de atraso
+  por contagem. Achado central: o padrão `sh4clock = d12` cobra 1,2x os
+  ciclos de todo bloco (SH4 a ~167MHz efetivos). `d10`: Le Mans 16,1 → 18,8
+  frames/s do jogo sem perda; DOA2/Zombie/Shenmue/KOF Evo/2D iguais.
+  Aplicado no cfg oficial (retrorun e RetroArch).
