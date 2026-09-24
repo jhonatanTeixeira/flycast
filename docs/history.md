@@ -2480,3 +2480,28 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   trampolim grava r0-r7 no contexto antes do C++ (4.52).
 - IDÊNTICO ao backend antigo em Shenmue II, DOA2 e MBAA. Velocidade:
   Shenmue II 24,6 → 47,5%, DOA2 41,1 → 65,9%, MBAA 79,2 → 100%.
+
+### 2026-09-24 — `jit_armv8_a` passos 2-5, diagnóstico do tamanho de código, mudança de rumo
+
+- Passos 2-5 do `jit_armv8_a` (cache de FP, entrada fria/quente, cache de GPR,
+  `pref` nativo), todos IDÊNTICOS ao backend antigo e sem fault. Shenmue II
+  47,5 → 47,8%, DOA2 65,9 → 71,7% (antigo 60,5 / 86,8). Detalhe em 4.53.
+- Perf da emu thread com os blocos mapeados à mão pelo `/tmp/perf-PID.map`:
+  o JIT novo gasta 1,39× o tempo do antigo dentro dos blocos (fora deles,
+  igual), excesso difuso, e o código quente que cobre 80% das amostras dobrou
+  (266 → 520 KB). Nos dumps, ~1/3 das instruções eram carga/descarga de r0-r7.
+- Tentativa de cortar isso (entrada fria no despachante, `UpdateSystem` num
+  stub fora da linha, `ldp`/`stp`, par de float mais curto) quebrou o core: o
+  stub passava ao `rdv_DoInterrupts` um pc do host que o `bm_GetBlock2` não
+  achava (SIGSEGV logo depois do savestate em Shenmue II e DOA2). Desfeita a
+  pedido do usuário; cópia em scratchpad só para referência. O código
+  commitado é byte a byte o binário validado (`~/fc_pm.so`).
+- Veredito: o diagnóstico do estudo (código quente grande, tráfego de contexto
+  entre blocos) se confirma; a execução errou ao reescrever o backend por bloco
+  com um contrato que infla o código, sem fazer o que deu o ganho do protótipo,
+  e com dois passos sem medição prévia. Pelo usuário, o `jit_armv8_a` já é mais
+  rápido que o JIT do flyinghead/flycast atual no device (não medido lado a
+  lado nesta sessão). Fica guardado; próximo: nível 2 com otimização de região
+  (estilo LTO) em segunda thread, construído a partir de alvos reescritos à
+  mão do dump (`docs/current_plan.md`).
+

@@ -6,7 +6,37 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
-## Agora (2026-09-24): `jit_armv8_a` v0 — correta, ganho pendente
+## Agora (2026-09-24): nível 2 com otimização de região (estilo LTO) — projeto
+
+**pendente (projeto, sem código ainda)** — o `jit_armv8_a` como backend por
+bloco ficou parado abaixo do JIT antigo (Shenmue II 47,8% × 60,5%, DOA2 71,7% ×
+86,8%) porque gera código 2× maior (4.53): o contrato de r0-r7 fixos em todo
+bloco cobra carga/descarga em toda entrada, saída e chamada C++, e nada do que
+deu o ganho do protótipo (4.50: T em registrador, `csel`, blocos maiores) foi
+feito. Ele fica guardado como está (commitado, selecionável). Nova abordagem a
+testar:
+- **Nível 1** = JIT antigo, na emu thread, compila todo bloco sob demanda e
+  conta execuções. Região quente vira pedido numa fila SPSC sem lock
+  (fire-and-forget; fila cheia descarta).
+- **Nível 2** = compilador de região numa segunda thread: forma a região pelo
+  perfil (saltos estáticos, laços, funções folha), monta a representação a
+  partir do SH4/SHIL (não do ARM do nível 1), passes de região inteira
+  (alocação de registrador, gravação morta no contexto, fusão de blocos,
+  quente/frio separados) e só no fim o VIXL, em buffer próprio.
+- **Publicação na emu thread**, em ponto seguro (`UpdateSystem`): FPCB e
+  religação; descarta se algum bloco da região foi reescrito no meio.
+- **Contrato na fronteira = o do JIT antigo** (tudo no contexto); dentro da
+  região, registradores livres.
+- **Checagem de ciclos na granularidade dos blocos originais**, para o estado
+  emulado não depender de quando a região foi publicada (`state_compare`
+  continua valendo).
+- **Método (ideia do usuário):** reescrever à mão as regiões quentes do dump
+  (`FC_JIT_DUMP`) como alvo, extrair regras que um JIT consegue aplicar só com
+  o que vê na compilação, aplicar offline no dump inteiro (tamanho do código
+  quente e instruções pesadas por execução) e só então escrever o gerador.
+  Primeiro alvo: o laço de vértices do Shenmue II (`tools/proto_jit_armv8_a/`).
+
+## 2026-09-24: `jit_armv8_a` por bloco — guardado (abaixo do JIT antigo)
 
 **done (v0, correta e validada)** — backend JIT ARM64 novo em
 `core/rec-ARM64/jit_armv8_a.*`, selecionado por `FC_JIT_ARMV8_A=1` (só sem MMU),
