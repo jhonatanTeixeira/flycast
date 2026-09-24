@@ -17,6 +17,10 @@
 
 u32 CCN_QACR_TR[2];
 
+// Stub ARM64 do caminho SQ -> TA (rec_arm64.cpp, docs/tech_debits.md 4.36);
+// nulo enquanto o JIT nao o gerou ou em outros backends.
+void *ta_sq_stub = nullptr;
+
 template<u32 idx>
 void CCN_QACR_write(u32 addr, u32 value)
 {
@@ -37,7 +41,11 @@ void CCN_QACR_write(u32 addr, u32 value)
 		break;
 
 		case 4:
-			do_sqw_nommu=(sqw_fp*)&TAWriteSQ;
+			{
+				// Stub ARM64 direto (rec_arm64.cpp, docs/tech_debits.md 4.36)
+				// quando o JIT ja o gerou; senao o TAWriteSQ em C.
+				do_sqw_nommu = ta_sq_stub != nullptr ? (sqw_fp*)ta_sq_stub : (sqw_fp*)&TAWriteSQ;
+			}
 			break;
 		default: do_sqw_nommu=&do_sqw_nommu_full;
 	}

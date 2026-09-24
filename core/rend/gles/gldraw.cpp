@@ -13,6 +13,22 @@ u32 g_glDrawCalls;
 // todos os shaders, 2 upload vert/idx, 3 opacos, 4 punch-through, 5 modvols,
 // 6 translucidos (sort+draw), 7 depois do DrawStrips ate o fim.
 u64 g_rsUs[12];
+// Medicao 2 do render (2026-09-24): quebras de lote por tcw que sao a MESMA
+// textura GL (texid) com o resto do estado igual -- lotes que poderiam ser
+// fundidos -- e o custo de SetGPState x draw por draw, pelo contador de
+// hardware (cntvct_el0, barato; clock_gettime e caro neste kernel).
+u32 g_rsBreakSameTex, g_rsBreakTcwOnly;
+u64 g_rsStateTicks, g_rsDrawTicks, g_rsTickFreq;
+static inline u64 rs_ticks()
+{
+#if defined(__aarch64__)
+	u64 v;
+	asm volatile("mrs %0, cntvct_el0" : "=r"(v));
+	return v;
+#else
+	return 0;	// so medido em aarch64
+#endif
+}
 u32 g_rsShaders;
 u32 g_rsSingleDraws, g_rsBatchDraws, g_rsProgramSwitches, g_rsTexBinds;
 static inline u64 rs_now_us()
@@ -375,6 +391,18 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 					if (p0->tileclip != runEnd->tileclip) g_batchBreakTileclip++;
 				}
 				if (runEnd - p0 == 1) g_rsSingleDraws++; else g_rsBatchDraws++;
+				if (runEnd < end && runEnd->count > 2 && p0->tcw.full != runEnd->tcw.full)
+				{
+					const bool restSame = (p0->pcw.full & PCW_DRAW_MASK) == (runEnd->pcw.full & PCW_DRAW_MASK)
+							&& p0->isp.full == runEnd->isp.full && p0->tsp.full == runEnd->tsp.full
+							&& p0->tileclip == runEnd->tileclip;
+					if (restSame)
+					{
+						g_rsBreakTcwOnly++;
+						if (p0->texid == runEnd->texid)
+							g_rsBreakSameTex++;
+					}
+				}
 			}
 			Run r = { p0, (u32)allIdx.size(), 0, 0xFFFFFFFF, 0 };
 			for (PolyParam* p = p0; p < runEnd; p++)
@@ -400,12 +428,20 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 			glBufferData(GL_ELEMENT_ARRAY_BUFFER, allIdx.size() * sizeof(u32), allIdx.data(), GL_STREAM_DRAW);
 			for (const Run& r : runs)
 			{
+				u64 k0 = g_rendSplitEnabled ? rs_ticks() : 0;
 				SetGPState<Type,SortingEnabled>(r.pp);
+				u64 k1 = g_rendSplitEnabled ? rs_ticks() : 0;
 				const GLvoid *offs = (const GLvoid *)(uintptr_t)(r.offset * sizeof(u32));
 				if (glDrawRangeElements_ != nullptr)
 					FC_COUNT_DRAW glDrawRangeElements_(GL_TRIANGLE_STRIP, r.lo, r.hi, (GLsizei)r.count, GL_UNSIGNED_INT, offs);
 				else
 					FC_COUNT_DRAW glDrawElements(GL_TRIANGLE_STRIP, (GLsizei)r.count, GL_UNSIGNED_INT, offs);
+				if (g_rendSplitEnabled)
+				{
+					u64 k2 = rs_ticks();
+					g_rsStateTicks += k1 - k0;
+					g_rsDrawTicks += k2 - k1;
+				}
 			}
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs);
 		}

@@ -218,6 +218,7 @@ extern u64 tmu_ch_base64[3];
 
 //./core/hw/sh4/modules/ccn.o
 extern u32 CCN_QACR_TR[2];
+extern void *ta_sq_stub;	// rec_arm64.cpp (tech_debits 4.36)
 
 //./core/hw/sh4/modules/mmu.o
 extern u32 ITLB_LRU_USE[64];
@@ -461,8 +462,8 @@ bool dc_serialize(void **data, unsigned int *total_size)
 		i = 0 ;
 	else if (do_sqw_nommu == &do_sqw_nommu_area_3_nonvmem)
 		i = 1 ;
-	else if (do_sqw_nommu==(sqw_fp*)&TAWriteSQ)
-		i = 2 ;
+	else if (do_sqw_nommu==(sqw_fp*)&TAWriteSQ || (ta_sq_stub != nullptr && (void*)do_sqw_nommu == ta_sq_stub))
+		i = 2 ;	// o stub ARM64 (tech_debits 4.36) e o mesmo TAWriteSQ: save identico
 	else if (do_sqw_nommu==&do_sqw_nommu_full)
 		i = 3 ;
 
@@ -876,7 +877,7 @@ bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_si
 	else if ( i == 1 )
 		do_sqw_nommu = &do_sqw_nommu_area_3_nonvmem ;
 	else if ( i == 2 )
-		do_sqw_nommu = (sqw_fp*)&TAWriteSQ ;
+		do_sqw_nommu = ta_sq_stub != nullptr ? (sqw_fp*)ta_sq_stub : (sqw_fp*)&TAWriteSQ ;
 	else if ( i == 3 )
 		do_sqw_nommu = &do_sqw_nommu_full ;
 

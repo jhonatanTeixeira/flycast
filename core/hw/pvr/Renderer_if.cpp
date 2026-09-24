@@ -229,6 +229,19 @@ void rend_dump_split(const char *path)
 		for (int i = 0; i < 8; i++)
 			fprintf(f, "rs_%s_ms\t%.3f\n", nm[i], g_rsUs[i] / 1000.0 / n);
 		fprintf(f, "rs_sort_ms\t%.3f\n", g_rsUs[8] / 1000.0 / n);
+		{
+			extern u32 g_rsBreakSameTex, g_rsBreakTcwOnly;
+			extern u64 g_rsStateTicks, g_rsDrawTicks;
+			u64 freq = 0;
+#if defined(__aarch64__)
+			asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+#endif
+			if (freq == 0) freq = 1000000;
+			fprintf(f, "rs_break_tcw_only_per_frame\t%.1f\n", (double)g_rsBreakTcwOnly / n);
+			fprintf(f, "rs_break_same_texid_per_frame\t%.1f\n", (double)g_rsBreakSameTex / n);
+			fprintf(f, "rs_setgpstate_ms\t%.3f\n", g_rsStateTicks * 1000.0 / freq / n);
+			fprintf(f, "rs_drawcall_ms\t%.3f\n", g_rsDrawTicks * 1000.0 / freq / n);
+		}
 		fprintf(f, "rs_batch_upload_ms\t%.3f\n", g_rsUs[10] / 1000.0 / n);
 		fprintf(f, "rs_batch_draw_ms\t%.3f\n", g_rsUs[11] / 1000.0 / n);
 		fprintf(f, "rs_tr_strips\t%.1f\n", (double)g_rsUs[9] / n);

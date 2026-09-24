@@ -311,6 +311,13 @@ void DYNACALL ta_thd_data32_i(void* data)
       ta_handle_cmd(trans);
 }
 
+// Chamado pelo stub ARM64 do caminho SQ -> TA (rec_arm64.cpp, ta_sq_stub)
+// quando a transicao da maquina de estados pede tratamento.
+void DYNACALL ta_handle_cmd_ext(u32 trans)
+{
+	ta_handle_cmd(trans);
+}
+
 void DYNACALL ta_vtx_data32(void* data)
 {
 	ta_thd_data32_i(data);

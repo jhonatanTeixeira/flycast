@@ -99,6 +99,8 @@ void DumpIfbCounts()
 }
 
 #include "hw/sh4/sh4_mmr.h"
+#include "hw/pvr/ta_ctx.h"
+#include "hw/pvr/pvr_mem.h"
 #include "hw/sh4/sh4_interrupts.h"
 #include "hw/sh4/sh4_core.h"
 #include "hw/sh4/dyna/ngen.h"
@@ -144,6 +146,11 @@ static void *sq_write_stub;
 // Stores into pages holding compiled code, by size 1/2/4/8 (index 0..3). See
 // bm_WriteMemCodePage() in blockmanager.cpp and docs/tech_debits.md 4.19.
 static void *codepage_write_stub[4];
+// Caminho `pref` -> FIFO da TA (docs/tech_debits.md 4.36): o DOA2 faz ~21 mil
+// por frame. Antes: blr -> TAWriteSQ (C) -> ta_vtx_data32 -> copia de 32
+// bytes + tabela de estados, ~50 instrucoes. O stub faz o mesmo direto.
+// Definido em ccn.cpp (sempre compilado; serialize.cpp tambem o usa).
+extern void *ta_sq_stub;
 // Acessos compactos (item 4.27): quais S16-S31 estavam vivos em cada call site
 // (endereco RX da instrucao -> mascara, bit i = S16+i). So entra quem tem
 // algum; o trampolim do fault salva exatamente esses, como o GenCallRuntime
@@ -211,6 +218,11 @@ void ngen_ResetBlocks()
 {
 	mainloop = NULL;
 	compact_live_fregs.clear();
+	// do_sqw_nommu mora no Sh4RCB e sobrevive ao reset do cache de codigo;
+	// o stub nao. Volta para o C ate o stub ser gerado de novo.
+	if (ta_sq_stub != nullptr && (void *)p_sh4rcb->do_sqw_nommu == ta_sq_stub)
+		p_sh4rcb->do_sqw_nommu = (sqw_fp *)&TAWriteSQ;
+	ta_sq_stub = nullptr;
 	sq_write_stub = nullptr;
 	for (auto& stub : codepage_write_stub)
 		stub = nullptr;
@@ -1890,6 +1902,66 @@ public:
 				PopCPURegList(allCallerSaved);
 				Ldr(x30, MemOperand(sp, 16, PostIndex));
 				Ret();
+			}
+		}
+
+		// SQ -> TA direto (4.36). Mesma convencao do TAWriteSQ: w0 = endereco,
+		// x1 = sq_buffer. Replica TAWriteSQ + ta_thd_data32_i (ta.cpp); qualquer
+		// caso fora do caminho comum (YUV/VRAM, sem contexto, overflow) salta
+		// para o TAWriteSQ em C com w0/x1 intactos. Sem pilha, sem chamadas
+		// exceto saltos de cauda (LR preservado).
+		{
+			static const bool noTaStub = getenv("FC_NO_TA_SQ_STUB") != nullptr;
+			if (!noTaStub && !mmu_enabled())
+			{
+				extern u8 ta_fsm[2049];
+				extern void DYNACALL ta_handle_cmd_ext(u32 trans);
+				ta_sq_stub = CC_RW2RX(GetCursorAddress<uintptr_t>());
+				Label fallback, handle;
+				And(w9, w0, 0x01FFFFE0);
+				Mov(w10, 0x800000);
+				Cmp(w9, w10);
+				B(&fallback, hs);					// YUV / VRAM: caminho C
+				Mov(x11, reinterpret_cast<uintptr_t>(&ta_ctx));
+				Ldr(x11, MemOperand(x11));
+				Cbz(x11, &fallback);				// dado antes do ListInit
+				Mov(x12, reinterpret_cast<uintptr_t>(&ta_tad));
+				Ldr(x13, MemOperand(x12, offsetof(tad_context, thd_data)));
+				Ldr(x14, MemOperand(x12, offsetof(tad_context, thd_root)));
+				Ldr(x15, MemOperand(x12, offsetof(tad_context, thd_old_data)));
+				Cmp(x13, x14);
+				Csel(x15, x15, x13, eq);			// End()
+				Sub(x15, x15, x14);
+				Mov(x9, TA_DATA_SIZE);
+				Cmp(x15, x9);
+				B(&fallback, hs);					// overflow: C levanta a interrupcao
+				And(x10, x0, 0x20);
+				Add(x10, x1, x10);					// sq = &sqb[addr & 0x20]
+				Ldp(x2, x3, MemOperand(x10));
+				Ldp(x4, x5, MemOperand(x10, 16));
+				Stp(x2, x3, MemOperand(x13));
+				Stp(x4, x5, MemOperand(x13, 16));
+				Add(x13, x13, 32);
+				Str(x13, MemOperand(x12, offsetof(tad_context, thd_data)));
+				// state_in = (cur<<8) | (ParaType<<5) | ((obj_ctrl>>2) % 32)
+				Ubfx(w3, w2, 2, 5);
+				Lsr(w4, w2, 29);
+				Orr(w3, w3, Operand(w4, LSL, 5));
+				Mov(x6, reinterpret_cast<uintptr_t>(ta_fsm));
+				Ldrb(w5, MemOperand(x6, 2048));
+				Orr(w3, w3, Operand(w5, LSL, 8));
+				Ldrb(w7, MemOperand(x6, x3));		// trans
+				Strb(w7, MemOperand(x6, 2048));		// ta_cur_state = trans
+				Tst(w7, 0xF0);
+				B(&handle, ne);
+				Ret();
+				Bind(&handle);
+				Mov(w0, w7);
+				GenBranchAbs((void *)ta_handle_cmd_ext, false);
+				Bind(&fallback);
+				GenBranchAbs((void *)TAWriteSQ, false);
+				if ((void *)p_sh4rcb->do_sqw_nommu == (void *)&TAWriteSQ)
+					p_sh4rcb->do_sqw_nommu = (sqw_fp *)ta_sq_stub;
 			}
 		}
 

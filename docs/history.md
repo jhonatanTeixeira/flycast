@@ -2339,3 +2339,10 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   ~50/50 e o laço é ~45% do JIT: teto ~5% de velocidade com superblocos.
   O `pref` → TA do mesmo laço: ~21 mil/frame, ~8% do orçamento; stub direto
   ~4%. Registrado em 4.34; decisão de seguir fica com o usuário.
+- **Stub `pref` → TA (4.36):** implementado; primeiro não pegava no DOA2
+  porque o load do savestate forçava o C — corrigido save/load. Ganho dentro
+  do ruído (DOA2 ~83%); Zombie 80,4%. Instalado (anterior em
+  `.bak-pre-tastub`).
+- **Margem do render (4.37):** quebras de lote são trocas reais de textura
+  (mesma textura GL: 0-6/frame); o draw no driver é 70% do custo por draw.
+  Sobra ~1ms em cache de uniforms; o resto exige menos draws (atlas).
