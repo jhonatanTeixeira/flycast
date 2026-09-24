@@ -216,6 +216,13 @@ void rend_dump_split(const char *path)
 	fprintf(f, "emu_frames\t%u\n", g_emuFrameCount);
 	fprintf(f, "early_releases\t%u\n", g_earlyReleases);
 	{
+		extern u64 g_taSqUs;
+		extern u32 g_taSqCalls;
+		fprintf(f, "ta_sq_calls\t%u\n", g_taSqCalls);
+		fprintf(f, "ta_sq_ms_total\t%.1f\n", g_taSqUs / 1000.0);
+		fprintf(f, "ta_sq_us_avg\t%.3f\n", g_taSqCalls ? (double)g_taSqUs / g_taSqCalls : 0.0);
+	}
+	{
 		extern u64 g_rsUs[12];
 		extern u32 g_rsShaders, g_rsSingleDraws, g_rsBatchDraws, g_rsProgramSwitches, g_rsTexBinds;
 		static const char *nm[8] = { "setup", "uniform_loop", "upload", "opaque", "punch", "modvol", "transl", "post" };

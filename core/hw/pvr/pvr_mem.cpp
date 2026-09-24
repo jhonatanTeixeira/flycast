@@ -1,3 +1,4 @@
+#include <time.h>
 /*
 	PowerVR interface to plugins
 	Handles YUV conversion (slow and ugly -- but hey it works ...)
@@ -229,6 +230,23 @@ void NOINLINE MemWrite32(void* dst, void* src)
 	memcpy((u64*)dst,(u64*)src,32);
 }
 
+// FC_REND_SPLIT (2026-09-24): custo, na EMU thread, do parser da FIFO da TA
+// alimentado pela Store Queue (cada `pref` de 32 bytes do jogo cai aqui). No
+// laco de vertices do DOA2/Zombie e uma chamada por vertice.
+u64 g_taSqUs;
+u32 g_taSqCalls;
+// Fora do TAWriteSQ de proposito: o timespec local ligaria a protecao de
+// pilha (__stack_chk_guard) na funcao inteira, chamada ~21 mil vezes por frame
+// no DOA2 mesmo com a instrumentacao desligada.
+static void NOINLINE ta_vtx_data32_timed(u8 *sq)
+{
+   timespec a, b;
+   clock_gettime(CLOCK_MONOTONIC, &a);
+   ta_vtx_data32(sq);
+   clock_gettime(CLOCK_MONOTONIC, &b);
+   g_taSqUs += (b.tv_sec - a.tv_sec) * 1000000ull + (b.tv_nsec - a.tv_nsec) / 1000;
+   g_taSqCalls++;
+}
 #if HOST_CPU!=CPU_ARM
 extern "C" void DYNACALL TAWriteSQ(u32 address,u8* sqb)
 {
@@ -237,7 +255,11 @@ extern "C" void DYNACALL TAWriteSQ(u32 address,u8* sqb)
 
    if (likely(address_w < 0x800000))//TA poly
    {
-      ta_vtx_data32(sq);
+      extern bool g_rendSplitEnabled;
+      if (unlikely(g_rendSplitEnabled))
+         ta_vtx_data32_timed(sq);
+      else
+         ta_vtx_data32(sq);
    }
    else if(likely(address_w < 0x1000000)) //Yuv Converter
    {

@@ -2334,3 +2334,8 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   por draw em lote. Um upload por lista (4.35): KOF Evo **58,8 fps a 100%**,
   DOA2 83,3%, Zombie 77,9%, Shenmue 81,6%; 2D iguais. Instalado como
   flycast2026 (anterior em `.bak-pre-oneupload`).
+- **Passo 2 (moldura dos blocos) — medido antes de implementar:** tráfego de
+  contexto é ~30% do laço de vértices do DOA2, mas os desvios do laço são
+  ~50/50 e o laço é ~45% do JIT: teto ~5% de velocidade com superblocos.
+  O `pref` → TA do mesmo laço: ~21 mil/frame, ~8% do orçamento; stub direto
+  ~4%. Registrado em 4.34; decisão de seguir fica com o usuário.
