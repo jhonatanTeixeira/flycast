@@ -2346,3 +2346,10 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Margem do render (4.37):** quebras de lote são trocas reais de textura
   (mesma textura GL: 0-6/frame); o draw no driver é 70% do custo por draw.
   Sobra ~1ms em cache de uniforms; o resto exige menos draws (atlas).
+- **Caça ao "eureka" do DOA2 (4.38):** FPSCR, interpretador e SMC limpos;
+  scheduler por dispositivo: som ~2,7ms/frame. Os laços de espera de DOA2 e
+  Shenmue só eram cobrados pelo `idle_hash`, não pulados — assinaturas de
+  avanço até o evento: DOA2 84,8 → 87,6%, Shenmue 80,7 → 83,1%. A conta
+  fecha: ~116M instr SH4/s de trabalho real × ~11 ciclos ARM por instrução =
+  o núcleo inteiro. Próximo "paaaw" só vem de baratear o JIT por instrução.
+  Instalado (anteriores em `.bak-pre-doa2ff` e `.bak-pre-shenff`).

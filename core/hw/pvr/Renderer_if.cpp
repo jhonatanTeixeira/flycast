@@ -1,4 +1,5 @@
 #include "Renderer_if.h"
+#include <dlfcn.h>
 #include <atomic>
 #include <chrono>	// FC_REND_SPLIT timing below
 #include "ta.h"
@@ -215,6 +216,25 @@ void rend_dump_split(const char *path)
 	fprintf(f, "emu_frame_interval_ms_avg\t%.3f\n", g_emuFrameCount ? g_emuFrameIntervalUs / 1000.0 / g_emuFrameCount : 0.0);
 	fprintf(f, "emu_frames\t%u\n", g_emuFrameCount);
 	fprintf(f, "early_releases\t%u\n", g_earlyReleases);
+	{
+		extern u64 g_schedTicks[32];
+		extern u32 g_schedCalls[32];
+		extern std::vector<sched_list> sch_list;
+		u64 freq = 0;
+#if defined(__aarch64__)
+		asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+#endif
+		if (freq == 0) freq = 1000000;
+		Dl_info info;
+		for (size_t i = 0; i < sch_list.size() && i < 32; i++)
+		{
+			uintptr_t off = 0;
+			if (dladdr((void *)sch_list[i].cb, &info) != 0)
+				off = (uintptr_t)sch_list[i].cb - (uintptr_t)info.dli_fbase;
+			fprintf(f, "sched_%zu_cb_off\t%zx\tcalls_per_frame\t%.1f\tms_per_frame\t%.3f\n", i, (size_t)off,
+					(double)g_schedCalls[i] / n, g_schedTicks[i] * 1000.0 / freq / n);
+		}
+	}
 	{
 		extern u64 g_taSqUs;
 		extern u32 g_taSqCalls;

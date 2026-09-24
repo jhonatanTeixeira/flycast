@@ -143,6 +143,22 @@ static int sh4_sched_elapsed(int id)
    return rv;
 }
 
+// FC_REND_SPLIT (2026-09-24, DOA2): tempo da EMU thread em cada periferico
+// despachado pelo scheduler (som/ARM7, timers, video, GD-ROM...), pelo
+// contador de hardware. Responde quanto da emu thread fica FORA do JIT.
+u64 g_schedTicks[32];
+u32 g_schedCalls[32];
+static inline u64 sched_ticks()
+{
+#if defined(__aarch64__)
+	u64 v;
+	asm volatile("mrs %0, cntvct_el0" : "=r"(v));
+	return v;
+#else
+	return 0;
+#endif
+}
+
 static void handle_cb(int id)
 {
 	int remain=sch_list[id].end-sch_list[id].start;
@@ -150,7 +166,14 @@ static void handle_cb(int id)
 	int jitter=elapsd-remain;
 
 	sch_list[id].end=-1;
+	extern bool g_rendSplitEnabled;
+	u64 k0 = g_rendSplitEnabled ? sched_ticks() : 0;
 	int re_sch=sch_list[id].cb(sch_list[id].tag,remain,jitter);
+	if (g_rendSplitEnabled && id < 32)
+	{
+		g_schedTicks[id] += sched_ticks() - k0;
+		g_schedCalls[id]++;
+	}
 
 	if (re_sch > 0)
 		sh4_sched_request(id, std::max(0, re_sch - jitter));

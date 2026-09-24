@@ -89,6 +89,28 @@ static const IdleFFSig idle_ff_sigs[] = {
 	    M_, M_, M_, M_, M_, M_, M_, M_,
 	    M_, MB, M_, M_, MB, M_, M_, M_,
 	    M_, M_ } },
+	// Laco de espera do Dead or Alive 2 (8C12F99E, docs/tech_debits.md 4.38):
+	//   while (*flag == r14) { (*contador)--; tarefa(); }
+	// O flag so muda por interrupcao (vblank/fim de render). Era ~64% do tempo
+	// emulado, 184 mil voltas por segundo emulado e ~286 mil UpdateSystem/s,
+	// porque o idle_hash antigo so cobra 224 ciclos por bloco. O contador ja
+	// descia ~17x menos que no hardware (690 ciclos cobrados por volta contra
+	// ~40 reais) sem efeito visivel; o avanco ate o proximo evento e a mesma
+	// distorcao, maior. Entrada = o proprio bloco do teste do flag.
+	{ "doa2-wait-flag-loop", 0x00, 8,
+	  { 0x63F2, 0x6232, 0x72FF, 0x2322, 0x53F1, 0x6232, 0x32E0, 0x8B03 },
+	  { M_, M_, M_, M_, M_, M_, M_, M_ } },
+	// Laco de espera do Shenmue (0C03A1F8, docs/tech_debits.md 4.38):
+	//   do { tarefa(); compara contadores; } while (*flag != 0);
+	// A tarefa e quase vazia (2-11 instrucoes, volta sem trabalho); o flag e
+	// zerado por interrupcao. ~50% do tempo emulado na cena pesada do save.
+	// Assinatura = bloco de comparacao (0C03A1E0) + 2 instrucoes que nao
+	// rodam no laco (mascara 0) + teste do flag; entrada no teste (+0x18).
+	{ "shenmue-wait-flag-loop", 0x18, 16,
+	  { 0xD120, 0x6312, 0xD020, 0x6202, 0xD11B, 0x323C, 0x7201, 0x6312,
+	    0x3326, 0x8B01, 0x0000, 0x0000, 0xD318, 0x6232, 0x2228, 0x8BEB },
+	  { M_, M_, M_, M_, M_, M_, M_, M_,
+	    M_, M_, 0x0000, 0x0000, M_, M_, M_, M_ } },
 };
 #undef M_
 #undef MB
@@ -1244,10 +1266,15 @@ _end:
 		if (!mmu_enabled() && idle_ff_match(blk->addr))
 			blk->idle_fastforward = true;
 
+		// FC_IDLE_LOG: registra cada bloco que um truque de ciclos marcou
+		// (docs/tech_debits.md 4.38) -- o hash le so metade do bloco, em bytes.
+		static const bool idleLog = getenv("FC_IDLE_LOG") != nullptr;
 		//Experimental hash-id based idle skip
 		if (!mmu_enabled() && strstr(idle_hash, blk->hash()))
 		{
 			//printf("IDLESKIP: %08X reloc match %s\n",blk->addr,blk->hash());
+			if (idleLog)
+				fprintf(stderr, "IDLETRICK hash %08X ops=%u %s\n", blk->vaddr, blk->guest_opcodes, blk->hash());
 			blk->guest_cycles=max_cycles*100;
 		}
 		else
@@ -1279,11 +1306,15 @@ _end:
 				if (blk->BlockType==BET_Cond_0 || (blk->BlockType==BET_Cond_1 && blk->BranchBlock<=blk->vaddr))
 				{
 					blk->guest_cycles*=idleMul;
+					if (idleLog)
+						fprintf(stderr, "IDLETRICK small %08X ops=%u x%d\n", blk->vaddr, blk->guest_opcodes, idleMul);
 				}
 
 				if (blk->BranchBlock==blk->vaddr)
 				{
 					blk->guest_cycles*=10;
+					if (idleLog)
+						fprintf(stderr, "IDLETRICK self %08X ops=%u x10\n", blk->vaddr, blk->guest_opcodes);
 				}
 			}
 
