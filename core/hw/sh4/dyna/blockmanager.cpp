@@ -776,6 +776,8 @@ void bm_Sort()
 void jit_dump_line(const char *fmt, ...);
 bool jit_dump_enabled();
 void jit_dump_flush();
+bool jit_dump_cond_take(const RuntimeBlockInfo *b, u32& taken, u32& next);
+bool jit_dump_cond_peek(const RuntimeBlockInfo *b, u32& taken, u32& next);
 
 // FC_JIT_DUMP: execucoes de todos os blocos vivos (R code vaddr runs), a
 // cada ~150 frames (libretro.cpp); os descartados saem no destrutor (D).
@@ -789,6 +791,9 @@ void bm_DumpJitRuns()
 		RuntimeBlockInfoPtr& b = it.second;
 		if (b->runs != 0)
 			jit_dump_line("R %zx %08X %u\n", (size_t)b->code, b->vaddr, b->runs);
+		u32 t, n;
+		if (jit_dump_cond_peek(b.get(), t, n) && (t | n) != 0)
+			jit_dump_line("C %zx %08X %u %u %08X %08X\n", (size_t)b->code, b->vaddr, t, n, b->BranchBlock, b->NextBlock);
 	}
 	jit_dump_flush();
 }
@@ -797,6 +802,11 @@ RuntimeBlockInfo::~RuntimeBlockInfo()
 {
 	if (runs != 0 && code != nullptr)
 		jit_dump_line("D %zx %08X %u\n", (size_t)code, vaddr, runs);
+	{
+		u32 t, n;
+		if (jit_dump_cond_take(this, t, n) && (t | n) != 0 && code != nullptr)
+			jit_dump_line("C %zx %08X %u %u %08X %08X\n", (size_t)code, vaddr, t, n, BranchBlock, NextBlock);
+	}
 	bm_ForgetAliasedStores(this);
 	bm_ForgetFoldedReads(this);
 	if (sh4_code_size != 0)

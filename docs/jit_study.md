@@ -254,6 +254,61 @@ esperas de dado são do jogo (RAM emulada) e só mudam com layout ou prefetch.
 - **Consequência:** o `jit_armv8_a` pode ser validado automaticamente contra o
   JIT atual, jogo por jogo.
 
+## Desvios e chamadas (passo 4) — medido
+
+`FC_JIT_DUMP` agora também conta, por bloco, as saídas condicionais (tomado
+ou caiu no próximo, com destino e próximo) e mantém uma pilha-sombra de
+chamada e retorno (`bsr`/`jsr` empilham o `NextBlock`, `rts` confere).
+Análise: `tools/jit_branch_study.py`.
+
+| | Shenmue II | DOA2 | Shenmue 1 | MBAA |
+|---|---|---|---|---|
+| **`rts` que volta ao endereço empilhado** | **99,97%** | 99,70% | 98,75% | 99,80% |
+| desvio curto p/ frente (pula ≤4 instr) | 33% | 27% | 44% | 19% |
+| laço (volta ao início do bloco) | 17% | 11% | 28% | 48% |
+| um lado ≥90% das vezes | 58% | 35% | 67% | 86% |
+| um lado ≥99% | 34% | 13% | 32% | 52% |
+
+**O que isso diz para o desenho:**
+- **Retorno como `ret` do host:** acertaria quase sempre. No Shenmue 1 a
+  pilha chega a encher, sinal de chamadas que não retornam (troca de tarefa):
+  é preciso um caminho de volta para o despacho normal quando o endereço não
+  bate.
+- **Execução condicional:** absorve 19–44% das saídas condicionais.
+- **Laços compilados como laço:** 11–48%.
+- **Seguir o lado quente:** funciona bem em MBAA e Shenmue, menos no DOA2.
+
+## Protótipo (passo 2) — medido
+
+`tools/proto_jit_armv8_a/`: o laço de vértices do Shenmue II (11 blocos,
+`8C1D8BDA`–`8C1D8C82`, ~20% do trabalho do JIT nesse jogo) sobre estado real
+capturado do jogo (`FC_CAPTURE_BLOCK`).
+- **Versão atual:** o código ARM64 que o JIT de hoje gerou, com as saídas como
+  ficam depois de ligadas.
+- **Versão `jit_armv8_a`, escrita à mão:**
+  - registradores do SH4 fixos (r0–r6, r14 em w19–w26; fr em s16–s31;
+    XMTRX em v4–v7);
+  - T em registrador;
+  - os `bf +0` e o `bt.s` que pula o prefixo como `csel`/`fcsel`;
+  - a volta inteira num bloco com duas saídas e uma checagem de ciclos.
+- **Equivalência:** registradores, T, FPUL, memória da SQ e dados enviados ao
+  TA **idênticos** nos dois estados capturados.
+
+| Estado | Atual | `jit_armv8_a` | Ganho |
+|---|---|---|---|
+| strip de 14 vértices | 3036 ns | 1781 ns | **1,70×** |
+| strip de 2 vértices | 322 ns | 220 ns | 1,46× |
+| tamanho do código do laço | 2740 bytes | 724 bytes | **3,8× menor** |
+
+**Limites:**
+- **Cache quente:** não mede o ganho de L1I, que no jogo é ~26% do tempo do
+  JIT e o código 3,8× menor ataca diretamente.
+- **SQ:** no emulador, o código atual paga trampolins nas escritas da SQ.
+- **Estado por entrada:** a versão nova carrega e descarrega o estado a cada
+  entrada; num JIT real isso sai do caminho quente.
+
+Os três pontos favorecem o `jit_armv8_a` no jogo real.
+
 ## Onde o contexto precisa estar em memória (passo 3)
 
 Ver `docs/jit_armv8_a_context_audit.md`. Pontos principais:

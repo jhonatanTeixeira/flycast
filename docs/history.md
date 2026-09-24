@@ -2433,3 +2433,8 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - Passo 5 (4.48): emulação determinística a partir do savestate depois de
   fixar o RTC (não está no savestate); `FC_STATE_HASH` +
   `tools/state_compare.py` detectam diferença e servem de teste do JIT novo.
+- Passo 4 (4.49): `rts` volta ao endereço empilhado em 98,8-99,97% das
+  vezes; 19-44% das saídas condicionais pulam ≤4 instruções.
+- Passo 2 (4.50): protótipo à mão do laço de vértices do Shenmue II no
+  estilo `jit_armv8_a`, sobre estado real capturado: resultado idêntico,
+  1,46-1,70× mais rápido, código 3,8× menor.

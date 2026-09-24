@@ -176,8 +176,119 @@ static void jit_dump_dyn_write()
 	}
 	dynN = 0;
 }
-static void DYNACALL jit_dump_dyn(u32 pc, u32 kind)
+// FC_JIT_DUMP (passo 4): pilha-sombra de chamada/retorno do guest. bsr/jsr
+// empilham o endereco de retorno (NextBlock), rts confere o destino.
+static std::vector<u32> shadowStack;
+static u64 qCalls, qRets, qMatch, qDeeper, qMiss, qUnder;
+static size_t qMaxDepth;
+static void shadow_push(u32 ret)
 {
+	qCalls++;
+	if (shadowStack.size() >= 4096)
+		shadowStack.erase(shadowStack.begin());
+	shadowStack.push_back(ret);
+	qMaxDepth = std::max(qMaxDepth, shadowStack.size());
+}
+static void shadow_ret(u32 pc)
+{
+	qRets++;
+	if (shadowStack.empty())
+	{
+		qUnder++;
+		return;
+	}
+	if (shadowStack.back() == pc)
+	{
+		qMatch++;
+		shadowStack.pop_back();
+		return;
+	}
+	size_t lo = shadowStack.size() > 17 ? shadowStack.size() - 17 : 0;
+	for (size_t i = shadowStack.size() - 1; i-- > lo;)
+		if (shadowStack[i] == pc)
+		{
+			qDeeper++;
+			shadowStack.resize(i);
+			return;
+		}
+	qMiss++;
+}
+void jit_dump_flush();
+// FC_CAPTURE_BLOCK=<vaddr hex>[:N] (diagnostico, prototipo do jit_armv8_a):
+// na N-esima entrada do bloco (padrao 1000), grava o Sh4Context e a RAM
+// principal em $FC_JIT_DUMP/cap-*.bin. Na entrada do bloco todo registrador
+// do SH4 ja esta no contexto.
+static void DYNACALL jit_capture(u32 vaddr)
+{
+	static u32 hits, target;
+	static bool done;
+	if (done)
+		return;
+	if (target == 0)
+	{
+		const char *e = strchr(getenv("FC_CAPTURE_BLOCK"), ':');
+		target = e != nullptr ? (u32)atoi(e + 1) : 1000;
+	}
+	if (++hits < target)
+		return;
+	done = true;
+	char path[512];
+	snprintf(path, sizeof(path), "%s/cap-%08X-ctx.bin", getenv("FC_JIT_DUMP"), vaddr);
+	FILE *f = fopen(path, "wb");
+	if (f != nullptr)
+	{
+		fwrite(&p_sh4rcb->cntx, 1, sizeof(Sh4Context), f);
+		fclose(f);
+	}
+	snprintf(path, sizeof(path), "%s/cap-%08X-ram.bin", getenv("FC_JIT_DUMP"), vaddr);
+	f = fopen(path, "wb");
+	if (f != nullptr)
+	{
+		fwrite(mem_b.data, 1, mem_b.size, f);
+		fclose(f);
+	}
+	jit_dump_line("K capturado %08X ctx=%zu ram=%u\n", vaddr, sizeof(Sh4Context), mem_b.size);
+	jit_dump_flush();
+}
+static void DYNACALL jit_dump_call(u32 ret)
+{
+	shadow_push(ret);
+}
+// contadores de saida condicional: [0] desvio tomado, [1] caiu no proximo
+static std::unordered_map<const void *, u32 *> condCounters;
+static u32 *jit_dump_cond_counter(const RuntimeBlockInfo *b)
+{
+	u32 *&p = condCounters[b];
+	if (p == nullptr)
+		p = new u32[2]();
+	return p;
+}
+bool jit_dump_cond_take(const RuntimeBlockInfo *b, u32& taken, u32& next)
+{
+	auto it = condCounters.find(b);
+	if (it == condCounters.end())
+		return false;
+	taken = it->second[0];
+	next = it->second[1];
+	delete[] it->second;
+	condCounters.erase(it);
+	return true;
+}
+bool jit_dump_cond_peek(const RuntimeBlockInfo *b, u32& taken, u32& next)
+{
+	auto it = condCounters.find(b);
+	if (it == condCounters.end())
+		return false;
+	taken = it->second[0];
+	next = it->second[1];
+	return true;
+}
+static void DYNACALL jit_dump_dyn(u32 pc, u32 kind, u32 ret)
+{
+	if ((kind & 7) == 2)		// BET_DynamicCall
+		shadow_push(ret);
+	else if ((kind & 7) == 4)	// BET_DynamicRet
+		shadow_ret(pc);
 	if (dynBuf == nullptr)
 	{
 		dynBuf = new u32[1 << 20];
@@ -197,6 +308,9 @@ void jit_dump_flush()
 	if (jitDumpState == 1)
 	{
 		jit_dump_dyn_write();
+		fprintf(jitDumpFile, "Q calls %llu rets %llu match %llu deeper %llu miss %llu under %llu maxdepth %zu\n",
+				(unsigned long long)qCalls, (unsigned long long)qRets, (unsigned long long)qMatch,
+				(unsigned long long)qDeeper, (unsigned long long)qMiss, (unsigned long long)qUnder, qMaxDepth);
 		fprintf(jitDumpFile, "Y total %llu kind0 %llu kind1 %llu kind2 %llu kind3 %llu kind4 %llu kind5 %llu kind6 %llu kind7 %llu\n",
 				(unsigned long long)dynTotal, (unsigned long long)dynKind[0], (unsigned long long)dynKind[1],
 				(unsigned long long)dynKind[2], (unsigned long long)dynKind[3], (unsigned long long)dynKind[4],
@@ -564,6 +678,13 @@ public:
 
 		// run register allocator
 		regalloc.DoAlloc(block);
+
+		if (jit_dump_enabled() && getenv("FC_CAPTURE_BLOCK") != nullptr
+				&& strtoul(getenv("FC_CAPTURE_BLOCK"), nullptr, 16) == block->vaddr)
+		{
+			Mov(w0, block->vaddr);
+			GenCallRuntime(jit_capture);
+		}
 
 		// Opt-in (FC_BLOCK_PROF): bump this block's run counter before anything
 		// else, so the count is exact even for blocks that bail out early on the
@@ -1567,6 +1688,15 @@ public:
 		EnsureCodeSize(start_instruction, write_memory_rewrite_size);
 	}
 
+	// FC_JIT_DUMP: ++*p com x9/x10 (livres na saida de bloco)
+	void EmitDumpCount(u32 *p)
+	{
+		Mov(x9, reinterpret_cast<uintptr_t>(p));
+		Ldr(w10, MemOperand(x9));
+		Add(w10, w10, 1);
+		Str(w10, MemOperand(x9));
+	}
+
 	u32 RelinkBlock(RuntimeBlockInfo *block)
 	{
 		ptrdiff_t start_offset = GetBuffer()->GetCursorOffset();
@@ -1577,6 +1707,11 @@ public:
 		case BET_StaticJump:
 		case BET_StaticCall:
 			// next_pc = block->BranchBlock;
+			if (block->BlockType == BET_StaticCall && jit_dump_enabled())
+			{
+				Mov(w0, block->NextBlock);	// endereco de retorno (bsr)
+				GenCallRuntime(jit_dump_call);
+			}
 			if (block->pBranchBlock == NULL)
 			{
 				if (!mmu_enabled())
@@ -1609,6 +1744,9 @@ public:
 				Label branch_not_taken;
 
 				B(ne, &branch_not_taken);
+				u32 *condCount = jit_dump_enabled() ? jit_dump_cond_counter(block) : nullptr;
+				if (condCount != nullptr)
+					EmitDumpCount(&condCount[0]);
 				if (block->pBranchBlock != NULL)
 					GenBranch(block->pBranchBlock->code);
 				else
@@ -1625,6 +1763,8 @@ public:
 
 				Bind(&branch_not_taken);
 
+				if (condCount != nullptr)
+					EmitDumpCount(&condCount[1]);
 				if (block->pNextBlock != NULL)
 					GenBranch(block->pNextBlock->code);
 				else
@@ -1651,6 +1791,7 @@ public:
 				// Tudo ja foi descarregado; w29 (pc) e x28/x27 sobrevivem a chamada.
 				Mov(w0, w29);
 				Mov(w1, (u32)block->BlockType);
+				Mov(w2, block->NextBlock);
 				GenCallRuntime(jit_dump_dyn);
 			}
 			Str(w29, sh4_context_mem_operand(&next_pc));

@@ -1,0 +1,283 @@
+{
+ "8C1D8BDA": {
+  "entry": 12,
+  "relink": 176,
+  "hex": "7b130071e5000054defcff97a00000355d7b9152bd83b1729d0b01b9dafcff179a9340b98d030791b9497ab8998300b95a130011988f40b918070051988f00b91f030071f7179f1a971701b99f7f40bdf603261e960701b91e102e1e9d5340bdde1b3d1e9e5f00bdb5497ab8958700b95a1300119a9300b9f403172afd03142a940f01b9890301912079404c89c301912179404c00dc216e01d4206e3cd8307e9c4f00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0xd8  // b.any",
+   "mov\tx9, #0xe630                \t// #58928",
+   "movk\tx9, #0x543b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x109884c",
+   "mov\tx9, #0xe634                \t// #58932",
+   "movk\tx9, #0x543b, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098854"
+  ],
+  "cond": [
+   "8C1D8CB4",
+   "8C1D8BEA"
+  ],
+  "literals": []
+ },
+ "8C1D8BEA": {
+  "entry": 0,
+  "relink": 88,
+  "hex": "7b0f0071e5000054a4fcff97a00000355d7d9152bd83b1729d0b01b9a0fcff179a8340b95f030072f9179f1a991701b9988740b9979340b91803170b988700b9f603192afd03162a960f01b9950741b9bf02271e9f4b00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0x80  // b.any",
+   "mov\tx9, #0x4c0                 \t// #1216",
+   "movk\tx9, #0x5440, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098758",
+   "mov\tx9, #0x4c4                 \t// #1220",
+   "movk\tx9, #0x5440, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098760"
+  ],
+  "cond": [
+   "8C1D8BF8",
+   "8C1D8BF2"
+  ],
+  "literals": []
+ },
+ "8C1D8BF2": {
+  "entry": 0,
+  "relink": 112,
+  "hex": "7b170071e50000547dfcff97a00000355d7e9152bd83b1729d0b01b979fcff179a9340b9f9031a2a5a630011f00080123903100bff03271e9e4f40bdc0233f1ef8d79f1a981701b997bb40b98d030791af4977f88f2300f95a8300119a9300b9af4979f88f3300f939230011998700b9",
+  "exit": [
+   "ldr\tw11, [x28, #276]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0x98  // b.any",
+   "mov\tx9, #0x6840                \t// #26688",
+   "movk\tx9, #0x5440, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x10986bc",
+   "mov\tx9, #0x6844                \t// #26692",
+   "movk\tx9, #0x5440, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x10986c4"
+  ],
+  "cond": [
+   "8C1D8C06",
+   "8C1D8C04"
+  ],
+  "literals": []
+ },
+ "8C1D8BF8": {
+  "entry": 0,
+  "relink": 100,
+  "hex": "7b0b0071e500005408faff97a00000351d7f9152bd83b1729d0b01b904faff17ff03271e9e4f40bdc0233f1efad79f1a9a1701b999bb40b98d030791af4979f88f2300f9989340b918830011989300b9978740b9af4977f88f3300f9f7220011978700b9",
+  "exit": [
+   "ldr\tw11, [x28, #276]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0x8c  // b.any",
+   "mov\tx9, #0x4540                \t// #17728",
+   "movk\tx9, #0x5400, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1097ce8",
+   "mov\tx9, #0x4544                \t// #17732",
+   "movk\tx9, #0x5400, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1097cf0"
+  ],
+  "cond": [
+   "8C1D8C06",
+   "8C1D8C04"
+  ],
+  "literals": []
+ },
+ "8C1D8C04": {
+  "entry": 0,
+  "relink": 524,
+  "hex": "7b2f0071e5000054d3feff97a00000359d809152bd83b1729d0b01b9cffeff179f4b40bd9e4f40bdff2b3e1e9f4b00bdfe03271e9e4f00bd9a8f40b95a0700519a8f00b95f030071f9179f1a991701b9989b40b9182300518f2740f98d030791af4938f8ff3b3f1e979340b9e17e1a533fe00071e1000054e003172a892301d1290140f9810301d120013fd604000014e103172a21000791806ba1f8f0038012f702100b968740b98d030791af4976f88f3700f9d62200119d5b40bd9c5f40bdbd0b3c1e9d5b00bd182300518f2340f9af4938f89b6f40bdff2b3b1e9f4b00bd1b102e1e9b6f00bd9a5740bd5a0b3c1e9a5700bdaf4976f88f2300f9d6220011968700b9959740b9b5820011959700b9182300518f2f40f9af4938f8898301912079404c890300912179df4c2279df4c2379df4c2479df4c2590804f4510a04f6518804f8518a04f898301912579004c182300518f2b40f9af4938f8948b40b9b44938b8f403182a948b00b9017f1a533fe00071e1000054e003182a892301d1290140f9810301d120013fd604000014e103182a21000791806ba1f818030111989b00b98d030791b34977b8938300b9f7120011b34977b893bb00b9f7120011979300b9997f40bd3603261e960701b9890301912079404c89c301912179404c00dc216e01d4206e3ed8307e9e4f00bd18102e1ef403192afd03142a940f01b9976340bd181b371e986f00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0x234  // b.any",
+   "mov\tx9, #0x7980                \t// #31104",
+   "movk\tx9, #0x543c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1099014",
+   "mov\tx9, #0x7984                \t// #31108",
+   "movk\tx9, #0x543c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x109901c"
+  ],
+  "cond": [
+   "8C1D8C84",
+   "8C1D8C3E"
+  ],
+  "literals": []
+ },
+ "8C1D8C06": {
+  "entry": 0,
+  "relink": 512,
+  "hex": "7b2f0071e5000054fdfaff97a0000035dd809152bd83b1729d0b01b9f9faff17ff03271e9f4f00bd9a8f40b95a0700519a8f00b95f030071f9179f1a991701b9989b40b9182300518f2740f98d030791af4938f89e4b40bdde3b3e1e979340b9e17e1a533fe00071e1000054e003172a892301d1290140f9810301d120013fd604000014e103172a21000791806ba1f8f0038012f702100b968740b98d030791af4976f88f3700f9d62200119d5b40bd9c5f40bdbd0b3c1e9d5b00bd182300518f2340f9af4938f89b6f40bdde2b3b1e9e4b00bd1b102e1e9b6f00bd9a5740bd5a0b3c1e9a5700bdaf4976f88f2300f9d6220011968700b9959740b9b5820011959700b9182300518f2f40f9af4938f8898301912079404c890300912179df4c2279df4c2379df4c2479df4c2590804f4510a04f6518804f8518a04f898301912579004c182300518f2b40f9af4938f8948b40b9b44938b8f403182a948b00b9017f1a533fe00071e1000054e003182a892301d1290140f9810301d120013fd604000014e103182a21000791806ba1f818030111989b00b98d030791b34977b8938300b9f7120011b34977b893bb00b9f7120011979300b9997f40bd3603261e960701b9890301912079404c89c301912179404c00dc216e01d4206e3fd8307e9f4f00bd18102e1ef403192afd03142a940f01b9976340bd181b371e986f00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0x228  // b.any",
+   "mov\tx9, #0x29a0                \t// #10656",
+   "movk\tx9, #0x543e, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x10980bc",
+   "mov\tx9, #0x29a4                \t// #10660",
+   "movk\tx9, #0x543e, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x10980c4"
+  ],
+  "cond": [
+   "8C1D8C84",
+   "8C1D8C3E"
+  ],
+  "literals": []
+ },
+ "8C1D8C3E": {
+  "entry": 0,
+  "relink": 88,
+  "hex": "7b0f0071e5000054ebfdff97a0000035dd879152bd83b1729d0b01b9e7fdff179a8340b95f030072f9179f1a991701b998bb40b9979340b91803170b98bb00b9f603192afd03162a960f01b9950741b9bf02271e9f4b00bd",
+  "exit": [
+   "ldr\tw11, [x28, #268]",
+   "cmp\tw11, #0x1",
+   "b.ne\t0x80  // b.any",
+   "mov\tx9, #0x18d0                \t// #6352",
+   "movk\tx9, #0x5401, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098c74",
+   "mov\tx9, #0x18d4                \t// #6356",
+   "movk\tx9, #0x5401, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098c7c"
+  ],
+  "cond": [
+   "8C1D8C4C",
+   "8C1D8C46"
+  ],
+  "literals": []
+ },
+ "8C1D8C46": {
+  "entry": 0,
+  "relink": 112,
+  "hex": "7b170071e5000054c4fdff97a0000035dd889152bd83b1729d0b01b9c0fdff179a9340b9f9031a2a5a630011f00080123903100bff03271e9e4f40bdc0233f1ef8d79f1a981701b9978740b98d030791af4977f88f2300f95a8300119a9300b9af4979f88f2b00f93923001199bb00b9",
+  "exit": [
+   "ldr\tw11, [x28, #276]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0x98  // b.any",
+   "mov\tx9, #0x6270                \t// #25200",
+   "movk\tx9, #0x5441, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098bd8",
+   "mov\tx9, #0x6274                \t// #25204",
+   "movk\tx9, #0x5441, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098be0"
+  ],
+  "cond": [
+   "8C1D8C5A",
+   "8C1D8C58"
+  ],
+  "literals": []
+ },
+ "8C1D8C4C": {
+  "entry": 0,
+  "relink": 100,
+  "hex": "7b0b0071e5000054e0fbff97a00000359d899152bd83b1729d0b01b9dcfbff17ff03271e9e4f40bdc0233f1efad79f1a9a1701b9998740b98d030791af4979f88f2300f9989340b918830011989300b997bb40b9af4977f88f2b00f9f722001197bb00b9",
+  "exit": [
+   "ldr\tw11, [x28, #276]",
+   "cmp\tw11, #0x0",
+   "b.ne\t0x8c  // b.any",
+   "mov\tx9, #0xc880                \t// #51328",
+   "movk\tx9, #0x540c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098448",
+   "mov\tx9, #0xc884                \t// #51332",
+   "movk\tx9, #0x540c, lsl #16",
+   "movk\tx9, #0x7e, lsl #32",
+   "ldr\tw10, [x9]",
+   "add\tw10, w10, #0x1",
+   "str\tw10, [x9]",
+   "bl\t0x1098450"
+  ],
+  "cond": [
+   "8C1D8C5A",
+   "8C1D8C58"
+  ],
+  "literals": []
+ },
+ "8C1D8C58": {
+  "entry": 0,
+  "relink": 400,
+  "hex": "7b230071e5000054b6fbff97a00000351d8b9152bd83b1729d0b01b9b2fbff179f4b40bd9e4f40bdff2b3e1e9f4b00bdfe03271e9e4f00bd9a9b40b95a2300518f2740f98d030791af493af8ff3b3f1e999340b9217f1a533fe00071e1000054e003192a892301d1290140f9810301d120013fd604000014e103192a21000791806ba1f8f00380123903100b999300b998bb40b98d030791af4978f88f2f00f9182300119d6b40bd9c6f40bdbd0b3c1e9d6b00bd5a2300518f2340f9af493af89b5f40bdff2b3b1e9f4b00bd1b102e1e9b5f00bd9a6740bd5a0b3c1e9a6700bdaf4978f88f2300f91823001198bb00b9979740b9f7820011979700b95a2300518f3740f9af493af8894301912079404c890300912179df4c2279df4c2379df4c2479df4c2590804f4510a04f6518804f8518a04f894301912579004c5a2300518f3340f9af493af8968b40b9b6493ab8f6031a2a968b00b9417f1a533fe00071e1000054e0031a2a892301d1290140f9810301d120013fd604000014e1031a2a21000791806ba1f85a0301119a9b00b9",
+  "exit": [
+   "bl\t0x10983b0"
+  ],
+  "cond": [],
+  "literals": []
+ },
+ "8C1D8C5A": {
+  "entry": 0,
+  "relink": 388,
+  "hex": "7b230071e500005497fdff97a00000355d8b9152bd83b1729d0b01b993fdff17ff03271e9f4f00bd9a9b40b95a2300518f2740f98d030791af493af89e4b40bdde3b3e1e999340b9217f1a533fe00071e1000054e003192a892301d1290140f9810301d120013fd604000014e103192a21000791806ba1f8f00380123903100b999300b998bb40b98d030791af4978f88f2f00f9182300119d6b40bd9c6f40bdbd0b3c1e9d6b00bd5a2300518f2340f9af493af89b5f40bdde2b3b1e9e4b00bd1b102e1e9b5f00bd9a6740bd5a0b3c1e9a6700bdaf4978f88f2300f91823001198bb00b9979740b9f7820011979700b95a2300518f3740f9af493af8894301912079404c890300912179df4c2279df4c2379df4c2479df4c2590804f4510a04f6518804f8518a04f894301912579004c5a2300518f3340f9af493af8968b40b9b6493ab8f6031a2a968b00b9417f1a533fe00071e1000054e0031a2a892301d1290140f9810301d120013fd604000014e1031a2a21000791806ba1f85a0301119a9b00b9",
+  "exit": [
+   "bl\t0x1098b34"
+  ],
+  "cond": [],
+  "literals": []
+ }
+}
