@@ -359,3 +359,35 @@ mkdir -p ~/jitdump
 python3 tools/jit_study.py jit-<pid>.txt flycast_libretro.so --top 30
 python3 tools/jit_study.py jit-<pid>.txt flycast_libretro.so --block 8C1D8C04
 ```
+
+## Regiões quentes para o nível 2 (2026-09-24)
+
+`tools/region_study.py jit-<pid>.txt [--min-edge P] [--max-sh4 N] [--show N]`
+monta o grafo de blocos do dump (arestas condicionais pelos contadores `C`,
+`bra`/`bsr`/queda decodificados do `G`; `jmp`/`jsr`/`rts` sem aresta) e junta
+os blocos quentes (90% do custo = execuções × instr ARM do JIT antigo) por
+arestas dominantes, com teto de tamanho. Resultado estável variando
+`--min-edge` 0,1-0,5 e `--max-sh4` 256-1024.
+
+| | Shenmue II | DOA2 |
+|---|---|---|
+| blocos quentes (90% do custo) | 1524 | 372 |
+| regiões que cobrem 50% / 80% / 90% | 18 / 183 / 672 | 1 / 21 / 133 |
+| transições de bloco quente que ficam dentro da região | 96% | 97% |
+| fim de bloco `jsr`+`rts` (sem aresta estática) | 26,6% | 10,6% |
+
+**A maior região dos dois jogos é o laço de vértices** (transformação,
+iluminação, 1/w, clamp, tabela de cor, 32 bytes na Store Queue, `pref` pro
+TA), feito de blocos de 3-30 instruções SH4 separados por desvios curtos
+para frente:
+- **DOA2:** laço interno de 10 blocos (8C101BC4-8C101C4E), 10,6 M voltas,
+  **~45% do custo do JIT** (a região com o laço externo, 52%); ~55 instr SH4
+  e ~1,5 KB (~390 instr) de ARM do JIT antigo por volta.
+- **Shenmue II:** 11 blocos 8C1D8BDA-8C1D8C5A (os do protótipo, item 4.50),
+  ~18% do custo (região 24%), 2 vértices por volta.
+- A 2ª do Shenmue II (8,2%, 8C0D8EA0) é uma função curta chamada ~1 M vezes,
+  com `jsr` dentro: alvo de embutir, não de laço.
+
+Primeiro alvo do nível 2: o laço interno do DOA2 (maior fatia de um jogo numa
+região só), com o do Shenmue II já escrito à mão em `tools/proto_jit_armv8_a/`.
+
