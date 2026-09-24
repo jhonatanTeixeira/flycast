@@ -1332,7 +1332,33 @@ _end:
 				e = getenv("FC_IDLE_MUL");
 				idleMul = e != nullptr ? atoi(e) : 3;
 			}
-			if (state.info.has_readm && !state.info.has_writem && !state.info.has_fpu && (int)blk->guest_opcodes<idleOps)
+			// So e espera se o endereco lido NAO muda dentro do bloco: um laco
+			// de espera rele o mesmo endereco ate um evento mudar o valor. Um
+			// laco que avanca o ponteiro (mov.b @r4+ -- strlen, memchr) faz
+			// trabalho de verdade com numero fixo de voltas; no Le Mans o
+			// strlen em 8C0112F8 levava x30 (144 ciclos por volta em vez de
+			// ~5) = 25% do tempo emulado inventado. docs/tech_debits.md 4.41.
+			// FC_IDLE_SCAN_OLD=1 volta ao criterio antigo.
+			static const bool scanOld = getenv("FC_IDLE_SCAN_OLD") != nullptr;
+			bool addrChanges = false;
+			if (!scanOld)
+			{
+				for (const shil_opcode& rop : blk->oplist)
+				{
+					if (rop.op != shop_readm || !rop.rs1.is_reg())
+						continue;
+					for (const shil_opcode& wop : blk->oplist)
+						if ((wop.rd.is_reg() && wop.rd._reg == rop.rs1._reg)
+								|| (wop.rd2.is_reg() && wop.rd2._reg == rop.rs1._reg))
+						{
+							addrChanges = true;
+							break;
+						}
+					if (addrChanges)
+						break;
+				}
+			}
+			if (!addrChanges && state.info.has_readm && !state.info.has_writem && !state.info.has_fpu && (int)blk->guest_opcodes<idleOps)
 			{
 				if (blk->BlockType==BET_Cond_0 || (blk->BlockType==BET_Cond_1 && blk->BranchBlock<=blk->vaddr))
 				{

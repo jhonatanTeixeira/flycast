@@ -2362,3 +2362,7 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Pulo do laço de atraso (4.40):** Le Mans com d8 agora 25,4 frames/s a
   100% (d12 original: 16,1). Assinatura só casa no Le Mans. Instalado
   (anterior em `.bak-pre-delayskip`). Padrão do cfg continua d10.
+- **Detector de espera x varredura (4.41):** o `strlen` do Le Mans era
+  cobrado x30 como se fosse espera (25% do tempo emulado). Corrigido: Le Mans
+  18,6 → 24,2 fps do jogo no d10; Zombie → 87,5%. Instalado (anterior em
+  `.bak-pre-scanfix`).
