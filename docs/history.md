@@ -2406,3 +2406,14 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   indiretas. PCM bit a bit idêntico ao original.
 - Shenmue II 56,5 → 60,6%; Shenmue 1 86,5%; Zombie 100%; DOA2 88%; 2D 100%.
   Instalado (anterior em `.bak-pre-aicathread`).
+
+### 2026-09-25 — Estudo do código gerado pelo JIT (base do `jit_armv8_a`)
+
+- `FC_JIT_DUMP` (novo) grava todo bloco compilado com o trecho ARM64 de cada
+  op SHIL, execuções, faults por região e limpezas de cache;
+  `tools/jit_study.py` classifica offline. Rodado em Shenmue II, DOA2,
+  Shenmue 1 e MBAA. Resultado em `docs/jit_study.md` (4.45): 44-60% das
+  instruções do host são overhead (registrador ida-e-volta ao contexto,
+  T/jdyn pela memória, entrada/saída de bloco pequeno); cache de código não
+  estoura, o L1I sim (Shenmue II: 119 KB quentes). Nome do JIT novo, a pedido
+  do usuário: `jit_armv8_a` (à parte, sem descartar os existentes).

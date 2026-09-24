@@ -1,0 +1,173 @@
+# Estudo do código gerado pelo JIT do SH4 (ARM64)
+
+2026-09-25. Base para o desenho do `jit_armv8_a` — um JIT à parte, sem
+descartar os existentes (`rec-ARM64`, `rec-x64`, ...). Este documento é **só
+o estudo**: não muda nada no JIT atual.
+
+## Método
+
+- `FC_JIT_DUMP=<dir>` (novo, `core/rec-ARM64/rec_arm64.cpp`,
+  `blockmanager.cpp`, `driver.cpp`), junto com `FC_BLOCK_PROF=1`. O arquivo
+  `<dir>/jit-<pid>.txt` recebe:
+  - **por bloco compilado:** código SH4, cada op SHIL com o trecho ARM64 que
+    ela gerou (carga de registrador / corpo / descarga), fim da entrada, fim
+    das ops, início da ligação e os bytes ARM64;
+  - **execuções:** de cada bloco a cada segundo emulado (`R`, na emu thread) e
+    as finais dos blocos descartados (`D`, destrutor);
+  - **faults reescritos:** endereço do guest de cada acesso que caiu fora da
+    RAM (`W`), o que diz a região (vídeo/som/sistema);
+  - **escritas em página de código** (`P`) e **limpezas do cache** (`Z`).
+- `tools/jit_study.py jit-<pid>.txt flycast_libretro.so [--top N] [--block VADDR]`
+  desmonta tudo de uma vez (`aarch64-linux-gnu-objdump`) e atribui cada
+  instrução do host a uma categoria. `--block` mostra um bloco anotado op por op.
+- **Contagem:** instruções estáticas × execuções. Bloco é linha reta, então cada
+  op roda uma vez por execução. Não conta o caminho frio do agendador nem o
+  contador do próprio profiler. Na saída condicional conta só um dos dois
+  desvios. É um limite superior: desvios internos raros, como o caminho não-SQ
+  do `pref`, contam como executados.
+- **O que não conta:** C++ chamado pela emu thread (agendador, AICA/ARM7, TA,
+  handlers). Instrução não é ciclo: a sessão anterior mediu IPC ~0,5 e clock
+  real ~1,3 GHz na emu thread (`tech_debits.md` 4.24).
+- **Jogos:** Shenmue II (save pesado), DOA2, Shenmue 1 e MBAA, cada um com o
+  savestate de sempre, uma rodada (~10 s emulados).
+
+## Resultado geral
+
+| | Shenmue II | DOA2 | Shenmue 1 | MBAA |
+|---|---|---|---|---|
+| instr SH4 executadas | 1066 M | 1694 M | 1774 M | 1537 M |
+| instr ARM64 por instr SH4 | 3,74 | 4,05 | 3,70 | 3,57 |
+| **corpo das ops (o que o jogo pediu)** | 53% | 56% | 56% | 40% |
+| **overhead do flycast** | **47%** | **44%** | **45%** | **60%** |
+| carga + descarga de registrador | 27% | 27% | 26% | 28% |
+| saída/ligação de bloco | 14% | 11% | 12% | 21% |
+| entrada (ciclos/agendador) | 6% | 6% | 6% | 10% |
+| instr SH4 por bloco executado | 8,5 | 8,9 | 9,0 | 5,6 |
+| saídas condicionais / estáticas / dinâmicas | 65/18/17% | 71/21/8% | 73/16/12% | 75/14/11% |
+| código quente p/ 80% da execução | **119 KB** | 34 KB | 31 KB | 39 KB |
+| código quente p/ 90% | 277 KB | 78 KB | 96 KB | 84 KB |
+
+L1I do A53: 32 KB, 2 vias.
+
+## O que o jogo realmente faz
+
+Classes de instrução SH4, pesadas pelas execuções.
+
+**Shenmue II:**
+
+| Classe | Parte | ARM64 por instr SH4 |
+|---|---|---|
+| FPU | 35% | 3,4 |
+| ALU | 31% | 2,3 |
+| load | 13% | 3,2 |
+| desvio | 12% | 2,3 |
+| store | 5% | 3,2 |
+| sistema | 2,4% | 3,0 |
+| `pref` | 1,3% | 12,4 |
+
+**MBAA:** ALU 43%, desvio 21%, load 17%, store 8%, FPU 6%.
+
+**Memória, por região** (execuções de `readm`/`writem`):
+- **RAM principal:** 83–98% dos acessos. Custa ~2 instruções ARM64 por acesso
+  (`add x13, x28, #0x1c0` recalculado a cada vez + `ldr/str [x13, wN, uxtw]`).
+  O fastmem compacto já está perto do mínimo.
+- **Vídeo, via fila SQ para o TA:** 10% (Shenmue II), 24% (DOA2), 16%
+  (Shenmue 1), 1,5% (MBAA) dos acessos. Mais o `pref` que descarrega a fila:
+  12 instruções ARM64 + chamada ao stub do TA. No DOA2 o `pref` sozinho é
+  **9,3% de todas as instruções do host**.
+- **Som:** o SH4 praticamente não toca no AICA. Só 4–7 pontos de acesso aos
+  registradores, com execuções ~0. O som é trabalho do ARM7 e do mixer.
+- **Sistema:** OCRAM, registradores P4, Holly, Maple e GD-ROM somam <0,5% dos
+  acessos. Nos 2D aparecem mais pontos (Maple, GD-ROM), mas com poucas
+  execuções.
+
+## O que é inventado pelo flycast
+
+Achados medidos, em ordem de peso.
+
+1. **Carga e descarga de registradores: 26–28% das instruções.** O alocador
+   (SSA por bloco) grava cada resultado no contexto logo depois da op
+   (write-through). A descarga (672 M no Shenmue II) é maior que a carga
+   (399 M). Cada bloco começa carregando do contexto o que usa. Com blocos de
+   5–9 instruções SH4, quase todo registrador vai à memória e volta a cada
+   poucas instruções. Descargas redundantes dentro do mesmo bloco são poucas
+   (~6 M): o custo não é gravar duas vezes, é **não manter o registrador entre
+   blocos**.
+2. **Flag T e `jdyn` pela memória: os campos que mais trafegam** em todos os
+   jogos. Por exemplo, Shenmue II: `jdyn` 126 M, `sr.T` 113 M; MBAA: `sr.T`
+   366 M.
+   - O `cmp`/`cset` grava o T no contexto.
+   - O `jcond` copia T para `jdyn` e grava.
+   - A saída **relê** `jdyn` da memória para decidir o desvio: 94–207 M de
+     "recargas fora do alocador".
+   - No SH4 o T é um bit; aqui vira um load/store por comparação.
+3. **Saída de bloco: 11–21%.** A saída condicional são ~4 instruções (`ldr`,
+   `cmp`, `b.ne`, `b`). A dinâmica são 5, lendo a tabela `FPCB` de ~64 MB
+   indexada pelo PC. Essa tabela pode custar em cache/TLB mais do que as
+   instruções sugerem (hipótese, não medida).
+4. **Entrada: ~2 instruções por bloco** (`subs w27` + `b.pl`), mais a checagem
+   anti-SMC nos blocos em RAM desprotegida. Pouco por bloco, mas com blocos de
+   5–9 instruções SH4 vira 6–10%.
+5. **`ftrv` recarrega a matriz XMTRX a cada chamada:** 13 instruções, sendo 5
+   `ld1` + 1 `st1`. A conta em si são 4 (`fmul` + 3 `fmla`). O `fipr` é
+   parecido (7). No DOA2, `ftrv` + `fipr` = 9% do host.
+6. **`pref`: 12 instruções + chamada**, com a checagem SQ inline e o ponteiro
+   `do_sqw` carregado do contexto a cada vez.
+7. **Blocos pequenos:** 45% das execuções no Shenmue II são de blocos com ≤4
+   instruções SH4. Todo o custo fixo acima (entrada, carga, descarga, saída) é
+   por bloco. O laço de vértices do Shenmue II (`8C1D8BDA`–`8C1D8C84`) é picado
+   em ~7 blocos por vértice, em parte por `bf +0`, um desvio que só pula uma
+   instrução.
+
+## Cache de código e cache de instruções
+
+- **Cache de código (15 MB): não estoura.** 1,9–2,4 MB gerados por sessão. As 8
+  limpezas são todas de boot do BIOS e carga de savestate, nenhuma durante o
+  jogo. Recompilações: 30–175 endereços, 79–522 compilações extras (SMC),
+  pouco.
+- **Escritas em página de código:** 50–83 pontos, mas **4108 no Shenmue 1**.
+  Ele escreve dados em páginas que também têm código; cada ponto passa uma vez
+  pelo fault + reescrita.
+- **O buffer que estoura de verdade é o L1I (32 KB):**
+  - **Shenmue II** precisa de **119 KB** de código para cobrir 80% do que
+    executa, e 277 KB para 90%.
+  - **DOA2, Shenmue 1 e MBAA** ficam em 31–39 KB para 80%, logo acima do L1I.
+  - Como o código ARM64 tem ~3,7 instruções de 4 bytes por instrução SH4 de 2
+    bytes (~7×), o que cabia no I-cache de 16 KB do SH4 transborda aqui. Bate
+    com o L1I medido em 4.24 (FMV do RE CV).
+
+## Implicações para o `jit_armv8_a`
+
+Insumos de desenho, não decisões:
+
+- **Arquivo de registradores do SH4 fixo em registradores do host.**
+  - **Inteiros:** o ARM64 tem 31 registradores inteiros, e o SH4 usa
+    r0–r15 + T + pr + gbr + macl/mach + fpul (~22).
+  - **Ponto flutuante:** fr0–15 cabem em 16 dos 32 registradores NEON, e o
+    XMTRX em mais 4 como vetores 4S.
+  - **Efeito:** elimina a maior parte dos 26–28% de carga/descarga, e o `ftrv`
+    cai de 13 para 4 instruções.
+  - **Contexto em memória:** só em chamada C++, exceção e savestate.
+- **T num registrador (ou nos flags NZCV) e saída condicional direto nele:**
+  some o tráfego de `sr.T`/`jdyn`, o maior de todos.
+- **Blocos maiores:** traços ou superblocos que atravessam desvios
+  condicionais quentes, e execução condicional para `bf/bt +0`. Isso corta a
+  entrada e a saída fixas por bloco, que somam 17–31%.
+- **Densidade de código para o L1I:** menos bytes por instrução SH4, e código
+  quente agrupado (blocos ligados em sequência na memória). O Shenmue II é o
+  caso crítico.
+- **`pref`/SQ inline para o stub do TA, com o ponteiro em registrador fixo:**
+  12 instruções → ~5.
+- **Continua valendo:** fastmem compacto (~2 instruções por acesso à RAM) e os
+  truques de espera (avanço até o evento).
+
+## Como reproduzir
+
+```
+# no device (core com FC_JIT_DUMP)
+mkdir -p ~/jitdump
+~/q_run.sh j_jogo /roms2/<sistema> "<rom>" "FC_JIT_DUMP=/home/ark/jitdump FC_BLOCK_PROF=1"
+# no PC
+python3 tools/jit_study.py jit-<pid>.txt flycast_libretro.so --top 30
+python3 tools/jit_study.py jit-<pid>.txt flycast_libretro.so --block 8C1D8C04
+```

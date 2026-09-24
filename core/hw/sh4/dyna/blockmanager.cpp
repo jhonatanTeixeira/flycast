@@ -343,8 +343,10 @@ static void bm_ReprotectQuietPages()
 	}
 }
 
+void bm_DumpJitRuns();
 void bm_Periodical_1s()
 {
+	bm_DumpJitRuns();	// FC_JIT_DUMP (emu thread, junto das compilacoes)
 	bm_CleanupDeletedBlocks();
 	bm_seconds++;
 	// After the cleanup: blocks discarded now stay in del_blocks until the
@@ -771,8 +773,30 @@ void bm_Sort()
 }
 #endif
 
+void jit_dump_line(const char *fmt, ...);
+bool jit_dump_enabled();
+void jit_dump_flush();
+
+// FC_JIT_DUMP: execucoes de todos os blocos vivos (R code vaddr runs), a
+// cada ~150 frames (libretro.cpp); os descartados saem no destrutor (D).
+void bm_DumpJitRuns()
+{
+	if (!jit_dump_enabled())
+		return;
+	jit_dump_line("T\n");
+	for (auto& it : blkmap)
+	{
+		RuntimeBlockInfoPtr& b = it.second;
+		if (b->runs != 0)
+			jit_dump_line("R %zx %08X %u\n", (size_t)b->code, b->vaddr, b->runs);
+	}
+	jit_dump_flush();
+}
+
 RuntimeBlockInfo::~RuntimeBlockInfo()
 {
+	if (runs != 0 && code != nullptr)
+		jit_dump_line("D %zx %08X %u\n", (size_t)code, vaddr, runs);
 	bm_ForgetAliasedStores(this);
 	bm_ForgetFoldedReads(this);
 	if (sh4_code_size != 0)

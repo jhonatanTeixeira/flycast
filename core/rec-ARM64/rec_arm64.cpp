@@ -110,6 +110,61 @@ void DumpIfbCounts()
 #include "hw/sh4/sh4_sched.h"
 #include "hw/mem/vmem32.h"
 #include "arm64_regalloc.h"
+#include <dlfcn.h>
+#include <array>
+#include <cstdarg>
+
+// FC_JIT_DUMP=<diretorio> (diagnostico, 2026-09-25): registra TODO o codigo
+// que o JIT gera, para estudo offline (tools/jit_study.py). Por bloco
+// compilado: codigo SH4, cada op SHIL com o trecho ARM64 que ela gerou
+// (carga de registrador / corpo / descarga), entrada e saida do bloco, e os
+// bytes ARM64. Mais: execucoes de cada bloco (precisa de FC_BLOCK_PROF),
+// enderecos do guest que cada acesso reescrito tocou (fault -> regiao) e
+// limpezas do cache de codigo. Formato de linha em jit_dump_* abaixo.
+static FILE *jitDumpFile;
+static int jitDumpState = -1;	// -1 nao decidido, 0 desligado, 1 ligado
+bool jit_dump_enabled()
+{
+	if (jitDumpState < 0)
+	{
+		const char *dir = getenv("FC_JIT_DUMP");
+		jitDumpState = 0;
+		if (dir != nullptr)
+		{
+			char path[512];
+			snprintf(path, sizeof(path), "%s/jit-%d.txt", dir, (int)getpid());
+			jitDumpFile = fopen(path, "w");
+			if (jitDumpFile != nullptr)
+			{
+				static char buf[1 << 20];
+				setvbuf(jitDumpFile, buf, _IOFBF, sizeof(buf));
+				Dl_info info;
+				uintptr_t soBase = 0;
+				if (dladdr((void *)&jit_dump_enabled, &info) != 0)
+					soBase = (uintptr_t)info.dli_fbase;
+				extern u8 *CodeCache;
+				fprintf(jitDumpFile, "M so_base %zx code_base %zx\n", (size_t)soBase, (size_t)CodeCache);
+				jitDumpState = 1;
+			}
+		}
+	}
+	return jitDumpState == 1;
+}
+// linha livre (limpeza de cache, fault reescrito, execucoes...)
+void jit_dump_line(const char *fmt, ...)
+{
+	if (!jit_dump_enabled())
+		return;
+	va_list ap;
+	va_start(ap, fmt);
+	vfprintf(jitDumpFile, fmt, ap);
+	va_end(ap);
+}
+void jit_dump_flush()
+{
+	if (jitDumpState == 1)
+		fflush(jitDumpFile);
+}
 
 #undef do_sqw_nommu
 
@@ -529,10 +584,20 @@ public:
 		Bind(&cpu_running);
 		Bind(&cycles_remaining);
 
+		const bool jitDump = jit_dump_enabled();
+		if (jitDump)
+		{
+			jitDumpEntryEnd = (u32)GetBuffer()->GetCursorOffset();
+			jitDumpOps.resize(block->oplist.size());
+		}
 		for (size_t i = 0; i < block->oplist.size(); i++)
 		{
 			shil_opcode& op  = block->oplist[i];
+			if (jitDump)
+				jitDumpOps[i][0] = (u32)GetBuffer()->GetCursorOffset();
 			regalloc.OpBegin(&op, i);
+			if (jitDump)
+				jitDumpOps[i][1] = (u32)GetBuffer()->GetCursorOffset();
 
 			switch (op.op)
 			{
@@ -1261,8 +1326,14 @@ public:
 				shil_chf[op.op](&op);
 				break;
 			}
+			if (jitDump)
+				jitDumpOps[i][2] = (u32)GetBuffer()->GetCursorOffset();
 			regalloc.OpEnd(&op);
+			if (jitDump)
+				jitDumpOps[i][3] = (u32)GetBuffer()->GetCursorOffset();
 		}
+		if (jitDump)
+			jitDumpLoopEnd = (u32)GetBuffer()->GetCursorOffset();
 		regalloc.Cleanup();
 
 		block->relink_offset = (u32)GetBuffer()->GetCursorOffset();
@@ -1593,6 +1664,36 @@ public:
 			block->host_opcodes = GetLabelAddress<u32*>(&code_end) - GetBuffer()->GetStartAddress<u32*>();
 
 			EmitPerfMapEntry(block->code, block->host_code_size, block->vaddr);
+
+			if (jit_dump_enabled() && jitDumpOps.size() == block->oplist.size())
+			{
+				FILE *f = jitDumpFile;
+				// B code vaddr addr sh4_bytes guest_ops cycles host_bytes flags
+				fprintf(f, "B %zx %08X %08X %u %u %u %u temp=%d idle=%d delay=%d ro=%d fpu=%d\n",
+						(size_t)block->code, block->vaddr, block->addr, block->sh4_code_size,
+						block->guest_opcodes, block->guest_cycles, block->host_code_size,
+						(int)block->temp_block, (int)block->idle_fastforward, (int)block->delay_skip,
+						(int)block->read_only, (int)block->has_fpu_op);
+				fputs("G", f);
+				for (u32 a = 0; a < block->sh4_code_size; a += 2)
+					fprintf(f, " %04X", IReadMem16(block->vaddr + a));
+				fputc('\n', f);
+				// E fim_da_entrada fim_das_ops inicio_do_relink
+				fprintf(f, "E %u %u %u\n", jitDumpEntryEnd, jitDumpLoopEnd, block->relink_offset);
+				for (size_t j = 0; j < block->oplist.size(); j++)
+				{
+					const shil_opcode& o = block->oplist[j];
+					// O idx guest_offs pre corpo pos fim delay texto
+					fprintf(f, "O %zu %u %u %u %u %u %d %s\n", j, o.guest_offs, jitDumpOps[j][0], jitDumpOps[j][1],
+							jitDumpOps[j][2], jitDumpOps[j][3], (int)o.delay_slot, o.dissasm().c_str());
+				}
+				fputc('H', f);
+				fputc(' ', f);
+				const u8 *hb = GetBuffer()->GetStartAddress<const u8 *>();
+				for (u32 k = 0; k < block->host_code_size; k++)
+					fprintf(f, "%02x", hb[k]);
+				fputc('\n', f);
+			}
 
 			// FC_DUMP_BLOCK=<hex vaddr>[,<hex vaddr>...] (opt-in, diagnosis
 			// only): write the generated ARM64 code of those blocks to
@@ -2933,6 +3034,9 @@ private:
 	std::vector<const VRegister*> call_fregs;
 	Arm64RegAlloc regalloc;
 	RuntimeBlockInfo* block = NULL;
+	// FC_JIT_DUMP: offsets do codigo gerado (entrada, cada op, fim das ops)
+	u32 jitDumpEntryEnd = 0, jitDumpLoopEnd = 0;
+	std::vector<std::array<u32, 4>> jitDumpOps;
 	const int read_memory_rewrite_size = 3;	// ubfx, add, ldr
 	const int write_memory_rewrite_size = 3; // ubfx, add, str
 };
@@ -3095,6 +3199,8 @@ static void *CompactSlowTarget(bool is_read, u32 size)
 
 bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 {
+	// W host_pc endereco_do_guest: este acesso caiu fora da RAM (regiao)
+	jit_dump_line("W %zx %08X\n", (size_t)host_pc, (u32)acc);
 	{
 		bool c_read, c_unsigned = false; u32 c_size, c_rt, c_rm;
 		if (DecodeCompactMem(*(u32 *)CC_RX2RW(host_pc), c_read, c_size, c_rt, c_rm, &c_unsigned))
@@ -3190,6 +3296,7 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 // point THIS store site at the code-page stub and keep the page protected.
 bool ngen_RewriteCodePageStore(unat& host_pc)
 {
+	jit_dump_line("P %zx\n", (size_t)host_pc);
 	{
 		bool c_read; u32 c_size, c_rt, c_rm;
 		if (DecodeCompactMem(*(u32 *)CC_RX2RW(host_pc), c_read, c_size, c_rt, c_rm))
