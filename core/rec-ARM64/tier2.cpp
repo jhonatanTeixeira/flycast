@@ -160,12 +160,111 @@ void check_op(const shil_opcode &o)
 	}
 	if ((o.op == shop_shl || o.op == shop_shr || o.op == shop_sar) && !o.rs2.is_imm())
 		throw Reject{ "deslocamento por registrador" };
-	if (o.op == shop_readm && (o.flags & 0x7f) != 4 && (o.flags & 0x7f) != 8)
-		throw Reject{ "readm de 1/2 bytes" };
-	if (o.op == shop_writem && (o.flags & 0x7f) != 4 && (o.flags & 0x7f) != 8)
-		throw Reject{ "writem de 1/2 bytes" };
+	if (o.op == shop_readm && ((o.flags & 0x7f) == 1 || (o.flags & 0x7f) == 2) && !o.rd.is_r32i())
+		throw Reject{ "readm de 1/2 bytes em float" };
 	if (o.op == shop_readm && o.rd.is_r32f() == false && o.rd.is_r32i() == false && o.rd.count() != 2)
 		throw Reject{ "readm destino" };
+}
+
+bool block_ok(RuntimeBlockInfo *b);
+
+// destino (T) e retorno (R) de um bloco que termina chamando endereco constante
+bool call_target(RuntimeBlockInfo *rbi, u32 *T, u32 *R)
+{
+	if (rbi->BlockType != BET_StaticCall && rbi->BlockType != BET_DynamicCall)
+		return false;
+	bool haveR = false;
+	for (const shil_opcode &o : rbi->oplist)
+		if (o.op == shop_mov32 && o.rd.is_reg() && o.rd._reg == reg_pr && o.rs1.is_imm())
+		{
+			*R = o.rs1._imm;
+			haveR = true;
+		}
+	if (!haveR)
+		return false;
+	if (rbi->BlockType == BET_StaticCall)
+	{
+		*T = rbi->BranchBlock;
+		return true;
+	}
+	int jd = -1;
+	for (int i = 0; i < (int)rbi->oplist.size(); i++)
+		if (rbi->oplist[i].op == shop_jdyn)
+			jd = i;
+	if (jd < 0 || !rbi->oplist[jd].rs1.is_reg())
+		return false;
+	const shil_opcode &j = rbi->oplist[jd];
+	int rn = j.rs1._reg;
+	for (int i = jd - 1; i >= 0; i--)
+	{
+		const shil_opcode &o = rbi->oplist[i];
+		RegSet u, d;
+		uses_defs(o, u, d);
+		if (!d.test(rn))
+			continue;
+		if (o.op == shop_mov32 && o.rs1.is_imm())
+		{
+			*T = o.rs1._imm + (j.rs2.is_imm() ? j.rs2._imm : 0);
+			return true;
+		}
+		return false;
+	}
+	return false;
+}
+
+// blocos de uma funcao-folha pequena a partir de T: sem chamada, sem salto
+// indireto, termina em rts, nao escreve pr; ate 6 blocos / 64 instrucoes
+bool leaf_blocks(u32 T, std::vector<u32> *out)
+{
+	std::vector<u32> st{ T };
+	std::set<u32> seen;
+	u32 ninstr = 0;
+	bool hasRet = false;
+	while (!st.empty())
+	{
+		u32 x = st.back();
+		st.pop_back();
+		if (seen.count(x))
+			continue;
+		seen.insert(x);
+		if (seen.size() > 6)
+			return false;
+		RuntimeBlockInfo *b = bm_GetBlock(x).get();
+		if (b == nullptr || !block_ok(b))
+			return false;
+		ninstr += b->guest_opcodes;
+		if (ninstr > 64)
+			return false;
+		for (const shil_opcode &o : b->oplist)
+			if ((o.rd.is_reg() && o.rd._reg == reg_pr) || (o.rd2.is_reg() && o.rd2._reg == reg_pr))
+				return false;
+		switch (b->BlockType)
+		{
+		case BET_Cond_0:
+		case BET_Cond_1:
+			st.push_back(b->BranchBlock);
+			st.push_back(b->NextBlock);
+			break;
+		case BET_StaticJump:
+			st.push_back(b->BranchBlock);
+			break;
+		case BET_DynamicRet:
+		{
+			bool ok = false;
+			for (const shil_opcode &o : b->oplist)
+				if (o.op == shop_jdyn && o.rs1.is_reg() && o.rs1._reg == reg_pr && !o.rs2.is_imm())
+					ok = true;
+			if (!ok)
+				return false;
+			hasRet = true;
+			break;
+		}
+		default:
+			return false;
+		}
+		out->push_back(x);
+	}
+	return hasRet;
 }
 
 struct BlockIn
@@ -195,6 +294,9 @@ public:
 	std::map<u32, u32 *> entryCode;	// entrada -> codigo do bloco antigo
 	std::map<u32, u32> entryOrig;	// entrada -> 1a instrucao (lida na analise, na emu thread)
 	std::map<u32, RuntimeBlockInfo *> rbiOf;	// identidade dos blocos na analise
+	std::map<u32, u32> realOf;			// copia de folha -> vaddr real
+	std::map<u32, RuntimeBlockInfo *> calleeRbi;	// blocos das folhas embutidas
+	u32 inlined = 0;
 	RegSet W, U, readonly;
 	int home[sh4_reg_count];
 	bool homeCallee[sh4_reg_count];
@@ -238,82 +340,159 @@ public:
 			B(&l, cond);
 	}
 
+	// um bloco do JIT antigo como BlockIn (fschg em par sai; pref sobe)
+	BlockIn makeBlock(u32 va)
+	{
+		RuntimeBlockInfo *rbi = bm_GetBlock(va).get();
+		if (rbi == nullptr)
+			throw Reject{ "bloco nao compilado" };
+		if (!rbi->read_only || rbi->temp_block || rbi->idle_fastforward || rbi->delay_skip)
+			throw Reject{ "bloco sem protecao de pagina, temporario ou com avanco" };
+		BlockIn b;
+		b.rbi = rbi;
+		b.vaddr = va;
+		b.cycles = rbi->guest_cycles;
+		switch (rbi->BlockType)
+		{
+		case BET_Cond_0:
+		case BET_Cond_1:
+			b.cond = true;
+			b.takenOnT = (rbi->BlockType & 1) != 0;
+			b.branch = rbi->BranchBlock;
+			b.next = rbi->NextBlock;
+			break;
+		case BET_StaticJump:
+		case BET_StaticCall:
+			b.cond = false;
+			b.branch = rbi->BranchBlock;
+			break;
+		case BET_DynamicJump:
+		case BET_DynamicCall:
+		case BET_DynamicRet:
+			b.cond = false;
+			b.dyn = true;
+			b.branch = 0xFFFFFFFF;
+			break;
+		default:
+			throw Reject{ "fim de bloco com interrupcao" };
+		}
+		auto hit = heatOf.find(va);
+		b.heat = hit != heatOf.end() ? hit->second : 0;
+		// fschg em par (sem efeito liquido); pref sobe no bloco
+		int nfschg = 0;
+		for (const shil_opcode &o : rbi->oplist)
+		{
+			if (is_fschg(o))
+			{
+				if (!o.rs2.is_imm() || o.rs2._imm != 0x100000)
+					throw Reject{ "xor fpscr" };
+				nfschg++;
+				continue;
+			}
+			b.ir.push_back(o);
+		}
+		if (nfschg & 1)
+			throw Reject{ "fschg impar" };
+		for (size_t i = 0; i < b.ir.size(); i++)
+		{
+			if (b.ir[i].op != shop_pref)
+				continue;
+			int addr = b.ir[i].rs1.is_reg() ? b.ir[i].rs1._reg : -1;
+			size_t j = i;
+			RegSet u, d;
+			while (j > 0)
+			{
+				const shil_opcode &p = b.ir[j - 1];
+				uses_defs(p, u, d);
+				if (p.op == shop_writem || p.op == shop_pref || p.op == shop_jcond || (addr >= 0 && d.test(addr)))
+					break;
+				j--;
+			}
+			shil_opcode op = b.ir[i];
+			b.ir.erase(b.ir.begin() + i);
+			b.ir.insert(b.ir.begin() + j, op);
+		}
+		return b;
+	}
+
+	// Funcao-folha pequena chamada por constante (jsr @rN com rN = constante no
+	// bloco, ou bsr): copia os blocos dela na regiao (chave 0xF0000000+). O rts
+	// da copia vira salto para a continuacao (pr = constante gravada pelo
+	// chamador; a folha nao escreve pr); o jsr vira salto para a copia. Cada
+	// copia desconta os ciclos do bloco original: equivalente a chamar.
+	void inlineLeaves()
+	{
+		u32 n = 0;
+		std::vector<u32> callers(order.begin(), order.end());
+		for (u32 va : callers)
+		{
+			BlockIn &c = blk[va];
+			u32 T, R;
+			std::vector<u32> callee;
+			if (!call_target(c.rbi, &T, &R) || !leaf_blocks(T, &callee))
+				continue;
+			if (n >= 32)
+				break;
+			std::map<u32, u32> key;
+			u32 idx = 0;
+			for (u32 x : callee)
+				key[x] = 0xF0000000u | (n << 8) | idx++;
+			n++;
+			for (u32 x : callee)
+			{
+				BlockIn k = makeBlock(x);
+				k.heat = c.heat;
+				if (k.cond)
+				{
+					k.branch = key[k.branch];
+					k.next = key[k.next];
+				}
+				else if (k.dyn)
+				{
+					k.dyn = false;
+					k.branch = R;
+					dropJdyn(k);
+				}
+				else
+					k.branch = key[k.branch];
+				calleeRbi[x] = k.rbi;
+				realOf[key[x]] = x;
+				blk[key[x]] = k;
+				order.push_back(key[x]);
+			}
+			c.dyn = false;
+			c.cond = false;
+			c.branch = key[T];
+			dropJdyn(c);
+			inlined++;
+		}
+	}
+	void dropJdyn(BlockIn &b)
+	{
+		for (size_t i = 0; i < b.ir.size(); i++)
+			if (b.ir[i].op == shop_jdyn)
+			{
+				b.ir.erase(b.ir.begin() + i);
+				return;
+			}
+	}
+
 	// ------------------------------------------------------------ analise
 	void load(const std::vector<u32> &blockList, const std::vector<u32> &entryList)
 	{
 		order = blockList;
-		std::set<u32> inRegion(order.begin(), order.end());
-		for (u32 va : order)
+		for (u32 va : blockList)
 		{
-			RuntimeBlockInfo *rbi = bm_GetBlock(va).get();
-			if (rbi == nullptr)
-				throw Reject{ "bloco nao compilado" };
-			if (!rbi->read_only || rbi->temp_block || rbi->idle_fastforward || rbi->delay_skip)
-				throw Reject{ "bloco sem protecao de pagina, temporario ou com avanco" };
-			BlockIn b;
-			b.rbi = rbi;
-			b.vaddr = va;
-			b.cycles = rbi->guest_cycles;
-			switch (rbi->BlockType)
-			{
-			case BET_Cond_0:
-			case BET_Cond_1:
-				b.cond = true;
-				b.takenOnT = (rbi->BlockType & 1) != 0;
-				b.branch = rbi->BranchBlock;
-				b.next = rbi->NextBlock;
-				break;
-			case BET_StaticJump:
-			case BET_StaticCall:
-				b.cond = false;
-				b.branch = rbi->BranchBlock;
-				break;
-			case BET_DynamicJump:
-			case BET_DynamicCall:
-			case BET_DynamicRet:
-				b.cond = false;
-				b.dyn = true;
-				b.branch = 0xFFFFFFFF;
-				break;
-			default:
-				throw Reject{ "fim de bloco com interrupcao" };
-			}
-			auto hit = heatOf.find(va);
-			b.heat = hit != heatOf.end() ? hit->second : 0;
-			// fschg em par (sem efeito liquido); pref sobe no bloco
-			int nfschg = 0;
-			for (const shil_opcode &o : rbi->oplist)
-			{
-				if (is_fschg(o))
-				{
-					if (!o.rs2.is_imm() || o.rs2._imm != 0x100000)
-						throw Reject{ "xor fpscr" };
-					nfschg++;
-					continue;
-				}
-				b.ir.push_back(o);
-			}
-			if (nfschg & 1)
-				throw Reject{ "fschg impar" };
-			for (size_t i = 0; i < b.ir.size(); i++)
-			{
-				if (b.ir[i].op != shop_pref)
-					continue;
-				int addr = b.ir[i].rs1.is_reg() ? b.ir[i].rs1._reg : -1;
-				size_t j = i;
-				RegSet u, d;
-				while (j > 0)
-				{
-					const shil_opcode &p = b.ir[j - 1];
-					uses_defs(p, u, d);
-					if (p.op == shop_writem || p.op == shop_pref || p.op == shop_jcond || (addr >= 0 && d.test(addr)))
-						break;
-					j--;
-				}
-				shil_opcode op = b.ir[i];
-				b.ir.erase(b.ir.begin() + i);
-				b.ir.insert(b.ir.begin() + j, op);
-			}
+			blk[va] = makeBlock(va);
+		}
+		inlineLeaves();
+		std::set<u32> inRegion;
+		for (auto &kv : blk)
+			inRegion.insert(kv.first);
+		for (auto &kv : blk)
+		{
+			BlockIn &b = kv.second;
+			b.succ.clear();
 			if (b.cond)
 			{
 				if (inRegion.count(b.branch)) b.succ.push_back(b.branch);
@@ -321,7 +500,6 @@ public:
 			}
 			else if (!b.dyn && inRegion.count(b.branch))
 				b.succ.push_back(b.branch);
-			blk[va] = b;
 		}
 		std::map<u32, std::set<u32>> preds;
 		for (auto &kv : blk)
@@ -477,13 +655,16 @@ public:
 				throw Reject{ "xf fora do ftrv" };
 		allocate();
 		liveness();
+		prefBase.clear();
+		for (u32 v : order)
+			for (const shil_opcode &o : blk[v].ir)
+				if (o.op == shop_pref && o.rs1.is_reg())
+					prefBase.insert(o.rs1._reg);
 		for (u32 v : order)
 		{
-			rbiOf[v] = blk[v].rbi;
+			if (!realOf.count(v))
+				rbiOf[v] = blk[v].rbi;
 			groupsPre[v] = storeGroups(blk[v]);
-			for (const Group &g : groupsPre[v])
-				if (g.span > 64)
-					throw Reject{ "grupo de store maior que a SQ" };
 		}
 	}
 
@@ -497,7 +678,7 @@ public:
 			homeCallee[i] = false;
 		}
 		static const int calleeGpr[] = { 19, 20, 21, 22, 23, 24, 25, 26 };
-		static const int callerGpr[] = { 9, 10, 11, 12 };
+		static const int callerGpr[] = { 9, 10, 11, 12, 4, 5, 8 };	// x3 = alvo do jdyn, x6/x7 = grupos
 		static const int calleeFp[] = { 8, 9, 10, 11, 12, 13, 14, 15 };
 		int ng = 0, nr = 0, nf = 0, nrf = 0;
 		std::vector<int> restFp;
@@ -515,15 +696,20 @@ public:
 				continue;
 			if (is_fp(r))
 				continue;
-			if (W.test(r))
+			if (W.test(r) && ng < 8)
 			{
-				if (ng >= 8) throw Reject{ "GPR escritos demais" };
 				home[r] = calleeGpr[ng++];
 				homeCallee[r] = true;
 			}
+			else if (W.test(r))
+			{
+				// alem dos 8 callee-saved: caller-saved, com spill em chamada
+				if (nr >= 7) throw Reject{ "GPR escritos demais" };
+				home[r] = callerGpr[nr++];
+			}
 			else
 			{
-				if (nr >= 4) throw Reject{ "GPR so lidos demais" };
+				if (nr >= 7) throw Reject{ "GPR so lidos demais" };
 				home[r] = callerGpr[nr++];
 			}
 		}
@@ -707,20 +893,21 @@ public:
 				Mov(w1, tconst);
 				Str(w1, Ctx(reg_sr_T));
 			}
-			auto ec = entryCode.find(pc);
+			u32 rpc = realOf.count(pc) ? realOf[pc] : pc;
+			auto ec = entryCode.find(rpc);
 			if (ec != entryCode.end())
 			{
 				// bloco da regiao que tambem e entrada: o gancho mandaria de
 				// volta para ca; vai direto para o bloco antigo depois dele
 				u32 *code = ec->second;
-				Subs(w27, w27, (entryOrig[pc] >> 10) & 0xFFF);
+				Subs(w27, w27, (entryOrig[rpc] >> 10) & 0xFFF);
 				BranchAbs(CC_RW2RX((void *)(code + 1)));
 				return;
 			}
-			if (pc == 0xFFFFFFFF)
+			if (rpc == 0xFFFFFFFF)
 				Ldr(w29, Ctx(reg_pc_dyn));
 			else
-				Mov(w29, pc);
+				Mov(w29, rpc);
 			Str(w29, Ctx(reg_nextpc));
 			BranchAbs(t2_no_update);
 		});
@@ -742,22 +929,47 @@ public:
 			else if (is_fp(o.rd._reg))
 				Ldr(S_(o.rd._reg), MemOperand(x13, a, UXTW));
 			else
-				Ldr(W_(o.rd._reg), MemOperand(x13, a, UXTW));
+			{
+				u32 size = o.flags & 0x7f;
+				bool zx = (o.flags2 & 1) != 0;
+				MemOperand mo(x13, a, UXTW);
+				if (size == 1) { if (zx) Ldrb(W_(o.rd._reg), mo); else Ldrsb(W_(o.rd._reg), mo); }
+				else if (size == 2) { if (zx) Ldrh(W_(o.rd._reg), mo); else Ldrsh(W_(o.rd._reg), mo); }
+				else Ldr(W_(o.rd._reg), mo);
+			}
 			break;
 		}
 		case shop_writem:
 		{
+			u32 size = o.flags & 0x7f;
 			auto it = groupOf.find(&o);
-			if (it == groupOf.end())
-				throw Reject{ "writem fora de grupo" };
-			XRegister ptr = XRegister(it->second.first);
-			s32 rel = it->second.second;
-			if (o.rs2.is_reg() && o.rs2.count() == 2)
-				Stp(S_(o.rs2._reg), S_(o.rs2._reg + 1), MemOperand(ptr, rel));
-			else if (o.rs2.is_reg() && is_fp(o.rs2._reg))
-				Str(S_(o.rs2._reg), MemOperand(ptr, rel));
+			MemOperand mo(x0);
+			if (it != groupOf.end())
+				mo = MemOperand(XRegister(it->second.first), it->second.second);
 			else
-				Str(GprSrc(o.rs2, w1), MemOperand(ptr, rel));
+			{
+				// avulsa: endereco em registrador, acesso por fastmem (fault
+				// fora da RAM e emulado em tier2_fault)
+				Register a = Addr(o);
+				if (size == 8)
+				{
+					Add(x0, x13, Operand(a, UXTW));
+					mo = MemOperand(x0);
+				}
+				else
+					mo = MemOperand(x13, a, UXTW);
+			}
+			if (o.rs2.is_reg() && o.rs2.count() == 2)
+				Stp(S_(o.rs2._reg), S_(o.rs2._reg + 1), mo);
+			else if (o.rs2.is_reg() && is_fp(o.rs2._reg))
+				Str(S_(o.rs2._reg), mo);
+			else
+			{
+				Register d = GprSrc(o.rs2, w1);
+				if (size == 1) Strb(d, mo);
+				else if (size == 2) Strh(d, mo);
+				else Str(d, mo);
+			}
 			break;
 		}
 		case shop_pref:
@@ -922,7 +1134,8 @@ public:
 	}
 
 	// grupos de store de um bloco: mesma base, so somada de constantes
-	struct Group { int reg; s32 lo; u32 span; std::vector<std::pair<const shil_opcode *, s32>> ops; };
+	struct Group { int reg; s32 lo; u32 span; bool sq; std::vector<std::pair<const shil_opcode *, s32>> ops; };
+	std::set<int> prefBase;		// base de pref na regiao: grupo dela vai para a SQ
 	std::map<u32, std::vector<Group>> groupsPre;	// calculados na analise
 	std::vector<Group> storeGroups(const BlockIn &b)
 	{
@@ -932,17 +1145,15 @@ public:
 		int callsBefore = 0;
 		for (const shil_opcode &o : b.ir)
 		{
-			if (o.op == shop_writem)
+			if (o.op == shop_writem && o.rs1.is_reg() && (o.rs3.is_null() || o.rs3.is_imm())
+					&& !(known.count(o.rs1._reg) && !known[o.rs1._reg]))
 			{
-				if (!o.rs1.is_reg() || !o.rs3.is_null())
-					throw Reject{ "writem fora do padrao do grupo" };
 				int x = o.rs1._reg;
-				if (known.count(x) && !known[x])
-					throw Reject{ "writem com base desconhecida" };
-				s32 d = delta.count(x) ? delta[x] : 0;
+				s32 d = (delta.count(x) ? delta[x] : 0) + (o.rs3.is_imm() ? (s32)o.rs3._imm : 0);
 				u32 size = o.flags & 0x7f;
 				Group &g = found[x];
 				g.reg = x;
+				g.sq = prefBase.count(x) != 0;
 				g.ops.push_back({ &o, d });
 				if (g.ops.size() == 1) { g.lo = d; g.span = 0; }
 				s32 lo = std::min(g.lo, d);
@@ -972,9 +1183,16 @@ public:
 		}
 		std::vector<Group> out;
 		for (auto &kv : found)
-			out.push_back(kv.second);
-		if (out.size() > 2)
-			throw Reject{ "mais de 2 grupos de store" };
+		{
+			const Group &g = kv.second;
+			if (g.sq && g.span > 64)
+				throw Reject{ "grupo de store maior que a SQ" };
+			// grupo de 1 store em RAM nao compensa a checagem; espalhado demais idem
+			if (!g.sq && (g.ops.size() < 2 || g.span > 4095))
+				continue;
+			if (out.size() < 2)
+				out.push_back(g);
+		}
 		return out;
 	}
 
@@ -1073,14 +1291,24 @@ public:
 				int ptr = 6 + (int)gi;
 				Add(w1, W_(g.reg), Operand(g.lo));
 				Label *xs = exitStub(v);
-				Lsr(w0, w1, 26);
-				Cmp(w0, 0x38);
-				B(xs, ne);
-				And(w2, w1, 0x3f);
-				Cmp(w2, 64 - g.span);
-				B(xs, hi);
-				Sub(XRegister(ptr), x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, sq_buffer));
-				Add(XRegister(ptr), XRegister(ptr), x2);
+				if (g.sq)
+				{
+					Lsr(w0, w1, 26);
+					Cmp(w0, 0x38);
+					B(xs, ne);
+					And(w2, w1, 0x3f);
+					Cmp(w2, 64 - g.span);
+					B(xs, hi);
+					Sub(XRegister(ptr), x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, sq_buffer));
+					Add(XRegister(ptr), XRegister(ptr), x2);
+				}
+				else
+				{
+					// RAM por fastmem, uma base para o grupo (sem wrap de 32 bits)
+					Cmn(w1, g.span);
+					B(xs, hs);
+					Add(XRegister(ptr), x13, Operand(w1, UXTW));
+				}
 				for (auto &p : g.ops)
 					groupOf[p.first] = { ptr, p.second - g.lo };
 			}
@@ -1336,6 +1564,10 @@ void finish()
 		for (u32 e : c->entries)
 			if (c->entryCode[e][0] != c->entryOrig[e])
 				stale = true;
+	if (!stale && j->ok)
+		for (auto &kv : c->calleeRbi)
+			if (bm_GetBlock(kv.first).get() != kv.second)
+				stale = true;
 	if (stale || !j->ok)
 	{
 		if (!j->ok)
@@ -1362,14 +1594,17 @@ void finish()
 		vmem_platform_flush_cache(CC_RW2RX((void *)code), CC_RW2RX((void *)(code + 1)), code, code + 1);
 	}
 	reg.blocks = j->blocks;
+	for (auto &kv : c->calleeRbi)		// descartar a folha tambem desfaz a regiao
+		if (std::find(reg.blocks.begin(), reg.blocks.end(), kv.first) == reg.blocks.end())
+			reg.blocks.push_back(kv.first);
 	reg.alive = true;
 	reg.entries = (u32 *)(t2_ptr + c->cntEntries.GetLocation());
 	reg.passes = (u32 *)(t2_ptr + c->cntPasses.GetLocation());
 	reg.id = ++installed;
 	for (u32 va : j->blocks)
 		inRegion.insert(va);
-	fprintf(stderr, "tier2: regiao #%u: %zu blocos, %u bytes, %zu entradas, emitida em %.2f ms na thread, guardas:",
-			reg.id, j->blocks.size(), size, c->entries.size(), j->ms);
+	fprintf(stderr, "tier2: regiao #%u: %zu blocos, %u chamadas embutidas, %u bytes, %zu entradas, emitida em %.2f ms na thread, guardas:",
+			reg.id, j->blocks.size(), c->inlined, size, c->entries.size(), j->ms);
 	for (u32 l : c->latch)
 		fprintf(stderr, " volta@%08X=%u", l, c->guard[l]);
 	fprintf(stderr, " | spill em chamada: %u em %u chamadas | blocos:", c->spillCount, c->callCount);
@@ -1491,7 +1726,7 @@ void form_regions()
 	const u32 minHeat = std::max<u32>(3, (u32)(total / 500));
 	for (auto &h : hs)
 	{
-		if (acc >= total * 8 / 10 || h.first < minHeat)
+		if (acc >= total * 9 / 10 || h.first < minHeat)
 			break;
 		acc += h.first;
 		u32 va = h.second;
@@ -1516,6 +1751,10 @@ void form_regions()
 	for (u32 v : hot)
 	{
 		RuntimeBlockInfo *b = rb[v];
+		u32 T, R;
+		std::vector<u32> callee;
+		if (call_target(b, &T, &R) && hot.count(R) && leaf_blocks(T, &callee))
+			parent[find(R)] = find(v);		// laco com chamada a folha: uma regiao so
 		u32 t[2] = { b->BranchBlock, b->NextBlock };
 		bool cond = b->BlockType == BET_Cond_0 || b->BlockType == BET_Cond_1;
 		bool stat = b->BlockType == BET_StaticJump || b->BlockType == BET_StaticCall;
@@ -1536,7 +1775,7 @@ void form_regions()
 		u64 hsum = 0;
 		for (u32 v : kv.second)
 			hsum += heat[v];
-		if (hsum * 50 >= total)		// >= 2% das amostras
+		if (hsum * 200 >= total)	// >= 0,5% das amostras
 			cand.push_back({ hsum, kv.second });
 	}
 	std::sort(cand.rbegin(), cand.rend());
@@ -1552,21 +1791,6 @@ void form_regions()
 		{
 			if (blocks.size() > 48)
 				blocks.resize(48);
-			if (!stores_are_sq(blocks))
-			{
-				// tira os blocos com store fora do padrao
-				std::vector<u32> keep;
-				for (u32 va : blocks)
-				{
-					bool st = false;
-					for (const shil_opcode &o : bm_GetBlock(va)->oplist)
-						st |= o.op == shop_writem;
-					if (!st)
-						keep.push_back(va);
-				}
-				blocks = keep;
-				continue;
-			}
 			std::string why;
 			int r = submit(blocks, blocks, heat, &why);
 			if (r == 0 || r == 1)
@@ -1772,7 +1996,41 @@ bool tier2_fault(void *ucv, u32 guest)
 	static int logged;
 	if (logged++ < 8)
 		fprintf(stderr, "tier2: leitura fora da RAM na regiao (pc=%zx endereco=%08X), emulada\n", (size_t)pc, guest);
-	if ((insn & 0xFFE0FC00) == 0xB8604800)		// ldr wt, [xn, wm, uxtw]
+	auto gpr = [uc](u32 r) -> u64 { return r == 31 ? 0 : uc->uc_mcontext.regs[r]; };
+	auto fpr = [fp](u32 r) -> u32 { return fp != nullptr ? (u32)fp->vregs[r] : 0; };
+	// escrita: pagina de codigo protegida pelo caminho do JIT antigo, resto por WriteMem
+	auto wr = [](u32 a, u32 v, int size) {
+		extern void DYNACALL bm_WriteMemCodePage8(u32, u8);
+		extern void DYNACALL bm_WriteMemCodePage16(u32, u16);
+		extern void DYNACALL bm_WriteMemCodePage32(u32, u32);
+		bool ram = ((a >> 26) & 7) == 3;
+		if (size == 1) { if (ram) bm_WriteMemCodePage8(a, v); else WriteMem8(a, v); }
+		else if (size == 2) { if (ram) bm_WriteMemCodePage16(a, v); else WriteMem16(a, v); }
+		else { if (ram) bm_WriteMemCodePage32(a, v); else WriteMem32(a, v); }
+	};
+	const u32 rgm = insn & 0xFFE0FC00, imm = insn & 0xFFC00000;
+	if (rgm == 0xB8204800 || imm == 0xB9000000)		// str wt, [..]
+		wr(guest, (u32)gpr(t), 4);
+	else if (rgm == 0x78204800 || imm == 0x79000000)	// strh
+		wr(guest, (u32)gpr(t), 2);
+	else if (rgm == 0x38204800 || imm == 0x39000000)	// strb
+		wr(guest, (u32)gpr(t), 1);
+	else if ((rgm == 0xBC204800 || imm == 0xBD000000) && fp != nullptr)	// str st, [..]
+		wr(guest, fpr(t), 4);
+	else if (imm == 0x2D000000 && fp != nullptr)		// stp st, st2, [xn, #imm]
+	{
+		wr(guest, fpr(t), 4);
+		wr(guest + 4, fpr((insn >> 10) & 31), 4);
+	}
+	else if (rgm == 0x38604800)			// ldrb
+		uc->uc_mcontext.regs[t] = (u8)ReadMem8(guest);
+	else if (rgm == 0x38E04800)			// ldrsb w
+		uc->uc_mcontext.regs[t] = (u32)(int32_t)(int8_t)ReadMem8(guest);
+	else if (rgm == 0x78604800)			// ldrh
+		uc->uc_mcontext.regs[t] = (u16)ReadMem16(guest);
+	else if (rgm == 0x78E04800)			// ldrsh w
+		uc->uc_mcontext.regs[t] = (u32)(int32_t)(int16_t)ReadMem16(guest);
+	else if (rgm == 0xB8604800)			// ldr wt, [xn, wm, uxtw]
 		uc->uc_mcontext.regs[t] = ReadMem32(guest);
 	else if ((insn & 0xFFE0FC00) == 0xBC604800 && fp != nullptr)	// ldr st, [xn, wm, uxtw]
 		fp->vregs[t] = ReadMem32(guest);
