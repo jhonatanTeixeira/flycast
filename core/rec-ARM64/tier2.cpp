@@ -84,7 +84,8 @@ struct Region
 	std::vector<u32> blocks;
 	std::vector<Patch> patches;
 	bool alive = false;
-	u32 *entries = nullptr, *passes = nullptr;	// contadores no codigo da regiao
+	u32 *entries = nullptr, *passes = nullptr;	// contadores no codigo da regiao (passes = blocos)
+	std::vector<u32 *> bumps;
 	bool checked = false;
 	u32 id = 0;
 };
@@ -312,8 +313,10 @@ public:
 	bool groupsLive = false;
 	u32 spillCount = 0, callCount = 0;
 	Label cntEntries, cntPasses;	// contadores da regiao (fim do codigo, linha propria)
+	std::vector<u32> bumpSites;	// offsets das contagens (viram salto por cima depois da checagem)
 	void bump(Label *l)
 	{
+		bumpSites.push_back((u32)GetBuffer()->GetCursorOffset());
 		Adr(x16, l);
 		Ldr(w17, MemOperand(x16));
 		Add(w17, w17, 1);
@@ -1280,8 +1283,8 @@ public:
 			{
 				Cmp(w27, guard[v]);
 				B(exitStub(v), lt);
-				bump(&cntPasses);
 			}
+			bump(&cntPasses);		// blocos executados (calibracao)
 			groupOf.clear();
 			const std::vector<Group> &groups = groupsPre[v];
 			groupsLive = !groups.empty();
@@ -1500,10 +1503,10 @@ int submit(const std::vector<u32> &entryList, const std::vector<u32> &blockList,
 	try
 	{
 		c->load(blockList, entryList);
-		// sem laco a regiao nao paga a entrada (carga de tudo) e a saida
-		// pelo despachante no lugar do salto ligado do JIT antigo
-		if (autoMode && c->latch.empty())
-			throw Reject{ "sem laco" };
+		// trecho sem laco vale se tiver ao menos 2 blocos ou chamada embutida;
+		// a calibracao (blocos por entrada) desfaz o que nao se paga
+		if (autoMode && blockList.size() < 2 && c->inlined == 0)
+			throw Reject{ "trecho de 1 bloco" };
 	}
 	catch (const Reject &r)
 	{
@@ -1600,6 +1603,8 @@ void finish()
 	reg.alive = true;
 	reg.entries = (u32 *)(t2_ptr + c->cntEntries.GetLocation());
 	reg.passes = (u32 *)(t2_ptr + c->cntPasses.GetLocation());
+	for (u32 off : c->bumpSites)
+		reg.bumps.push_back((u32 *)(t2_ptr + off));
 	reg.id = ++installed;
 	for (u32 va : j->blocks)
 		inRegion.insert(va);
@@ -1629,17 +1634,24 @@ void check_regions()
 		if (en < 4000)
 			continue;
 		r.checked = true;
-		// < 1,5: o caminho quente sai da regiao quase toda volta (Zombie 0,14;
-		// Shenmue 1 0,97). O laco do DOA2 (strips curtas) fica em ~2,5 e ganha.
-		if (2 * pa < 3 * en)
+		// blocos executados por entrada: < 2,5 = a regiao paga carga e descarga
+		// de tudo para rodar 1-2 blocos (Zombie: caminho quente saindo dela)
+		double bpe = (double)pa / en;
+		if (bpe < 2.5)
 		{
 			unhook(r);
 			for (u32 va : r.blocks)
 				badBlocks.insert(va);
-			fprintf(stderr, "tier2: regiao #%u removida: %.2f voltas por entrada (%u entradas)\n", r.id, (double)pa / en, en);
+			fprintf(stderr, "tier2: regiao #%u removida: %.2f blocos por entrada (%u entradas)\n", r.id, bpe, en);
 		}
 		else
-			fprintf(stderr, "tier2: regiao #%u ok: %.1f voltas por entrada\n", r.id, (double)pa / en);
+			fprintf(stderr, "tier2: regiao #%u ok: %.1f blocos por entrada\n", r.id, bpe);
+		// contagens viram salto por cima (4 instrucoes -> 1)
+		for (u32 *site : r.bumps)
+		{
+			site[0] = 0x14000004;		// b +16
+			vmem_platform_flush_cache(CC_RW2RX((void *)site), CC_RW2RX((void *)(site + 1)), site, site + 1);
+		}
 	}
 }
 
@@ -1657,6 +1669,8 @@ u32 windowSamples;
 uintptr_t lastLo, lastHi;	// cache do ultimo bloco amostrado (zerado em descarte/reset)
 u32 lastVa;
 u32 rejected, lastRejected;
+std::vector<std::vector<u32>> pendingCand;	// candidatos da ultima formacao
+void next_candidate();
 
 std::set<u32> slowMem;		// blocos com acesso reescrito para trampolim pelo JIT antigo
 
@@ -1779,14 +1793,36 @@ void form_regions()
 			cand.push_back({ hsum, kv.second });
 	}
 	std::sort(cand.rbegin(), cand.rend());
-	static const u32 maxReg = getenv("FC_TIER2_MAXREG") ? atoi(getenv("FC_TIER2_MAXREG")) : 1000;
+	pendingCand.clear();
 	for (auto &c : cand)
+		pendingCand.push_back(c.second);
+	next_candidate();
+	// janela seguinte: calor decai pela metade
+	for (auto it = heat.begin(); it != heat.end();)
 	{
-		if (installed >= maxReg || inFlight)
-			break;		// um trabalho na thread por vez
-		std::vector<u32> blocks = c.second;
+		it->second >>= 1;
+		if (it->second == 0)
+			it = heat.erase(it);
+		else
+			++it;
+	}
+	windowSamples = 0;
+}
+
+// proximo candidato da ultima formacao para a thread (um trabalho por vez)
+void next_candidate()
+{
+	static const u32 maxReg = getenv("FC_TIER2_MAXREG") ? atoi(getenv("FC_TIER2_MAXREG")) : 1000;
+	while (!pendingCand.empty() && !inFlight && installed < maxReg)
+	{
+		std::vector<u32> orig = pendingCand.front();
+		pendingCand.erase(pendingCand.begin());
+		std::vector<u32> blocks;
+		for (u32 va : orig)
+			if (!inRegion.count(va) && !badBlocks.count(va))
+				blocks.push_back(va);
 		std::sort(blocks.begin(), blocks.end(), [](u32 a, u32 b) { return heat[a] > heat[b]; });
-		bool done = false;
+		bool done = blocks.empty();
 		for (int attempt = 0; attempt < 8 && !blocks.empty(); attempt++)
 		{
 			if (blocks.size() > 48)
@@ -1800,7 +1836,7 @@ void form_regions()
 			}
 			if (attempt == 0)
 				fprintf(stderr, "tier2: grupo de %zu blocos (cabeca %08X) recusado: %s\n", blocks.size(), blocks[0], why.c_str());
-			if (why == "sem laco")
+			if (why == "trecho de 1 bloco")
 				break;
 			if (why.find("writem") != std::string::npos)
 			{
@@ -1821,7 +1857,7 @@ void form_regions()
 		if (!done)
 		{
 			// recusa definitiva: fora das proximas janelas
-			for (u32 va : c.second)
+			for (u32 va : orig)
 				badBlocks.insert(va);
 			rejected++;
 		}
@@ -1831,16 +1867,6 @@ void form_regions()
 		fprintf(stderr, "tier2: %u grupos recusados ate agora (%zu blocos fora)\n", rejected, badBlocks.size());
 		lastRejected = rejected;
 	}
-	// janela seguinte: calor decai pela metade
-	for (auto it = heat.begin(); it != heat.end();)
-	{
-		it->second >>= 1;
-		if (it->second == 0)
-			it = heat.erase(it);
-		else
-			++it;
-	}
-	windowSamples = 0;
 }
 
 void drain_samples()
@@ -1913,7 +1939,11 @@ void tier2_safe_point()
 		if (++pollCount & 63)
 			return;
 		if (inFlight)
+		{
 			finish();
+			if (!inFlight)
+				next_candidate();
+		}
 		sampleBuf[sampleW++ & (SAMPLE_BUF - 1)] = t2_last_pc;
 		if (pollCount & 4095)
 			return;
