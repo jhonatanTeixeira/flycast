@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Gerador offline do nivel 2: regiao de blocos do dump (FC_JIT_DUMP) -> ARM64.
 
-Uso: tier2_gen.py jit-<pid>.txt saida.S ENTRADA VADDR [VADDR...]
+Uso: tier2_gen.py [--emu NOME] [--entries V,V] jit-<pid>.txt saida.S ENTRADA VADDR [VADDR...]
+
+--emu NOME: gera para o core (ganchos do JIT antigo em rec_arm64.cpp): ciclos
+em w27, base da memoria em x13, entradas t2_NOME_E_<vaddr>, saidas pelo
+despachante (t2_no_update), guarda de entrada falhando volta para o bloco
+antigo (t2_resume_<vaddr>), descarga da SQ pelo do_sqw real, stores na SQ
+direto no sq_buffer; tabela t2_NOME_code com o SH4 da regiao para o core
+conferir antes de ligar o gancho.
 
 Le o SHIL de cada bloco da regiao (registros B/G/O do dump) e gera um .S com
 a interface do harness de tools/proto_jit_armv8_a (new_run(ctx, ciclos) ->
@@ -22,8 +29,12 @@ Regras da v1 (tools/proto_jit_armv8_a/README.md, regiao do DOA2):
   pref      sobe no bloco ate depois da ultima escrita/definicao do endereco
             (a descarga da SQ so le a propria SQ)
   layout    sucessor mais executado (contadores C) logo em seguida
-Ainda nao: T fundido em flags, registrador derivado, stores agrupados, blocos
-equivalentes compartilhados.
+  stores   os writem de um bloco pela mesma base (so somada de constantes)
+            viram uma checagem no inicio do bloco e um ponteiro (x16/x17):
+            harness = sem wrap de 32 bits; core = na SQ e sem wrap no buffer
+            de 64 bytes (senao sai para o bloco antigo antes de executar)
+Ainda nao: T fundido em flags, registrador derivado, somas constantes
+dobradas, blocos equivalentes compartilhados.
 """
 import collections
 import re
@@ -121,7 +132,9 @@ def load_region(dump, want):
             p = l.split()
             cur = p[2] if p[2] in want and p[2] not in blocks else None
             if cur:
-                blocks[cur] = {'host': p[1], 'bytes': int(p[4]), 'cycles': int(p[6]), 'ops': []}
+                fl = dict(x.split('=') for x in p[8:] if '=' in x)
+                blocks[cur] = {'host': p[1], 'bytes': int(p[4]), 'cycles': int(p[6]), 'ops': [],
+                               'flags': {k: int(v) for k, v in fl.items()}}
         elif cur and t == 'G':
             blocks[cur]['sh4'] = [int(x, 16) for x in l.split()[1:]]
         elif cur and t == 'O':
@@ -188,10 +201,15 @@ def is_sq_call(o):
 
 # ---------------------------------------------------------------- gerador
 class Gen:
-    def __init__(self, blocks, order, entry):
+    def __init__(self, blocks, order, entry, emu=None, extra_entries=()):
         self.B = blocks
         self.order = order		# vaddrs da regiao
         self.entry = entry
+        self.emu = emu			# nome da regiao no core, ou None (harness)
+        self.extra_entries = [v for v in extra_entries if v != entry]
+        self.CYC = 'w27' if emu else 'w29'
+        self.MB = 'x13' if emu else 'x27'
+        self.caller_gpr = CALLER_GPR[:-1] if emu else CALLER_GPR
         self.out = []
         self.cold = []
         self.lab = 0
@@ -241,7 +259,11 @@ class Gen:
             for s in ss:
                 preds[s].add(va)
         # entradas: a pedida + blocos sem predecessor na regiao
-        self.entries = [self.entry] + [v for v in self.order if v != self.entry and not preds[v]]
+        self.entries = [self.entry] + self.extra_entries + [
+            v for v in self.order if v != self.entry and v not in self.extra_entries and not preds[v]]
+        for va, b in B.items():
+            if b.get('flags', {}).get('idle') or b.get('flags', {}).get('delay'):
+                raise Reject('%s: bloco com avanco de espera/atraso' % va)
         # volta de laco (DFS a partir das entradas): a origem ganha guarda
         self.latch = set()
         color = {}
@@ -262,7 +284,7 @@ class Gen:
         # depois da chamada)
         moved = set()
         for g in sorted(self.latch):
-            while g not in self.entries and len(preds[g]) == 1:
+            while len(preds[g]) == 1:		# entrada tem guarda propria
                 p = next(iter(preds[g]))
                 if self.succ[p] != [g] or p in moved or p == g:
                     break
@@ -318,9 +340,9 @@ class Gen:
             raise Reject('GPR escritos demais: %s' % wg)
         for x, h in zip(wg, CALLEE_GPR):
             home[x] = h
-        if len(rg) > len(CALLER_GPR):
+        if len(rg) > len(self.caller_gpr):
             raise Reject('GPR so lidos demais')
-        for x, h in zip(rg, CALLER_GPR):
+        for x, h in zip(rg, self.caller_gpr):
             home[x] = h
         home['fpul'] = 'w14'
         home['T'] = 'w15'
@@ -445,7 +467,14 @@ class Gen:
         for x in spill:
             self.e('str %s, [x28, #%d]' % (self.R(x), ctx_off(x)))
         self.e('mov w0, %s' % addr_reg)
-        self.e('bl sq_stub')
+        if self.emu:
+            self.e('sub x9, x28, #0x48')		# do_sqw(addr, sq_buffer)
+            self.e('ldr x9, [x9]')
+            self.e('sub x1, x28, #0x40')
+            self.e('blr x9')
+            self.e('add x13, x28, #0x1c0')
+        else:
+            self.e('bl sq_stub')
         for x in spill:
             self.e('ldr %s, [x28, #%d]' % (self.R(x), ctx_off(x)))
         for x in sorted(self.readonly):
@@ -464,24 +493,33 @@ class Gen:
             dv = rd[1]
             a = self.addr(o)
             if len(dv) == 2:
-                self.e('add x0, x27, %s, uxtw' % a)
+                self.e('add x0, %s, %s, uxtw' % (self.MB, a))
                 self.e('ldp %s, %s, [x0]' % (self.R(dv[0]), self.R(dv[1])))
-            elif is_fr(dv[0]):
-                self.e('ldr %s, [x27, %s, uxtw]' % (self.R(dv[0]), a))
             else:
-                self.e('ldr %s, [x27, %s, uxtw]' % (self.R(dv[0]), a))
+                self.e('ldr %s, [%s, %s, uxtw]' % (self.R(dv[0]), self.MB, a))
             return
         if n == 'writem':
-            a = self.addr(o)
             data = src[1]
+            if id(o) in self.group_of:
+                ptr, rel = self.group_of[id(o)]
+                if data[0] == 'reg' and len(data[1]) == 2:
+                    self.e('stp %s, %s, [%s, #%d]' % (self.R(data[1][0]), self.R(data[1][1]), ptr, rel))
+                elif data[0] == 'reg' and is_fr(data[1][0]):
+                    self.e('str %s, [%s, #%d]' % (self.R(data[1][0]), ptr, rel))
+                else:
+                    self.e('str %s, [%s, #%d]' % (self.src_gpr(data, 'w1'), ptr, rel))
+                return
+            if self.emu:
+                raise Reject('writem fora de grupo no modo core: ' + o['text'])
+            a = self.addr(o)
             if data[0] == 'reg' and len(data[1]) == 2:
-                self.e('add x0, x27, %s, uxtw' % a)
+                self.e('add x0, %s, %s, uxtw' % (self.MB, a))
                 self.e('stp %s, %s, [x0]' % (self.R(data[1][0]), self.R(data[1][1])))
             elif data[0] == 'reg' and is_fr(data[1][0]):
-                self.e('str %s, [x27, %s, uxtw]' % (self.R(data[1][0]), a))
+                self.e('str %s, [%s, %s, uxtw]' % (self.R(data[1][0]), self.MB, a))
             else:
                 d = self.src_gpr(data, 'w1')
-                self.e('str %s, [x27, %s, uxtw]' % (d, a))
+                self.e('str %s, [%s, %s, uxtw]' % (d, self.MB, a))
             return
         if n == 'pref':
             a = self.src_gpr(src[0], 'w2')
@@ -494,10 +532,10 @@ class Gen:
                 self.sq_call(a, live_after)
                 self.out.append('%s:' % done)
                 # caminho de RAM fora da linha
-                self.cold += ['%s:' % ram, '\tprfm pldl1keep, [x27, %s, uxtw]' % a, '\tb %s' % done]
+                self.cold += ['%s:' % ram, '\tprfm pldl1keep, [%s, %s, uxtw]' % (self.MB, a), '\tb %s' % done]
             else:
                 self.e('b.eq %s' % sq)
-                self.e('prfm pldl1keep, [x27, %s, uxtw]' % a)
+                self.e('prfm pldl1keep, [%s, %s, uxtw]' % (self.MB, a))
                 self.out.append('%s:' % done)
                 keep = self.out
                 self.out = []
@@ -626,11 +664,60 @@ class Gen:
         else:
             c.append('\tmov w1, #%d' % t_const)
             c.append('\tstr w1, [x28, #%d]' % CTX_T)
-        c.append('\tmov w0, #0x%s' % pc[4:])
-        c.append('\tmovk w0, #0x%s, lsl #16' % pc[:4])
-        c.append('\tb X_ret')
+        if self.emu:
+            c.append('\tmov w29, #0x%s' % pc[4:])
+            c.append('\tmovk w29, #0x%s, lsl #16' % pc[:4])
+            c.append('\tstr w29, [x28, #264]')		# next_pc
+            c.append('\tadrp x0, t2_no_update')
+            c.append('\tldr x0, [x0, :lo12:t2_no_update]')
+            c.append('\tbr x0')
+        else:
+            c.append('\tmov w0, #0x%s' % pc[4:])
+            c.append('\tmovk w0, #0x%s, lsl #16' % pc[:4])
+            c.append('\tb X_ret')
         self.cold += c
         return lab
+
+    def resume_stub(self, v):
+        """guarda de entrada falhou no core: nada mudou, volta ao bloco antigo."""
+        lab = self.label('R')
+        self.cold += ['%s:' % lab, '\tadrp x0, t2_resume_%s' % v,
+                      '\tldr x0, [x0, :lo12:t2_resume_%s]' % v, '\tbr x0']
+        return lab
+
+    # -- grupos de stores de um bloco (mesma base, so somada de constantes)
+    def store_groups(self, v):
+        ir = self.B[v]['ir']
+        delta = {}		# reg -> deslocamento desde a entrada do bloco (None = desconhecido)
+        found = collections.defaultdict(list)
+        calls_before = 0
+        for j, o in enumerate(ir):
+            if o['op'] == 'writem' and o['src'][0][0] == 'reg' and len(o['src']) == 2:
+                x = o['src'][0][1][0]
+                d = delta.get(x, 0)
+                data = o['src'][1]
+                size = 8 if data[0] == 'reg' and len(data[1]) == 2 else 4
+                if d is not None and calls_before == 0:
+                    found[x].append((o, d, size))
+            if o['op'] == 'pref':
+                calls_before += 1
+            _, defs = uses_defs(o)
+            for x in defs:
+                if (o['op'] in ('add', 'sub') and o['src'][0] == ('reg', [x]) and o['src'][1][0] == 'imm'
+                        and delta.get(x, 0) is not None):
+                    k = o['src'][1][1]
+                    k = k - (1 << 32) if k >= 0x80000000 else k
+                    delta[x] = delta.get(x, 0) + (k if o['op'] == 'add' else -k)
+                else:
+                    delta[x] = None
+        groups = []
+        for x, lst in found.items():
+            lo = min(d for _, d, _ in lst)
+            hi = max(d + sz for _, d, sz in lst)
+            groups.append((x, lo, hi - lo, lst))
+        if len(groups) > 2:
+            raise Reject('%s: mais de 2 grupos de store' % v)
+        return groups
 
     # -- layout: sucessor mais executado em seguida
     def layout(self):
@@ -657,31 +744,62 @@ class Gen:
         lay = self.layout()
         W = self.W
         o = self.out
-        o += ['\t.text', '\t.align 4', '\t.global new_run', '\t.global sq_stub', '\t.global g_membase',
-              '\t.global g_sink', '\t.global g_cycles', 'new_run:',
-              '\tstp x29, x30, [sp, #-160]!', '\tstp x19, x20, [sp, #16]', '\tstp x21, x22, [sp, #32]',
-              '\tstp x23, x24, [sp, #48]', '\tstp x25, x26, [sp, #64]', '\tstp x27, x28, [sp, #80]',
-              '\tstp d8, d9, [sp, #96]', '\tstp d10, d11, [sp, #112]', '\tstp d12, d13, [sp, #128]',
-              '\tstp d14, d15, [sp, #144]', '\tmov x28, x0', '\tmov w29, w1', '\tadd x27, x28, #0x1c0',
-              '\tb E_%s' % self.entry]
+        if self.emu:
+            o += ['\t.text', '\t.align 4']
+        else:
+            o += ['\t.text', '\t.align 4', '\t.global new_run', '\t.global sq_stub', '\t.global g_membase',
+                  '\t.global g_sink', '\t.global g_cycles', 'new_run:',
+                  '\tstp x29, x30, [sp, #-160]!', '\tstp x19, x20, [sp, #16]', '\tstp x21, x22, [sp, #32]',
+                  '\tstp x23, x24, [sp, #48]', '\tstp x25, x26, [sp, #64]', '\tstp x27, x28, [sp, #80]',
+                  '\tstp d8, d9, [sp, #96]', '\tstp d10, d11, [sp, #112]', '\tstp d12, d13, [sp, #128]',
+                  '\tstp d14, d15, [sp, #144]', '\tmov x28, x0', '\tmov w29, w1', '\tadd x27, x28, #0x1c0',
+                  '\tb E_%s' % self.entry]
         # entradas: carregam tudo que a regiao usa (inclusive o que ela escreve)
         for en in self.entries:
+            if self.emu:
+                sym = 't2_%s_E_%s' % (self.emu, en)
+                o += ['\t.global %s' % sym, '\t.hidden %s' % sym, '%s:' % sym]
             o.append('E_%s:' % en)
+            if self.emu:
+                self.e('add x13, x28, #0x1c0')
             for x in sorted(self.U | self.W):
                 self.e('ldr %s, [x28, #%d]' % (self.R(x), ctx_off(x)))
             if self.vec_xf:
                 self.e('ld1 {v4.4s, v5.4s, v6.4s, v7.4s}, [x28]')
-            self.e('cmp w29, #%d' % self.guard[en])
-            self.e('b.lt %s' % self.exit_stub(en))
+            self.e('cmp %s, #%d' % (self.CYC, self.guard[en]))
+            self.e('b.lt %s' % (self.resume_stub(en) if self.emu else self.exit_stub(en)))
             self.e('b B_%s' % en)
         stats = {'guardas': dict(self.guard), 'entradas': self.entries, 'lacos': sorted(self.latch)}
         for i, v in enumerate(lay):
             b = self.B[v]
             o.append('B_%s:' % v)
             if v in self.latch:
-                self.e('cmp w29, #%d' % self.guard[v])
+                self.e('cmp %s, #%d' % (self.CYC, self.guard[v]))
                 self.e('b.lt %s' % self.exit_stub(v))
-            self.e('sub w29, w29, #%d' % b['cycles'])
+            # grupos de store: checagem no inicio (sair aqui ainda e exato)
+            self.group_of = {}
+            for gi, (x, lo, span, lst) in enumerate(self.store_groups(v)):
+                ptr = 'x%d' % (16 + gi)
+                self.addimm('w1', self.R(x), lo & 0xFFFFFFFF)
+                if self.emu:
+                    if span > 64:
+                        raise Reject('%s: grupo de store maior que a SQ' % v)
+                    xs = self.exit_stub(v)
+                    self.e('lsr w0, w1, #26')
+                    self.e('cmp w0, #0x38')
+                    self.e('b.ne %s' % xs)
+                    self.e('and w2, w1, #0x3f')
+                    self.e('cmp w2, #%d' % (64 - span))
+                    self.e('b.hi %s' % xs)
+                    self.e('sub %s, x28, #0x40' % ptr)		# sq_buffer
+                    self.e('add %s, %s, x2' % (ptr, ptr))
+                else:
+                    self.e('cmn w1, #%d' % span)
+                    self.e('b.hs %s' % self.exit_stub(v))
+                    self.e('add %s, %s, w1, uxtw' % (ptr, self.MB))
+                for (op_, d, sz) in lst:
+                    self.group_of[id(op_)] = (ptr, d - lo)
+            self.e('sub %s, %s, #%d' % (self.CYC, self.CYC, b['cycles']))
             # liveness dentro do bloco (para as chamadas)
             ir = b['ir']
             live = self.live_out(v, self.live_in)
@@ -727,6 +845,18 @@ class Gen:
                     self.e('b %s' % lo)
         o += ['\t.p2align 4', 'region_hot_end:']
         o += self.cold
+        if self.emu:
+            name = self.emu
+            o += ['\t.global t2_%s_end' % name, '\t.hidden t2_%s_end' % name, 't2_%s_end:' % name]
+            o += ['\t.section .rodata', '\t.align 2', '\t.global t2_%s_code' % name, '\t.hidden t2_%s_code' % name,
+                  't2_%s_code:' % name, '\t.word %d' % len(self.order)]
+            for va in self.order:
+                ops = self.B[va]['sh4']
+                o.append('\t.word 0x%s, %d' % (va, len(ops)))
+                o.append('\t.hword ' + ', '.join('0x%04x' % x for x in ops))
+                if len(ops) % 2:
+                    o.append('\t.hword 0')
+            return stats
         o += ['X_ret:', '\tadrp x9, g_cycles', '\tstr w29, [x9, :lo12:g_cycles]',
               '\tldp d14, d15, [sp, #144]', '\tldp d12, d13, [sp, #128]', '\tldp d10, d11, [sp, #112]',
               '\tldp d8, d9, [sp, #96]', '\tldp x27, x28, [sp, #80]', '\tldp x25, x26, [sp, #64]',
@@ -740,13 +870,24 @@ class Gen:
 
 
 def main():
-    dump, outp, entry = sys.argv[1], sys.argv[2], sys.argv[3].upper()
-    want = [v.upper() for v in sys.argv[4:]]
+    args = sys.argv[1:]
+    emu, extra = None, []
+    while args and args[0].startswith('--'):
+        if args[0] == '--emu':
+            emu = args[1]
+            args = args[2:]
+        elif args[0] == '--entries':
+            extra = [v.upper() for v in args[1].split(',')]
+            args = args[2:]
+        else:
+            raise SystemExit('opcao desconhecida: ' + args[0])
+    dump, outp, entry = args[0], args[1], args[2].upper()
+    want = [v.upper() for v in args[3:]]
     if entry not in want:
         want.insert(0, entry)
     try:
         blocks = load_region(dump, want)
-        g = Gen(blocks, want, entry)
+        g = Gen(blocks, want, entry, emu, extra)
         st = g.gen()
     except Reject as ex:
         print('REGIAO RECUSADA:', ex)
@@ -755,6 +896,10 @@ def main():
     lines = g.out
     i = lines.index('E_%s:' % entry)
     lines.insert(i, 'region_begin:')
+    if emu:
+        lines[2:2] = ['\t.global t2_%s_begin' % emu, '\t.hidden t2_%s_begin' % emu, 't2_%s_begin:' % emu]
+        lines.insert(0, '// GERADO por tools/tier2_gen.py --emu %s (nao editar a mao): regiao do nivel 2' % emu)
+        lines.insert(1, '// %s' % ' '.join(sys.argv[1:]))
     open(outp, 'w').write('\n'.join(lines) + '\n')
     print('regiao: %d blocos, entradas %s, lacos (guarda na origem) %s' % (len(want), st['entradas'], st['lacos']))
     print('guardas (ciclos):', ' '.join('%s=%d' % kv for kv in sorted(st['guardas'].items())))

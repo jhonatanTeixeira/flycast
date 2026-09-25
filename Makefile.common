@@ -421,6 +421,7 @@ endif
 ifneq ($(filter $(WITH_DYNAREC), arm64 aarch64),)
 	DYNAREC_USED = 1
 	SOURCES_ASM += $(CORE_DIR)/core/rec-ARM64/ngen_arm64.S
+	SOURCES_ASM += $(CORE_DIR)/core/rec-ARM64/tier2_doa2.S
 	SOURCES_CXX += $(CORE_DIR)/core/rec-ARM64/rec_arm64.cpp \
 					$(CORE_DIR)/core/rec-ARM64/jit_armv8_a.cpp \
 					$(DEPS_DIR)/vixl/code-buffer-vixl.cc \

@@ -6,7 +6,18 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
-## Agora (2026-09-24): nível 2 com otimização de região (estilo LTO) — projeto
+## Agora (2026-09-24): nível 2 — experimento no emulador feito (DOA2)
+
+**done** — região do DOA2 gerada offline (`tools/tier2_gen.py --emu`) e
+injetada no JIT antigo (`FC_TIER2=1`): jogo IDÊNTICO, velocidade do jogo 86 →
+95%, fps apresentado −7% (render-bound, 4.57). **Próximos:** (1) entender a
+queda de fps apresentado (fila de render/autoskip com emulação mais rápida,
+4.29); (2) regras restantes do gerador (T em flags, somas dobradas, r7
+derivado, reload sob demanda); (3) portar o gerador para C++/VIXL em segunda
+thread, com formação de região pelo perfil em tempo de execução e fault
+seguro dentro da região.
+
+## 2026-09-24: nível 2 com otimização de região (estilo LTO) — projeto
 
 **pendente (projeto, sem código ainda)** — o `jit_armv8_a` como backend por
 bloco ficou parado abaixo do JIT antigo (Shenmue II 47,8% × 60,5%, DOA2 71,7% ×

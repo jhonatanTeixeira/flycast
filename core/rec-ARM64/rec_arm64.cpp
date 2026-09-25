@@ -324,6 +324,76 @@ void jit_dump_flush()
 #undef do_sqw_nommu
 
 extern "C" void ngen_blockcheckfail(u32 pc);
+
+// FC_TIER2=1 (experimento do nivel 2, docs/current_plan.md): a regiao do laco
+// de vertices do DOA2, gerada offline por tools/tier2_gen.py --emu doa2
+// (tier2_doa2.S), entra no lugar dos blocos 8C101BC2/8C101BC4 do JIT antigo.
+// O bloco antigo comeca com um `b` para a entrada da regiao; guarda de ciclos
+// falhando na entrada volta para o resto do bloco antigo (t2_resume_*); as
+// saidas da regiao vao para o despachante com o estado no contexto.
+extern "C" {
+__attribute__((visibility("hidden"))) void *t2_no_update;
+__attribute__((visibility("hidden"))) void *t2_resume_8C101BC2;
+__attribute__((visibility("hidden"))) void *t2_resume_8C101BC4;
+__attribute__((visibility("hidden"))) extern char t2_doa2_E_8C101BC2[], t2_doa2_E_8C101BC4[];
+__attribute__((visibility("hidden"))) extern char t2_doa2_begin[], t2_doa2_end[];
+__attribute__((visibility("hidden"))) extern const u32 t2_doa2_code[];
+}
+static bool tier2_enabled()
+{
+	static int e = -1;
+	if (e < 0)
+		e = getenv("FC_TIER2") != nullptr && atoi(getenv("FC_TIER2")) != 0;
+	return e == 1 && !mmu_enabled();
+}
+// o SH4 dos blocos da regiao na RAM tem que ser o mesmo da geracao
+static bool tier2_code_matches(const u32 *tab)
+{
+	const u32 n = tab[0];
+	const u8 *p = (const u8 *)(tab + 1);
+	for (u32 i = 0; i < n; i++)
+	{
+		const u32 va = ((const u32 *)p)[0], cnt = ((const u32 *)p)[1];
+		const u8 *mem = GetMemPtr(va, cnt * 2);
+		if (mem == nullptr || memcmp(mem, p + 8, cnt * 2) != 0)
+			return false;
+		p += 8 + ((cnt * 2 + 3) & ~3u);
+	}
+	return true;
+}
+// entrada da regiao para este bloco, ou nullptr; *resume recebe onde a guarda
+// de entrada falhando retoma (o codigo do bloco antigo depois do `b`)
+static void *tier2_entry_for(RuntimeBlockInfo *block, bool force_checks, void ***resume)
+{
+	if (!tier2_enabled() || force_checks)
+		return nullptr;
+	void *entry;
+	if (block->vaddr == 0x8C101BC2)
+	{
+		entry = t2_doa2_E_8C101BC2;
+		*resume = &t2_resume_8C101BC2;
+	}
+	else if (block->vaddr == 0x8C101BC4)
+	{
+		entry = t2_doa2_E_8C101BC4;
+		*resume = &t2_resume_8C101BC4;
+	}
+	else
+		return nullptr;
+	if (!tier2_code_matches(t2_doa2_code))
+	{
+		static bool logged;
+		if (!logged)
+			INFO_LOG(DYNAREC, "FC_TIER2: SH4 da regiao doa2 difere da RAM, gancho desligado");
+		logged = true;
+		return nullptr;
+	}
+	static bool logged;
+	if (!logged)
+		fprintf(stderr, "FC_TIER2: regiao doa2 ligada (bloco %08X)\n", block->vaddr);
+	logged = true;
+	return entry;
+}
 extern "C" void ngen_LinkBlock_Generic_stub();
 extern "C" void ngen_LinkBlock_cond_Branch_stub();
 extern "C" void ngen_LinkBlock_cond_Next_stub();
@@ -802,6 +872,15 @@ public:
 		this->block = block;
 		memBaseValid = false;
 		CheckBlock(force_checks, block);
+
+		{
+			void **resume = nullptr;
+			if (void *t2 = tier2_entry_for(block, force_checks, &resume))
+			{
+				GenBranchAbs(t2, false);
+				*resume = CC_RW2RX(GetCursorAddress<void *>());
+			}
+		}
 
 		// run register allocator
 		regalloc.DoAlloc(block);
@@ -2213,6 +2292,7 @@ public:
 		emit_Skip(GetBuffer()->GetSizeInBytes());
 
 		arm64_no_update = GetLabelAddress<void (*)()>(&no_update);
+		t2_no_update = (void *)arm64_no_update;
 
 		// Flush and invalidate caches
 		vmem_platform_flush_cache(
@@ -3590,6 +3670,13 @@ static void *CompactSlowTarget(bool is_read, u32 size)
 
 bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 {
+	// regiao do nivel 2: codigo no .so (sem reescrita) e registradores vivos
+	// que o trampolim nao conhece; o experimento assume RAM/SQ
+	if (host_pc >= (unat)t2_doa2_begin && host_pc < (unat)t2_doa2_end)
+	{
+		ERROR_LOG(DYNAREC, "FC_TIER2: fault na regiao doa2 pc=%zx endereco=%08X", (size_t)host_pc, (u32)acc);
+		return false;
+	}
 	// W host_pc endereco_do_guest: este acesso caiu fora da RAM (regiao)
 	jit_dump_line("W %zx %08X\n", (size_t)host_pc, (u32)acc);
 	{

@@ -2530,3 +2530,12 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   spill de 9 valores por vértice) → sobe para o predecessor; reload de floats
   callee-saved; layout começando pelo bloco frio (4.56).
 
+### 2026-09-24 — nível 2 no emulador: região do DOA2 injetada (FC_TIER2)
+
+- Gerador com modo `--emu` e stores agrupados; região do DOA2 gerada em
+  `core/rec-ARM64/tier2_doa2.S` e ligada por gancho no `ngen_Compile` do JIT
+  antigo (`FC_TIER2=1`), com conferência do SH4 na RAM.
+- DOA2 no jogo inteiro: IDÊNTICO ao JIT antigo (`state_compare`). Velocidade
+  do jogo 86 → 95%, underruns pela metade; fps apresentado 33,8 → 31,8 (render
+  vira o gargalo, família do 4.29). Detalhe em 4.57.
+
