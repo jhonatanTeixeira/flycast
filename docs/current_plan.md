@@ -22,8 +22,9 @@ Etapas, cada uma validada com `state_compare` antes da próxima:
 1. ~~gerador em C++ direto das ops do JIT antigo, região escolhida por
    variável de ambiente e instalada na emu thread~~ **done** (4.58: IDÊNTICO,
    mesma velocidade do `tier2_doa2.S`);
-2. perfil por amostragem (timer no pc da emu thread, ~1 kHz) + formação
-   automática de região num ponto seguro;
+2. ~~perfil por amostragem + formação automática de região num ponto
+   seguro~~ **done** (4.59: amostra no fim da fatia; DOA2 87 → 93%, Shenmue
+   II sem ganho por spill em volta da SQ → adiar a descarga da SQ);
 3. compilação na segunda thread (cópia das ops → fila fire-and-forget →
    instalação no ponto seguro);
 4. cobertura: fault seguro dentro da região, stores em RAM.

@@ -2548,3 +2548,11 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   inteiro; velocidade igual à versão offline (94-98% contra 87% do JIT
   antigo). Detalhe em 4.58.
 
+### 2026-09-24 — nível 2 automático (etapa 2)
+
+- Perfil barato (amostra no fim da fatia de ciclos) e formação automática de
+  região (`FC_TIER2_AUTO=1`). DOA2: acha o laço sozinho, IDÊNTICO, 87 → 93%.
+  Shenmue II: acha o laço, IDÊNTICO, sem ganho mensurável — ~11 spills por
+  chamada da SQ. Duas tentativas de perfil caras descartadas pela medição
+  (sinal de 1 kHz, amostrar toda fatia). Detalhe em 4.59.
+

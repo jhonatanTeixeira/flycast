@@ -196,6 +196,8 @@ public:
 	// estado por bloco
 	std::map<const shil_opcode *, std::pair<int, s32>> groupOf;	// op -> (ptr x6/x7, deslocamento)
 	bool tAfterJcond = false;
+	bool groupsLive = false;
+	u32 spillCount = 0, callCount = 0;
 	Register decision = w15;
 
 	~Tier2Compiler() { for (Label *l : owned) delete l; }
@@ -325,8 +327,23 @@ public:
 			ok.push_back(e);
 		}
 		entries = ok;
-		// voltas de laco (DFS a partir das entradas)
+		// Guardas de volta: primeiro no inicio dos blocos que chamam a SQ
+		// (pref na base de um writem da regiao): falhar ali nao exige nada
+		// vivo atravessando a chamada. Depois, os ciclos que sobrarem.
+		std::set<int> storeBase;
+		for (u32 v : order)
+			for (const shil_opcode &o : blk[v].ir)
+				if (o.op == shop_writem && o.rs1.is_reg())
+					storeBase.insert(o.rs1._reg);
+		std::set<u32> sqGuard;
+		for (u32 v : order)
+			for (const shil_opcode &o : blk[v].ir)
+				if (o.op == shop_pref && o.rs1.is_reg() && storeBase.count(o.rs1._reg))
+					sqGuard.insert(v);
+		// voltas de laco (DFS a partir das entradas), sem passar pelas guardas da SQ
 		std::map<u32, int> color;
+		for (u32 v : sqGuard)
+			color[v] = 2;
 		std::function<void(u32)> dfs = [&](u32 v) {
 			color[v] = 1;
 			for (u32 s : blk[v].succ)
@@ -365,6 +382,23 @@ public:
 			moved.insert(g);
 		}
 		latch = moved;
+		for (u32 v : sqGuard)
+		{
+			// so vale se estiver num ciclo (senao nao e volta de laco)
+			std::set<u32> seen;
+			std::vector<u32> st(blk[v].succ.begin(), blk[v].succ.end());
+			bool cyc = false;
+			while (!st.empty() && !cyc)
+			{
+				u32 x = st.back();
+				st.pop_back();
+				if (x == v) cyc = true;
+				else if (seen.insert(x).second)
+					for (u32 y : blk[x].succ) st.push_back(y);
+			}
+			if (cyc)
+				latch.insert(v);
+		}
 		std::map<u32, u32> memo;
 		std::function<u32(u32)> longest = [&](u32 v) -> u32 {
 			auto it = memo.find(v);
@@ -591,16 +625,22 @@ public:
 		for (int r = 0; r < sh4_reg_count; r++)
 			if (liveAfter.test(r) && home[r] >= 0 && !homeCallee[r] && !readonly.test(r))
 				spill.push_back(r);
+		spillCount += spill.size();
+		callCount++;
 		for (int r : spill)
 		{
 			if (is_fp(r)) Str(S_(r), Ctx(r));
 			else Str(W_(r), Ctx(r));
 		}
 		Mov(w0, addr);
+		if (groupsLive)		// ponteiros de grupo de store atravessam a chamada
+			Stp(x6, x7, MemOperand(sp, -16, PreIndex));
 		Sub(x9, x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, do_sqw_nommu));
 		Ldr(x9, MemOperand(x9));
 		Sub(x1, x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, sq_buffer));
 		Blr(x9);
+		if (groupsLive)
+			Ldp(x6, x7, MemOperand(sp, 16, PostIndex));
 		Add(x13, x28, sizeof(Sh4Context));
 		for (int r : spill)
 		{
@@ -717,9 +757,13 @@ public:
 				Bind(done);
 				int acode = a.GetCode();
 				RegSet la = liveAfter;
-				cold.push_back([this, sq, done, acode, la]() {
+				bool gl = groupsLive;		// o do bloco do pref, nao o do ultimo
+				cold.push_back([this, sq, done, acode, la, gl]() {
 					Bind(sq);
+					bool save = groupsLive;
+					groupsLive = gl;
 					sqCall(Register::GetWRegFromCode(acode), la);
+					groupsLive = save;
 					B(done);
 				});
 			}
@@ -859,7 +903,7 @@ public:
 		{
 			if (o.op == shop_writem)
 			{
-				if (!o.rs1.is_reg() || !o.rs3.is_null() || callsBefore)
+				if (!o.rs1.is_reg() || !o.rs3.is_null())
 					throw Reject{ "writem fora do padrao do grupo" };
 				int x = o.rs1._reg;
 				if (known.count(x) && !known[x])
@@ -988,6 +1032,7 @@ public:
 			}
 			groupOf.clear();
 			std::vector<Group> groups = storeGroups(b);
+			groupsLive = !groups.empty();
 			for (size_t gi = 0; gi < groups.size(); gi++)
 			{
 				const Group &g = groups[gi];
@@ -1168,7 +1213,7 @@ int try_install(const std::vector<u32> &entryList, const std::vector<u32> &block
 			installed, blockList.size(), size, c->entries.size());
 	for (u32 l : c->latch)
 		fprintf(stderr, " volta@%08X=%u", l, c->guard[l]);
-	fprintf(stderr, " | blocos:");
+	fprintf(stderr, " | spill em chamada: %u em %u chamadas | blocos:", c->spillCount, c->callCount);
 	for (u32 va : blockList)
 		fprintf(stderr, " %08X", va);
 	fprintf(stderr, "\n");
@@ -1340,6 +1385,8 @@ void form_regions()
 				done = true;
 				break;
 			}
+			if (attempt == 0)
+				fprintf(stderr, "tier2: grupo de %zu blocos (cabeca %08X) recusado: %s\n", blocks.size(), blocks[0], why.c_str());
 			if (why == "sem laco")
 				break;
 			if (why.find("writem") != std::string::npos)
