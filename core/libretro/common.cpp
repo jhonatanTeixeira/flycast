@@ -1,5 +1,6 @@
 #include "types.h"
 #include "hw/mem/_vmem.h"
+bool tier2_fault(void *ucontext, u32 guest_addr);
 
 #include <errno.h>
 
@@ -380,6 +381,13 @@ static void signal_handler(int sn, siginfo_t * si, void *segfault_ctx)
 		context_to_segfault(&ctx, segfault_ctx);
 	}
 #elif HOST_CPU == CPU_ARM64
+	// Nivel 2 (rec-ARM64/tier2.cpp): leitura fora da RAM dentro de uma regiao
+	// e emulada aqui (ReadMem + registrador de destino no ucontext).
+	else if (dyna_cde && _nvmem_4gb_space() && virt_ram_base != nullptr && (u8 *)si->si_addr >= virt_ram_base
+			&& tier2_fault(segfault_ctx, (u32)((u8 *)si->si_addr - virt_ram_base)))
+	{
+		return;
+	}
 	// Endereco GUEST do acesso que deu fault. O caminho rapido antigo tinha o
 	// endereco sempre em w0 (ctx.x0); o acesso compacto (tech_debits 4.27) o
 	// tem em wRm, que este contexto nao carrega. No espaco de 4GB o host e

@@ -2556,3 +2556,12 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   chamada da SQ. Duas tentativas de perfil caras descartadas pela medição
   (sinal de 1 kHz, amostrar toda fatia). Detalhe em 4.59.
 
+### 2026-09-24 — nível 2, etapa 3 (segunda thread) e os outros 3D
+
+- Compilação das regiões na segunda thread e autochecagem (região com < 1,5
+  volta por entrada é desfeita). Quatro bugs achados rodando Zombie, Giga
+  Wing 2 e Shenmue 1 e corrigidos (fault em MMIO, SQ marcada como lenta,
+  laço linear travando a análise, limite da autochecagem). Detalhe em 4.60.
+- Jogando: DOA2 jogável, Giga Wing 2 jogável parecendo 100%, Shenmue 1 26
+  fps; Zombie de volta ao normal (99%) depois do conserto do congelamento.
+

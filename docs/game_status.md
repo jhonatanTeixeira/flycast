@@ -19,10 +19,10 @@
 | **kofnw** | 45-50 → bench 57 | **ruim** | quase lá — hicups; velocidade 94%→99% em 2026-09-19 |
 | **kofxi** | **60 constante** (visto jogando, 2026-09-19) | boa | era câmera lenta (83%); idle skip + fila de render + retrorun vsync/thread |
 | **Skies of Arcadia** | drops pra 24 | pontual | falta um toque |
-| **Shenmue** | 18-30; cena pesada 17 → **23-25** | melhorou muito | retrorun thread (+24%) + stores em página de código (+16%, opt-in) |
+| **Shenmue** | **26** (jogando, 2026-09-24, nível 2 automático) | melhorou muito | mais rápido que no dia anterior (usuário); retrorun thread (+24%) + stores em página de código (+16%, opt-in) |
 | **mslug6** | 30 (20 em boss) | consistente nos boss | resto do jogo full speed |
 | **Dead or Alive 2** | ~32 (bench) com a região do nível 2 (`FC_TIER2=1`, 2026-09-24) | **sem os stutters** de antes | **o mais jogável até agora** (usuário, jogando): velocidade do jogo 86 → 94-96% e os pequenos stutters que apareciam mesmo com mais fps sumiram |
-| **Giga Wing 2** (`gwing2`) | — | **não é cauda** | **jogável** (antes não era); percebe-se o frameskip |
+| **Giga Wing 2** (`gwing2`) | ~45 (jogando, nível 2 automático, 2026-09-24) | **não é cauda** | **jogável, parecendo 100% de velocidade** (usuário, 2026-09-24) |
 | **samsptk** | **~59** (medido 2026-09-22) | boa (p99/p50=1,29x) | **full speed**; era 20fps por conversão de paleta na CPU — corrigido (GPU bilinear), aguarda validação visual |
 
 ## Detalhe

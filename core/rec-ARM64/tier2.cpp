@@ -47,6 +47,11 @@
 #include <unistd.h>
 #include <ucontext.h>
 #include <sys/syscall.h>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <chrono>
 
 #include "deps/vixl/aarch64/macro-assembler-aarch64.h"
 using namespace vixl::aarch64;
@@ -79,6 +84,9 @@ struct Region
 	std::vector<u32> blocks;
 	std::vector<Patch> patches;
 	bool alive = false;
+	u32 *entries = nullptr, *passes = nullptr;	// contadores no codigo da regiao
+	bool checked = false;
+	u32 id = 0;
 };
 
 std::vector<Region> regions;
@@ -90,6 +98,7 @@ bool gaveUp;
 bool autoMode;
 u32 installed;
 std::set<u32> inRegion;		// blocos em regiao viva (fora da formacao)
+std::set<u32> badBlocks;		// recusados de vez (fora das proximas janelas)
 
 struct Reject
 {
@@ -184,6 +193,8 @@ public:
 	std::set<u32> latch;
 	std::map<u32, u32> guard;
 	std::map<u32, u32 *> entryCode;	// entrada -> codigo do bloco antigo
+	std::map<u32, u32> entryOrig;	// entrada -> 1a instrucao (lida na analise, na emu thread)
+	std::map<u32, RuntimeBlockInfo *> rbiOf;	// identidade dos blocos na analise
 	RegSet W, U, readonly;
 	int home[sh4_reg_count];
 	bool homeCallee[sh4_reg_count];
@@ -198,6 +209,14 @@ public:
 	bool tAfterJcond = false;
 	bool groupsLive = false;
 	u32 spillCount = 0, callCount = 0;
+	Label cntEntries, cntPasses;	// contadores da regiao (fim do codigo, linha propria)
+	void bump(Label *l)
+	{
+		Adr(x16, l);
+		Ldr(w17, MemOperand(x16));
+		Add(w17, w17, 1);
+		Str(w17, MemOperand(x16));
+	}
 	Register decision = w15;
 
 	~Tier2Compiler() { for (Label *l : owned) delete l; }
@@ -324,6 +343,7 @@ public:
 				continue;
 			}
 			entryCode[e] = code;
+			entryOrig[e] = code[0];
 			ok.push_back(e);
 		}
 		entries = ok;
@@ -372,12 +392,14 @@ public:
 		std::set<u32> moved;
 		for (u32 g : latch)
 		{
+			std::set<u32> climbed{ g };	// laco linear (A->B->C->A): para ao dar a volta
 			while (preds[g].size() == 1)
 			{
 				u32 p = *preds[g].begin();
-				if (blk[p].succ.size() != 1 || blk[p].succ[0] != g || moved.count(p) || p == g)
+				if (blk[p].succ.size() != 1 || blk[p].succ[0] != g || moved.count(p) || climbed.count(p))
 					break;
 				g = p;
+				climbed.insert(g);
 			}
 			moved.insert(g);
 		}
@@ -455,6 +477,14 @@ public:
 				throw Reject{ "xf fora do ftrv" };
 		allocate();
 		liveness();
+		for (u32 v : order)
+		{
+			rbiOf[v] = blk[v].rbi;
+			groupsPre[v] = storeGroups(blk[v]);
+			for (const Group &g : groupsPre[v])
+				if (g.span > 64)
+					throw Reject{ "grupo de store maior que a SQ" };
+		}
 	}
 
 	void check_supported(const shil_opcode &o) { check_op(o); }
@@ -683,7 +713,7 @@ public:
 				// bloco da regiao que tambem e entrada: o gancho mandaria de
 				// volta para ca; vai direto para o bloco antigo depois dele
 				u32 *code = ec->second;
-				Subs(w27, w27, (code[0] >> 10) & 0xFFF);
+				Subs(w27, w27, (entryOrig[pc] >> 10) & 0xFFF);
 				BranchAbs(CC_RW2RX((void *)(code + 1)));
 				return;
 			}
@@ -893,6 +923,7 @@ public:
 
 	// grupos de store de um bloco: mesma base, so somada de constantes
 	struct Group { int reg; s32 lo; u32 span; std::vector<std::pair<const shil_opcode *, s32>> ops; };
+	std::map<u32, std::vector<Group>> groupsPre;	// calculados na analise
 	std::vector<Group> storeGroups(const BlockIn &b)
 	{
 		std::map<int, s32> delta;
@@ -1010,12 +1041,14 @@ public:
 			Label *rl = newLabel();
 			Cmp(w27, guard[e]);
 			B(rl, lt);
+			bump(&cntEntries);
 			B(blockLabel[e]);
 			u32 *code = entryCode[e];
-			cold.push_back([this, rl, code]() {
+			u32 orig = entryOrig[e];
+			cold.push_back([this, rl, code, orig]() {
 				// refaz o `subs w27, w27, #ciclos` trocado pelo gancho
 				Bind(rl);
-				Subs(w27, w27, (code[0] >> 10) & 0xFFF);
+				Subs(w27, w27, (orig >> 10) & 0xFFF);
 				BranchAbs(CC_RW2RX((void *)(code + 1)));
 			});
 		}
@@ -1029,16 +1062,15 @@ public:
 			{
 				Cmp(w27, guard[v]);
 				B(exitStub(v), lt);
+				bump(&cntPasses);
 			}
 			groupOf.clear();
-			std::vector<Group> groups = storeGroups(b);
+			const std::vector<Group> &groups = groupsPre[v];
 			groupsLive = !groups.empty();
 			for (size_t gi = 0; gi < groups.size(); gi++)
 			{
 				const Group &g = groups[gi];
 				int ptr = 6 + (int)gi;
-				if (g.span > 64)
-					throw Reject{ "grupo de store maior que a SQ" };
 				Add(w1, W_(g.reg), Operand(g.lo));
 				Label *xs = exitStub(v);
 				Lsr(w0, w1, 26);
@@ -1120,6 +1152,15 @@ public:
 		}
 		for (size_t i = 0; i < cold.size(); i++)	// cold pode crescer? nao: stubs nao geram stubs
 			cold[i]();
+		// contadores numa linha de cache propria (sao escritos a cada volta)
+		while (GetBuffer()->GetCursorOffset() & 63)
+			dc32(0);
+		Bind(&cntEntries);
+		dc32(0);
+		Bind(&cntPasses);
+		dc32(0);
+		for (int k = 0; k < 14; k++)
+			dc32(0);
 		FinalizeCode();
 	}
 };
@@ -1157,11 +1198,64 @@ bool enabled() { return autoMode || !cfgBlocks.empty(); }
 u8 *area_begin() { return CodeCache + CODE_SIZE - T2_AREA; }
 u8 *area_end() { return CodeCache + CODE_SIZE; }
 
-// 0 = ligada; 1 = tentar depois (bloco ainda nao compilado / sem espaco);
-// 2 = recusada (motivo em *why)
-int try_install(const std::vector<u32> &entryList, const std::vector<u32> &blockList,
+// Compilacao na segunda thread (etapa 3). Analise (le o block manager) na
+// emu thread; emissao na thread de compilacao, num buffer so dela; instalacao
+// (patch dos blocos antigos) de volta na emu thread, no ponto seguro, se os
+// blocos ainda forem os mesmos. Um trabalho por vez; reset troca a geracao e
+// descarta o resultado em voo.
+struct Job
+{
+	Tier2Compiler *c = nullptr;
+	std::vector<u32> blocks;
+	u32 gen = 0;
+	bool ok = false;
+	std::string why;
+	double ms = 0;
+};
+std::mutex jobMx;
+std::condition_variable jobCv;
+Job *jobPending, *jobFinished;
+std::atomic<bool> jobDone;
+bool inFlight;
+bool workerStarted;
+u32 generation;
+
+void worker_loop()
+{
+	for (;;)
+	{
+		Job *j;
+		{
+			std::unique_lock<std::mutex> l(jobMx);
+			jobCv.wait(l, [] { return jobPending != nullptr; });
+			j = jobPending;
+			jobPending = nullptr;
+		}
+		auto t0 = std::chrono::steady_clock::now();
+		try
+		{
+			j->c->compile();
+			j->ok = true;
+		}
+		catch (const Reject &r)
+		{
+			j->why = r.why;
+		}
+		j->ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+		{
+			std::lock_guard<std::mutex> l(jobMx);
+			jobFinished = j;
+		}
+		jobDone.store(true, std::memory_order_release);
+	}
+}
+
+// 0 = enviada; 1 = tentar depois; 2 = recusada na analise (motivo em *why)
+int submit(const std::vector<u32> &entryList, const std::vector<u32> &blockList,
 		const std::unordered_map<u32, u32> &heatMap, std::string *why)
 {
+	if (inFlight)
+		return 1;
 	for (u32 va : blockList)
 		if (bm_GetBlock(va).get() == nullptr)
 			return 1;
@@ -1175,7 +1269,6 @@ int try_install(const std::vector<u32> &entryList, const std::vector<u32> &block
 		if (it != heatMap.end())
 			c->heatOf[va] = it->second;
 	}
-	Region reg;
 	try
 	{
 		c->load(blockList, entryList);
@@ -1183,7 +1276,6 @@ int try_install(const std::vector<u32> &entryList, const std::vector<u32> &block
 		// pelo despachante no lugar do salto ligado do JIT antigo
 		if (autoMode && c->latch.empty())
 			throw Reject{ "sem laco" };
-		c->compile();
 	}
 	catch (const Reject &r)
 	{
@@ -1191,6 +1283,72 @@ int try_install(const std::vector<u32> &entryList, const std::vector<u32> &block
 		delete c;
 		return 2;
 	}
+	Job *j = new Job();
+	j->c = c;
+	j->blocks = blockList;
+	j->gen = generation;
+	if (!workerStarted)
+	{
+		workerStarted = true;
+		std::thread(worker_loop).detach();
+	}
+	inFlight = true;
+	{
+		std::lock_guard<std::mutex> l(jobMx);
+		jobPending = j;
+	}
+	jobCv.notify_one();
+	return 0;
+}
+
+void unhook(Region &r)
+{
+	for (const Patch &p : r.patches)
+	{
+		p.code[0] = p.orig;
+		vmem_platform_flush_cache(CC_RW2RX((void *)p.code), CC_RW2RX((void *)(p.code + 1)), p.code, p.code + 1);
+	}
+	for (u32 va : r.blocks)
+		inRegion.erase(va);
+	r.alive = false;
+}
+
+// ponto seguro: instala o resultado da thread de compilacao, se houver
+void finish()
+{
+	if (!jobDone.load(std::memory_order_acquire))
+		return;
+	Job *j;
+	{
+		std::lock_guard<std::mutex> l(jobMx);
+		j = jobFinished;
+		jobFinished = nullptr;
+	}
+	jobDone.store(false, std::memory_order_relaxed);
+	inFlight = false;
+	Tier2Compiler *c = j->c;
+	bool stale = j->gen != generation;
+	if (!stale && j->ok)
+		for (u32 va : j->blocks)
+			if (bm_GetBlock(va).get() != c->rbiOf[va])
+				stale = true;
+	if (!stale && j->ok)
+		for (u32 e : c->entries)
+			if (c->entryCode[e][0] != c->entryOrig[e])
+				stale = true;
+	if (stale || !j->ok)
+	{
+		if (!j->ok)
+		{
+			fprintf(stderr, "tier2: emissao recusada: %s\n", j->why.c_str());
+			for (u32 va : j->blocks)
+				badBlocks.insert(va);
+		}
+		delete c;
+		delete j;
+		return;
+	}
+	Region reg;
 	u32 size = c->GetBuffer()->GetSizeInBytes();
 	vmem_platform_flush_cache(CC_RW2RX(t2_ptr), CC_RW2RX(t2_ptr + size), t2_ptr, t2_ptr + size);
 	for (u32 e : c->entries)
@@ -1203,23 +1361,51 @@ int try_install(const std::vector<u32> &entryList, const std::vector<u32> &block
 		code[0] = 0x14000000 | ((u32)(off >> 2) & 0x03FFFFFF);
 		vmem_platform_flush_cache(CC_RW2RX((void *)code), CC_RW2RX((void *)(code + 1)), code, code + 1);
 	}
-	reg.blocks = blockList;
+	reg.blocks = j->blocks;
 	reg.alive = true;
-	regions.push_back(reg);
-	for (u32 va : blockList)
+	reg.entries = (u32 *)(t2_ptr + c->cntEntries.GetLocation());
+	reg.passes = (u32 *)(t2_ptr + c->cntPasses.GetLocation());
+	reg.id = ++installed;
+	for (u32 va : j->blocks)
 		inRegion.insert(va);
-	installed++;
-	fprintf(stderr, "tier2: regiao #%u: %zu blocos, %u bytes, %zu entradas, guardas:",
-			installed, blockList.size(), size, c->entries.size());
+	fprintf(stderr, "tier2: regiao #%u: %zu blocos, %u bytes, %zu entradas, emitida em %.2f ms na thread, guardas:",
+			reg.id, j->blocks.size(), size, c->entries.size(), j->ms);
 	for (u32 l : c->latch)
 		fprintf(stderr, " volta@%08X=%u", l, c->guard[l]);
 	fprintf(stderr, " | spill em chamada: %u em %u chamadas | blocos:", c->spillCount, c->callCount);
-	for (u32 va : blockList)
+	for (u32 va : j->blocks)
 		fprintf(stderr, " %08X", va);
 	fprintf(stderr, "\n");
+	regions.push_back(reg);
 	t2_ptr += (size + 63) & ~63u;
 	delete c;
-	return 0;
+	delete j;
+}
+
+// Regiao que nao se paga: poucas voltas por entrada (o caminho quente sai
+// da regiao a cada volta e paga carga + descarga + despachante). Desfaz.
+void check_regions()
+{
+	for (Region &r : regions)
+	{
+		if (!r.alive || r.checked || r.entries == nullptr)
+			continue;
+		u32 en = *r.entries, pa = *r.passes;
+		if (en < 4000)
+			continue;
+		r.checked = true;
+		// < 1,5: o caminho quente sai da regiao quase toda volta (Zombie 0,14;
+		// Shenmue 1 0,97). O laco do DOA2 (strips curtas) fica em ~2,5 e ganha.
+		if (2 * pa < 3 * en)
+		{
+			unhook(r);
+			for (u32 va : r.blocks)
+				badBlocks.insert(va);
+			fprintf(stderr, "tier2: regiao #%u removida: %.2f voltas por entrada (%u entradas)\n", r.id, (double)pa / en, en);
+		}
+		else
+			fprintf(stderr, "tier2: regiao #%u ok: %.1f voltas por entrada\n", r.id, (double)pa / en);
+	}
 }
 
 // ---------------------------------------------------------------- perfil
@@ -1235,11 +1421,14 @@ std::unordered_map<u32, u32> heat;
 u32 windowSamples;
 uintptr_t lastLo, lastHi;	// cache do ultimo bloco amostrado (zerado em descarte/reset)
 u32 lastVa;
-std::set<u32> badBlocks;
 u32 rejected, lastRejected;
+
+std::set<u32> slowMem;		// blocos com acesso reescrito para trampolim pelo JIT antigo
 
 bool block_ok(RuntimeBlockInfo *b)
 {
+	if (slowMem.count(b->vaddr))
+		return false;
 	if (!b->read_only || b->temp_block || b->idle_fastforward || b->delay_skip)
 		return false;
 	switch (b->BlockType)
@@ -1354,8 +1543,8 @@ void form_regions()
 	static const u32 maxReg = getenv("FC_TIER2_MAXREG") ? atoi(getenv("FC_TIER2_MAXREG")) : 1000;
 	for (auto &c : cand)
 	{
-		if (installed >= maxReg)
-			break;
+		if (installed >= maxReg || inFlight)
+			break;		// um trabalho na thread por vez
 		std::vector<u32> blocks = c.second;
 		std::sort(blocks.begin(), blocks.end(), [](u32 a, u32 b) { return heat[a] > heat[b]; });
 		bool done = false;
@@ -1379,7 +1568,7 @@ void form_regions()
 				continue;
 			}
 			std::string why;
-			int r = try_install(blocks, blocks, heat, &why);
+			int r = submit(blocks, blocks, heat, &why);
 			if (r == 0 || r == 1)
 			{
 				done = true;
@@ -1456,6 +1645,7 @@ void drain_samples()
 		heat[va]++;
 		windowSamples++;
 	}
+	check_regions();
 	if (windowSamples >= 4000)
 		form_regions();
 }
@@ -1476,6 +1666,7 @@ void tier2_reset()
 	regions.clear();
 	inRegion.clear();
 	lastLo = lastHi = 0;
+	generation++;		// resultado em voo na thread fica velho
 	t2_ptr = area_begin();
 	gaveUp = false;
 	tier2_poll = enabled() && !mmu_enabled();
@@ -1497,6 +1688,8 @@ void tier2_safe_point()
 		// no mapa de blocos, cara no A53 (todas as fatias = -12% no DOA2)
 		if (++pollCount & 63)
 			return;
+		if (inFlight)
+			finish();
 		sampleBuf[sampleW++ & (SAMPLE_BUF - 1)] = t2_last_pc;
 		if (pollCount & 4095)
 			return;
@@ -1510,6 +1703,11 @@ void tier2_safe_point()
 		tier2_poll = false;
 		return;
 	}
+	if (inFlight)
+	{
+		finish();
+		return;
+	}
 	for (const Region &r : regions)
 		if (r.alive)
 		{
@@ -1517,10 +1715,8 @@ void tier2_safe_point()
 			return;
 		}
 	std::string why;
-	int r = try_install(cfgEntries, cfgBlocks, heat, &why);
-	if (r == 0)
-		tier2_poll = false;
-	else if (r == 2)
+	int r = submit(cfgEntries, cfgBlocks, heat, &why);
+	if (r == 2)
 	{
 		fprintf(stderr, "tier2: regiao recusada: %s\n", why.c_str());
 		gaveUp = true;
@@ -1537,16 +1733,59 @@ void tier2_on_discard(RuntimeBlockInfo *block)
 	{
 		if (!r.alive || std::find(r.blocks.begin(), r.blocks.end(), block->vaddr) == r.blocks.end())
 			continue;
-		for (const Patch &p : r.patches)
-		{
-			p.code[0] = p.orig;
-			vmem_platform_flush_cache(CC_RW2RX((void *)p.code), CC_RW2RX((void *)(p.code + 1)), p.code, p.code + 1);
-		}
-		for (u32 va : r.blocks)
-			inRegion.erase(va);
-		r.alive = false;
+		unhook(r);
 		tier2_poll = enabled();
 	}
+}
+
+bool tier2_owns_pc(uintptr_t pc);
+
+void tier2_note_slowmem(u32 vaddr)
+{
+	slowMem.insert(vaddr);
+}
+
+// Leitura fora da RAM dentro de uma regiao: emula a instrucao (ldr w/s com
+// registrador, ou ldp s,s) por ReadMem32, escreve o destino no ucontext e
+// segue. Stores da regiao vao so para o sq_buffer (nunca dao fault).
+bool tier2_fault(void *ucv, u32 guest)
+{
+	ucontext_t *uc = (ucontext_t *)ucv;
+	uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
+	if (!tier2_owns_pc(pc))
+		return false;
+	u32 insn = *(u32 *)CC_RX2RW((void *)pc);
+	struct fpsimd_context *fp = nullptr;
+	for (u8 *p = (u8 *)uc->uc_mcontext.__reserved; p < (u8 *)uc->uc_mcontext.__reserved + sizeof(uc->uc_mcontext.__reserved);)
+	{
+		struct _aarch64_ctx *h = (struct _aarch64_ctx *)p;
+		if (h->magic == 0 || h->size == 0)
+			break;
+		if (h->magic == FPSIMD_MAGIC)
+		{
+			fp = (struct fpsimd_context *)p;
+			break;
+		}
+		p += h->size;
+	}
+	u32 t = insn & 31;
+	static int logged;
+	if (logged++ < 8)
+		fprintf(stderr, "tier2: leitura fora da RAM na regiao (pc=%zx endereco=%08X), emulada\n", (size_t)pc, guest);
+	if ((insn & 0xFFE0FC00) == 0xB8604800)		// ldr wt, [xn, wm, uxtw]
+		uc->uc_mcontext.regs[t] = ReadMem32(guest);
+	else if ((insn & 0xFFE0FC00) == 0xBC604800 && fp != nullptr)	// ldr st, [xn, wm, uxtw]
+		fp->vregs[t] = ReadMem32(guest);
+	else if ((insn & 0xFFC00000) == 0x2D400000 && fp != nullptr)	// ldp st, st2, [xn, #imm]
+	{
+		u32 t2 = (insn >> 10) & 31;
+		fp->vregs[t] = ReadMem32(guest);
+		fp->vregs[t2] = ReadMem32(guest + 4);
+	}
+	else
+		return false;
+	uc->uc_mcontext.pc = pc + 4;
+	return true;
 }
 
 bool tier2_owns_pc(uintptr_t pc)

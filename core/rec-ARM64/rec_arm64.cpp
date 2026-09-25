@@ -328,6 +328,7 @@ void tier2_init();
 void tier2_reset();
 bool tier2_owns_pc(uintptr_t pc);
 bool tier2_sampling();
+void tier2_note_slowmem(u32 vaddr);
 extern uintptr_t t2_last_pc;
 
 // FC_TIER2=1 (experimento do nivel 2, docs/current_plan.md): a regiao do laco
@@ -3629,6 +3630,14 @@ static bool DecodeCompactMem(u32 op, bool& is_read, u32& size, u32& rt, u32& rm,
 // ele. host_pc nao muda: ao voltar do handler, a CPU executa o `b`.
 static bool RewriteCompactMem(unat host_pc, bool is_read, u32 size, u32 rt, u32 rm, void *target, bool is_unsigned = false, bool is_stub = false, bool is_sq = false, bool is_ocr = false)
 {
+	{
+		// nivel 2: este bloco acessa fora da RAM (MMIO, SQ, OCRAM, pagina de
+		// codigo); regiao com ele leria por fastmem e daria fault
+		// (store na SQ nao conta: a regiao grava direto no sq_buffer)
+		RuntimeBlockInfo *b = is_sq ? nullptr : bm_GetBlock2((void *)host_pc).get();
+		if (b != nullptr)
+			tier2_note_slowmem(b->vaddr);
+	}
 	u16 live = 0;
 	if (!is_stub || is_sq)
 	{
