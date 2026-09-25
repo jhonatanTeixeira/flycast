@@ -78,8 +78,11 @@ aarch64-linux-gnu-gcc-13 -O2 -static -o proto_doa2 harness.c cur_doa2.S doa2/new
 | strip de 5 vértices | 1167 ns | 662 ns | 1,76× |
 
 **IDÊNTICO** nas duas: registradores, contexto inteiro, RAM, SQ, dados do TA e
-ciclos (341 × 341, 87 × 87). Código quente 2000 → 564 bytes (3,5× menor),
-mais 180 de saídas e os caminhos frios da SQ fora da linha.
+ciclos (341 × 341, 87 × 87). Tamanho (endereços dos símbolos / `size -A`):
+total 2000 → 960 bytes (**2,1×**; novo = 564 quente + 180 saídas + 216 frio);
+só o caminho quente ~1616 → 564 (**~2,9×**; o atual tem ~288 bytes do caminho
+lento da checagem de ciclos e ~96 das chamadas de SQ do `pref` em linha).
+Não medido: instruções executadas por vértice.
 
 Regras usadas (candidatas ao gerador do nível 2; cada uma só usa o que se vê
 na compilação):

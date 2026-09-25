@@ -2514,7 +2514,8 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   (`tools/proto_jit_armv8_a/extract_blocks.py`), harness parametrizado e agora
   comparando ciclos, contexto inteiro e RAM.
 - Região do DOA2 escrita à mão: IDÊNTICA ao JIT atual incluindo ciclos, 1,85×
-  (18 vértices) e 1,76× (5 vértices), código quente 3,5× menor; nove regras
+  (18 vértices) e 1,76× (5 vértices), código 2,1× menor no total e ~2,9× no
+  caminho quente; nove regras
   para o gerador (4.55, README do protótipo).
 - O protótipo antigo do Shenmue falha na conferência de ciclos (602 × 257):
   a checagem única por volta não era a soma dos blocos. A refazer.
