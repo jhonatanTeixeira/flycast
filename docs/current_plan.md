@@ -17,6 +17,19 @@ derivado, reload sob demanda); (3) portar o gerador para C++/VIXL em segunda
 thread, com formação de região pelo perfil em tempo de execução e fault
 seguro dentro da região.
 
+**in progress (2026-09-24): nível 2 em tempo de execução (segunda thread).**
+Etapas, cada uma validada com `state_compare` antes da próxima:
+1. gerador em C++ direto das ops do JIT antigo, região escolhida por
+   variável de ambiente e instalada na emu thread (tem que igualar o
+   `tier2_doa2.S`: IDÊNTICO e mesma velocidade);
+2. perfil por amostragem (timer no pc da emu thread, ~1 kHz) + formação
+   automática de região num ponto seguro;
+3. compilação na segunda thread (cópia das ops → fila fire-and-forget →
+   instalação no ponto seguro);
+4. cobertura: fault seguro dentro da região, stores em RAM.
+**Plano B / outras ideias:** patches de velocidade por jogo numa pasta,
+`docs/tier2_patches.md`.
+
 ## 2026-09-24: nível 2 com otimização de região (estilo LTO) — projeto
 
 **pendente (projeto, sem código ainda)** — o `jit_armv8_a` como backend por
