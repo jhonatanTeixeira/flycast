@@ -41,6 +41,12 @@
 #include <set>
 #include <algorithm>
 #include <cstring>
+#include <unordered_map>
+#include <signal.h>
+#include <time.h>
+#include <unistd.h>
+#include <ucontext.h>
+#include <sys/syscall.h>
 
 #include "deps/vixl/aarch64/macro-assembler-aarch64.h"
 using namespace vixl::aarch64;
@@ -81,6 +87,9 @@ bool cfg_read;
 std::vector<u32> cfgEntries, cfgBlocks;
 u32 pollCount;
 bool gaveUp;
+bool autoMode;
+u32 installed;
+std::set<u32> inRegion;		// blocos em regiao viva (fora da formacao)
 
 struct Reject
 {
@@ -120,6 +129,36 @@ void uses_defs(const shil_opcode &o, RegSet &u, RegSet &d)
 	}
 }
 
+void check_op(const shil_opcode &o)
+{
+	switch (o.op)
+	{
+	case shop_readm:
+	case shop_writem:
+	case shop_pref:
+	case shop_jcond:
+	case shop_jdyn:
+	case shop_mov32:
+	case shop_add: case shop_sub: case shop_and: case shop_or: case shop_xor:
+	case shop_shl: case shop_shr: case shop_sar: case shop_neg: case shop_not:
+	case shop_seteq: case shop_setge: case shop_setgt: case shop_setae: case shop_setab: case shop_test:
+	case shop_fsetgt: case shop_fseteq:
+	case shop_fadd: case shop_fsub: case shop_fmul: case shop_fdiv: case shop_fabs: case shop_fneg:
+	case shop_fipr: case shop_ftrv: case shop_cvt_f2i_t:
+		break;
+	default:
+		throw Reject{ std::string("op nao suportada: ") + o.dissasm() };
+	}
+	if ((o.op == shop_shl || o.op == shop_shr || o.op == shop_sar) && !o.rs2.is_imm())
+		throw Reject{ "deslocamento por registrador" };
+	if (o.op == shop_readm && (o.flags & 0x7f) != 4 && (o.flags & 0x7f) != 8)
+		throw Reject{ "readm de 1/2 bytes" };
+	if (o.op == shop_writem && (o.flags & 0x7f) != 4 && (o.flags & 0x7f) != 8)
+		throw Reject{ "writem de 1/2 bytes" };
+	if (o.op == shop_readm && o.rd.is_r32f() == false && o.rd.is_r32i() == false && o.rd.count() != 2)
+		throw Reject{ "readm destino" };
+}
+
 struct BlockIn
 {
 	RuntimeBlockInfo *rbi;
@@ -127,6 +166,8 @@ struct BlockIn
 	u32 cycles;
 	std::vector<shil_opcode> ir;
 	bool cond;
+	bool dyn = false;	// fim dinamico (rts/jsr/jmp): sai da regiao com o pc calculado
+	u32 heat = 0;
 	bool takenOnT;		// cond: desvia para `branch` quando a decisao == 1
 	u32 branch, next;	// cond: destino / proximo; salto: branch
 	std::vector<u32> succ;	// sucessores dentro da regiao
@@ -138,6 +179,7 @@ public:
 	Tier2Compiler(u8 *buf, size_t size) : MacroAssembler(buf, size) {}
 
 	std::map<u32, BlockIn> blk;
+	std::map<u32, u32> heatOf;		// calor (amostras) por bloco, para o layout
 	std::vector<u32> order, entries;
 	std::set<u32> latch;
 	std::map<u32, u32> guard;
@@ -205,9 +247,18 @@ public:
 				b.cond = false;
 				b.branch = rbi->BranchBlock;
 				break;
+			case BET_DynamicJump:
+			case BET_DynamicCall:
+			case BET_DynamicRet:
+				b.cond = false;
+				b.dyn = true;
+				b.branch = 0xFFFFFFFF;
+				break;
 			default:
-				throw Reject{ "fim de bloco dinamico/interrupcao" };
+				throw Reject{ "fim de bloco com interrupcao" };
 			}
+			auto hit = heatOf.find(va);
+			b.heat = hit != heatOf.end() ? hit->second : 0;
 			// fschg em par (sem efeito liquido); pref sobe no bloco
 			int nfschg = 0;
 			for (const shil_opcode &o : rbi->oplist)
@@ -247,7 +298,7 @@ public:
 				if (inRegion.count(b.branch)) b.succ.push_back(b.branch);
 				if (inRegion.count(b.next)) b.succ.push_back(b.next);
 			}
-			else if (inRegion.count(b.branch))
+			else if (!b.dyn && inRegion.count(b.branch))
 				b.succ.push_back(b.branch);
 			blk[va] = b;
 		}
@@ -259,14 +310,21 @@ public:
 		for (u32 v : order)
 			if (preds[v].empty() && std::find(entries.begin(), entries.end(), v) == entries.end())
 				entries.push_back(v);
+		std::vector<u32> ok;
 		for (u32 e : entries)
 		{
 			u32 *code = (u32 *)CC_RX2RW((void *)blk[e].rbi->code);
 			// subs w27, w27, #imm (sem deslocamento)
 			if ((code[0] & 0xFFC003FF) != 0x7100037B)
-				throw Reject{ "entrada nao comeca com a checagem de ciclos" };
+			{
+				if (e == entries[0])
+					throw Reject{ "entrada nao comeca com a checagem de ciclos" };
+				continue;
+			}
 			entryCode[e] = code;
+			ok.push_back(e);
 		}
+		entries = ok;
 		// voltas de laco (DFS a partir das entradas)
 		std::map<u32, int> color;
 		std::function<void(u32)> dfs = [&](u32 v) {
@@ -280,7 +338,17 @@ public:
 			}
 			color[v] = 2;
 		};
+		// raizes: primeiro quem nao tem predecessor dentro da regiao (entra de
+		// fora); comecar do meio de um laco poe a volta no lugar errado
+		std::vector<u32> roots;
+		for (u32 v : order)
+			if (preds[v].empty())
+				roots.push_back(v);
 		for (u32 e : entries)
+			roots.push_back(e);
+		for (u32 v : order)
+			roots.push_back(v);
+		for (u32 e : roots)
 			if (color[e] == 0)
 				dfs(e);
 		// a guarda da volta sobe para o predecessor unico que so leva ao bloco
@@ -355,34 +423,7 @@ public:
 		liveness();
 	}
 
-	void check_supported(const shil_opcode &o)
-	{
-		switch (o.op)
-		{
-		case shop_readm:
-		case shop_writem:
-		case shop_pref:
-		case shop_jcond:
-		case shop_mov32:
-		case shop_add: case shop_sub: case shop_and: case shop_or: case shop_xor:
-		case shop_shl: case shop_shr: case shop_sar: case shop_neg: case shop_not:
-		case shop_seteq: case shop_setge: case shop_setgt: case shop_setae: case shop_setab: case shop_test:
-		case shop_fsetgt: case shop_fseteq:
-		case shop_fadd: case shop_fsub: case shop_fmul: case shop_fdiv: case shop_fabs: case shop_fneg:
-		case shop_fipr: case shop_ftrv: case shop_cvt_f2i_t:
-			break;
-		default:
-			throw Reject{ std::string("op nao suportada: ") + o.dissasm() };
-		}
-		if ((o.op == shop_shl || o.op == shop_shr || o.op == shop_sar) && !o.rs2.is_imm())
-			throw Reject{ "deslocamento por registrador" };
-		if (o.op == shop_readm && (o.flags & 0x7f) != 4 && (o.flags & 0x7f) != 8)
-			throw Reject{ "readm de 1/2 bytes" };
-		if (o.op == shop_writem && (o.flags & 0x7f) != 4 && (o.flags & 0x7f) != 8)
-			throw Reject{ "writem de 1/2 bytes" };
-		if (o.op == shop_readm && o.rd.is_r32f() == false && o.rd.is_r32i() == false && o.rd.count() != 2)
-			throw Reject{ "readm destino" };
-	}
+	void check_supported(const shil_opcode &o) { check_op(o); }
 
 	void allocate()
 	{
@@ -456,7 +497,7 @@ public:
 		RegSet lo;
 		std::vector<u32> tg;
 		if (b.cond) { tg.push_back(b.branch); tg.push_back(b.next); }
-		else tg.push_back(b.branch);
+		else tg.push_back(b.branch);	// dinamico: 0xFFFFFFFF, fora da regiao
 		for (u32 t : tg)
 			lo |= blk.count(t) ? live_in[t] : exitUse();
 		return lo;
@@ -576,6 +617,7 @@ public:
 			Ld1(v4.V4S(), v5.V4S(), v6.V4S(), v7.V4S(), MemOperand(x28, ctx_off(reg_xf_0)));
 	}
 
+	// pc == 0xFFFFFFFF: saida dinamica (pc no slot pc_dyn do contexto)
 	Label *exitStub(u32 pc, int tconst = -1)
 	{
 		Label *l = newLabel();
@@ -595,7 +637,20 @@ public:
 				Mov(w1, tconst);
 				Str(w1, Ctx(reg_sr_T));
 			}
-			Mov(w29, pc);
+			auto ec = entryCode.find(pc);
+			if (ec != entryCode.end())
+			{
+				// bloco da regiao que tambem e entrada: o gancho mandaria de
+				// volta para ca; vai direto para o bloco antigo depois dele
+				u32 *code = ec->second;
+				Subs(w27, w27, (code[0] >> 10) & 0xFFF);
+				BranchAbs(CC_RW2RX((void *)(code + 1)));
+				return;
+			}
+			if (pc == 0xFFFFFFFF)
+				Ldr(w29, Ctx(reg_pc_dyn));
+			else
+				Mov(w29, pc);
 			Str(w29, Ctx(reg_nextpc));
 			BranchAbs(t2_no_update);
 		});
@@ -670,6 +725,14 @@ public:
 			}
 			break;
 		}
+		case shop_jdyn:
+			// destino da saida dinamica: no contexto (o slot pode chamar C)
+			if (o.rs2.is_imm())
+				Add(w3, GprSrc(o.rs1, w0), Operand(o.rs2._imm));
+			else
+				Mov(w3, GprSrc(o.rs1, w0));
+			Str(w3, Ctx(reg_pc_dyn));
+			break;
 		case shop_jcond:
 			if (tAfterJcond)
 			{
@@ -853,8 +916,15 @@ public:
 				u32 nx = 0;
 				bool found = false;
 				std::vector<u32> cand;
-				if (b.cond) { cand.push_back(b.next); cand.push_back(b.branch); }
-				else cand.push_back(b.branch);
+				if (b.cond)
+				{
+					u32 hb = blk.count(b.branch) ? blk[b.branch].heat : 0;
+					u32 hn = blk.count(b.next) ? blk[b.next].heat : 0;
+					if (hb > hn) { cand.push_back(b.branch); cand.push_back(b.next); }
+					else { cand.push_back(b.next); cand.push_back(b.branch); }
+				}
+				else if (!b.dyn)
+					cand.push_back(b.branch);
 				for (u32 c : cand)
 					if (blk.count(c) && !seen.count(c)) { nx = c; found = true; break; }
 				if (!found)
@@ -862,12 +932,12 @@ public:
 				v = nx;
 			}
 		};
+		std::vector<u32> byHeat = order;
+		std::stable_sort(byHeat.begin(), byHeat.end(), [&](u32 a, u32 b) { return blk[a].heat > blk[b].heat; });
 		for (u32 l : latch)
 			for (u32 s : blk[l].succ)
 				chain(s);
-		for (u32 e : entries)
-			chain(e);
-		for (u32 v : order)
+		for (u32 v : byHeat)
 			chain(v);
 		return lay;
 	}
@@ -973,7 +1043,9 @@ public:
 				op(o, after[j], sqLikely);
 			}
 			u32 nxt = i + 1 < lay.size() ? lay[i + 1] : 0xFFFFFFFF;
-			if (!b.cond)
+			if (b.dyn)
+				B(exitStub(0xFFFFFFFF));
+			else if (!b.cond)
 			{
 				if (blk.count(b.branch))
 				{
@@ -1010,6 +1082,8 @@ public:
 void read_cfg()
 {
 	cfg_read = true;
+	const char *a = getenv("FC_TIER2_AUTO");
+	autoMode = a != nullptr && atoi(a) != 0;
 	const char *e = getenv("FC_TIER2_RT");
 	if (e == nullptr)
 		return;
@@ -1033,32 +1107,44 @@ void read_cfg()
 		if (std::find(cfgBlocks.begin(), cfgBlocks.end(), en) == cfgBlocks.end())
 			cfgBlocks.insert(cfgBlocks.begin(), en);
 }
+bool enabled() { return autoMode || !cfgBlocks.empty(); }
 
 u8 *area_begin() { return CodeCache + CODE_SIZE - T2_AREA; }
 u8 *area_end() { return CodeCache + CODE_SIZE; }
 
-bool try_install(const std::vector<u32> &entryList, const std::vector<u32> &blockList)
+// 0 = ligada; 1 = tentar depois (bloco ainda nao compilado / sem espaco);
+// 2 = recusada (motivo em *why)
+int try_install(const std::vector<u32> &entryList, const std::vector<u32> &blockList,
+		const std::unordered_map<u32, u32> &heatMap, std::string *why)
 {
 	for (u32 va : blockList)
 		if (bm_GetBlock(va).get() == nullptr)
-			return false;		// ainda nao compilado: tenta de novo depois
+			return 1;
 	size_t room = area_end() - t2_ptr;
 	if (room < 16 * 1024)
-		return false;
+		return 1;
 	Tier2Compiler *c = new Tier2Compiler(t2_ptr, room);
+	for (u32 va : blockList)
+	{
+		auto it = heatMap.find(va);
+		if (it != heatMap.end())
+			c->heatOf[va] = it->second;
+	}
 	Region reg;
 	try
 	{
 		c->load(blockList, entryList);
+		// sem laco a regiao nao paga a entrada (carga de tudo) e a saida
+		// pelo despachante no lugar do salto ligado do JIT antigo
+		if (autoMode && c->latch.empty())
+			throw Reject{ "sem laco" };
 		c->compile();
 	}
 	catch (const Reject &r)
 	{
-		WARN_LOG(DYNAREC, "tier2: regiao recusada: %s", r.why.c_str());
-		fprintf(stderr, "tier2: regiao recusada: %s\n", r.why.c_str());
+		*why = r.why;
 		delete c;
-		gaveUp = true;
-		return false;
+		return 2;
 	}
 	u32 size = c->GetBuffer()->GetSizeInBytes();
 	vmem_platform_flush_cache(CC_RW2RX(t2_ptr), CC_RW2RX(t2_ptr + size), t2_ptr, t2_ptr + size);
@@ -1075,14 +1161,256 @@ bool try_install(const std::vector<u32> &entryList, const std::vector<u32> &bloc
 	reg.blocks = blockList;
 	reg.alive = true;
 	regions.push_back(reg);
-	fprintf(stderr, "tier2: regiao de %zu blocos ligada (%u bytes, entradas %zu, guardas:",
-			blockList.size(), size, c->entries.size());
-	for (auto &kv : c->guard)
-		fprintf(stderr, " %08X=%u", kv.first, kv.second);
-	fprintf(stderr, ")\n");
+	for (u32 va : blockList)
+		inRegion.insert(va);
+	installed++;
+	fprintf(stderr, "tier2: regiao #%u: %zu blocos, %u bytes, %zu entradas, guardas:",
+			installed, blockList.size(), size, c->entries.size());
+	for (u32 l : c->latch)
+		fprintf(stderr, " volta@%08X=%u", l, c->guard[l]);
+	fprintf(stderr, " | blocos:");
+	for (u32 va : blockList)
+		fprintf(stderr, " %08X", va);
+	fprintf(stderr, "\n");
 	t2_ptr += (size + 63) & ~63u;
 	delete c;
+	return 0;
+}
+
+// ---------------------------------------------------------------- perfil
+// Amostra = o bloco que estava rodando quando a fatia de ciclos acabou: o
+// intc_sched do JIT antigo grava x29 (retorno para o bloco) em t2_last_pc e
+// o UpdateSystem chama tier2_safe_point. Proporcional ao tempo emulado de
+// cada bloco, sem sinal (um timer de 1 kHz por sinal custou ~6% no DOA2).
+const u32 SAMPLE_BUF = 4096;
+uintptr_t sampleBuf[SAMPLE_BUF];
+u32 sampleW;
+u32 sampleR;
+std::unordered_map<u32, u32> heat;
+u32 windowSamples;
+uintptr_t lastLo, lastHi;	// cache do ultimo bloco amostrado (zerado em descarte/reset)
+u32 lastVa;
+std::set<u32> badBlocks;
+u32 rejected, lastRejected;
+
+bool block_ok(RuntimeBlockInfo *b)
+{
+	if (!b->read_only || b->temp_block || b->idle_fastforward || b->delay_skip)
+		return false;
+	switch (b->BlockType)
+	{
+	case BET_Cond_0: case BET_Cond_1: case BET_StaticJump: case BET_StaticCall:
+	case BET_DynamicJump: case BET_DynamicCall: case BET_DynamicRet:
+		break;
+	default:
+		return false;
+	}
+	int nfschg = 0;
+	try
+	{
+		for (const shil_opcode &o : b->oplist)
+		{
+			if (is_fschg(o))
+			{
+				nfschg++;
+				continue;
+			}
+			check_op(o);
+		}
+	}
+	catch (const Reject &)
+	{
+		return false;
+	}
+	return (nfschg & 1) == 0;
+}
+
+// store so vale na SQ: o bloco com writem precisa de um pref na mesma base
+// em algum bloco da regiao (o padrao do laco de vertices)
+bool stores_are_sq(const std::vector<u32> &blocks)
+{
+	std::set<int> prefBase;
+	for (u32 va : blocks)
+		for (const shil_opcode &o : bm_GetBlock(va)->oplist)
+			if (o.op == shop_pref && o.rs1.is_reg())
+				prefBase.insert(o.rs1._reg);
+	for (u32 va : blocks)
+		for (const shil_opcode &o : bm_GetBlock(va)->oplist)
+			if (o.op == shop_writem && (!o.rs1.is_reg() || !prefBase.count(o.rs1._reg)))
+				return false;
 	return true;
+}
+
+void form_regions()
+{
+	u64 total = 0;
+	std::vector<std::pair<u32, u32>> hs;
+	for (auto &kv : heat)
+	{
+		total += kv.second;
+		hs.push_back({ kv.second, kv.first });
+	}
+	std::sort(hs.rbegin(), hs.rend());
+	std::set<u32> hot;
+	std::map<u32, RuntimeBlockInfo *> rb;
+	u64 acc = 0;
+	const u32 minHeat = std::max<u32>(3, (u32)(total / 500));
+	for (auto &h : hs)
+	{
+		if (acc >= total * 8 / 10 || h.first < minHeat)
+			break;
+		acc += h.first;
+		u32 va = h.second;
+		if (inRegion.count(va) || badBlocks.count(va))
+			continue;
+		RuntimeBlockInfo *b = bm_GetBlock(va).get();
+		if (b == nullptr)
+			continue;
+		if (!block_ok(b))
+		{
+			badBlocks.insert(va);
+			continue;
+		}
+		hot.insert(va);
+		rb[va] = b;
+	}
+	// uniao pelas arestas estaticas entre blocos quentes
+	std::map<u32, u32> parent;
+	for (u32 v : hot)
+		parent[v] = v;
+	std::function<u32(u32)> find = [&](u32 x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; };
+	for (u32 v : hot)
+	{
+		RuntimeBlockInfo *b = rb[v];
+		u32 t[2] = { b->BranchBlock, b->NextBlock };
+		bool cond = b->BlockType == BET_Cond_0 || b->BlockType == BET_Cond_1;
+		bool stat = b->BlockType == BET_StaticJump || b->BlockType == BET_StaticCall;
+		for (int k = 0; k < 2; k++)
+		{
+			if (!(cond || (stat && k == 0)))
+				continue;
+			if (hot.count(t[k]))
+				parent[find(t[k])] = find(v);
+		}
+	}
+	std::map<u32, std::vector<u32>> groups;
+	for (u32 v : hot)
+		groups[find(v)].push_back(v);
+	std::vector<std::pair<u64, std::vector<u32>>> cand;
+	for (auto &kv : groups)
+	{
+		u64 hsum = 0;
+		for (u32 v : kv.second)
+			hsum += heat[v];
+		if (hsum * 50 >= total)		// >= 2% das amostras
+			cand.push_back({ hsum, kv.second });
+	}
+	std::sort(cand.rbegin(), cand.rend());
+	static const u32 maxReg = getenv("FC_TIER2_MAXREG") ? atoi(getenv("FC_TIER2_MAXREG")) : 1000;
+	for (auto &c : cand)
+	{
+		if (installed >= maxReg)
+			break;
+		std::vector<u32> blocks = c.second;
+		std::sort(blocks.begin(), blocks.end(), [](u32 a, u32 b) { return heat[a] > heat[b]; });
+		bool done = false;
+		for (int attempt = 0; attempt < 8 && !blocks.empty(); attempt++)
+		{
+			if (blocks.size() > 48)
+				blocks.resize(48);
+			if (!stores_are_sq(blocks))
+			{
+				// tira os blocos com store fora do padrao
+				std::vector<u32> keep;
+				for (u32 va : blocks)
+				{
+					bool st = false;
+					for (const shil_opcode &o : bm_GetBlock(va)->oplist)
+						st |= o.op == shop_writem;
+					if (!st)
+						keep.push_back(va);
+				}
+				blocks = keep;
+				continue;
+			}
+			std::string why;
+			int r = try_install(blocks, blocks, heat, &why);
+			if (r == 0 || r == 1)
+			{
+				done = true;
+				break;
+			}
+			if (why == "sem laco")
+				break;
+			if (why.find("writem") != std::string::npos)
+			{
+				std::vector<u32> keep;
+				for (u32 va : blocks)
+				{
+					bool st = false;
+					for (const shil_opcode &o : bm_GetBlock(va)->oplist)
+						st |= o.op == shop_writem;
+					if (!st)
+						keep.push_back(va);
+				}
+				blocks = keep;
+			}
+			else
+				blocks.pop_back();		// tira o mais frio e tenta de novo
+		}
+		if (!done)
+		{
+			// recusa definitiva: fora das proximas janelas
+			for (u32 va : c.second)
+				badBlocks.insert(va);
+			rejected++;
+		}
+	}
+	if (rejected != lastRejected)
+	{
+		fprintf(stderr, "tier2: %u grupos recusados ate agora (%zu blocos fora)\n", rejected, badBlocks.size());
+		lastRejected = rejected;
+	}
+	// janela seguinte: calor decai pela metade
+	for (auto it = heat.begin(); it != heat.end();)
+	{
+		it->second >>= 1;
+		if (it->second == 0)
+			it = heat.erase(it);
+		else
+			++it;
+	}
+	windowSamples = 0;
+}
+
+void drain_samples()
+{
+	u32 w = sampleW;
+	if (w - sampleR > SAMPLE_BUF)
+		sampleR = w - SAMPLE_BUF;
+	const uintptr_t lo = (uintptr_t)CC_RW2RX(CodeCache), hi = (uintptr_t)CC_RW2RX(area_begin());
+	for (; sampleR != w; sampleR++)
+	{
+		uintptr_t pc = sampleBuf[sampleR & (SAMPLE_BUF - 1)];
+		if (pc < lo || pc >= hi)
+			continue;
+		u32 va;
+		if (pc >= lastLo && pc < lastHi)
+			va = lastVa;		// mesmo bloco da amostra anterior (laco)
+		else
+		{
+			RuntimeBlockInfo *b = bm_GetBlock2((void *)pc).get();
+			if (b == nullptr)
+				continue;
+			lastLo = (uintptr_t)CC_RW2RX((void *)b->code);
+			lastHi = lastLo + b->host_code_size;
+			va = lastVa = b->vaddr;
+		}
+		heat[va]++;
+		windowSamples++;
+	}
+	if (windowSamples >= 4000)
+		form_regions();
 }
 
 } // namespace
@@ -1091,7 +1419,7 @@ void tier2_init()
 {
 	if (!cfg_read)
 		read_cfg();
-	tier2_code_reserve = cfgBlocks.empty() ? 0 : T2_AREA;
+	tier2_code_reserve = enabled() ? T2_AREA : 0;
 }
 
 void tier2_reset()
@@ -1099,13 +1427,35 @@ void tier2_reset()
 	if (!cfg_read)
 		read_cfg();
 	regions.clear();
+	inRegion.clear();
+	lastLo = lastHi = 0;
 	t2_ptr = area_begin();
 	gaveUp = false;
-	tier2_poll = !cfgBlocks.empty() && !mmu_enabled();
+	tier2_poll = enabled() && !mmu_enabled();
+}
+
+uintptr_t t2_last_pc;
+bool tier2_sampling()
+{
+	if (!cfg_read)
+		read_cfg();
+	return autoMode;
 }
 
 void tier2_safe_point()
 {
+	if (autoMode)
+	{
+		// 1 amostra a cada 64 fatias (~7 mil/s): cada uma custa uma busca
+		// no mapa de blocos, cara no A53 (todas as fatias = -12% no DOA2)
+		if (++pollCount & 63)
+			return;
+		sampleBuf[sampleW++ & (SAMPLE_BUF - 1)] = t2_last_pc;
+		if (pollCount & 4095)
+			return;
+		drain_samples();
+		return;
+	}
 	if (++pollCount & 255)
 		return;
 	if (gaveUp || cfgBlocks.empty())
@@ -1119,12 +1469,21 @@ void tier2_safe_point()
 			tier2_poll = false;
 			return;
 		}
-	if (try_install(cfgEntries, cfgBlocks))
+	std::string why;
+	int r = try_install(cfgEntries, cfgBlocks, heat, &why);
+	if (r == 0)
 		tier2_poll = false;
+	else if (r == 2)
+	{
+		fprintf(stderr, "tier2: regiao recusada: %s\n", why.c_str());
+		gaveUp = true;
+		tier2_poll = false;
+	}
 }
 
 void tier2_on_discard(RuntimeBlockInfo *block)
 {
+	lastLo = lastHi = 0;
 	if (regions.empty())
 		return;
 	for (Region &r : regions)
@@ -1136,14 +1495,16 @@ void tier2_on_discard(RuntimeBlockInfo *block)
 			p.code[0] = p.orig;
 			vmem_platform_flush_cache(CC_RW2RX((void *)p.code), CC_RW2RX((void *)(p.code + 1)), p.code, p.code + 1);
 		}
+		for (u32 va : r.blocks)
+			inRegion.erase(va);
 		r.alive = false;
-		tier2_poll = !cfgBlocks.empty();
+		tier2_poll = enabled();
 	}
 }
 
 bool tier2_owns_pc(uintptr_t pc)
 {
-	return !cfgBlocks.empty() && pc >= (uintptr_t)CC_RW2RX(area_begin()) && pc < (uintptr_t)CC_RW2RX(area_end());
+	return enabled() && pc >= (uintptr_t)CC_RW2RX(area_begin()) && pc < (uintptr_t)CC_RW2RX(area_end());
 }
 
 #endif // FEAT_SHREC == DYNAREC_JIT

@@ -324,6 +324,11 @@ void jit_dump_flush()
 #undef do_sqw_nommu
 
 extern "C" void ngen_blockcheckfail(u32 pc);
+void tier2_init();
+void tier2_reset();
+bool tier2_owns_pc(uintptr_t pc);
+bool tier2_sampling();
+extern uintptr_t t2_last_pc;
 
 // FC_TIER2=1 (experimento do nivel 2, docs/current_plan.md): a regiao do laco
 // de vertices do DOA2, gerada offline por tools/tier2_gen.py --emu doa2
@@ -606,8 +611,6 @@ void ngen_mainloop(void* v_cntx)
 	} while (restarting);
 }
 
-void tier2_init();
-
 void ngen_init()
 {
 	INFO_LOG(DYNAREC, "Initializing the ARM64 dynarec");
@@ -615,8 +618,6 @@ void ngen_init()
 	tier2_init();
 }
 
-void tier2_reset();
-bool tier2_owns_pc(uintptr_t pc);
 
 void ngen_ResetBlocks()
 {
@@ -2265,6 +2266,12 @@ public:
 			Str(w0, MemOperand(x1));
 		}
 		Mov(x29, lr);				// Trashing pc here but it will be reset at the end of the block or in DoInterrupts
+		if (tier2_sampling())
+		{
+			// nivel 2: amostra do bloco que estava rodando no fim da fatia
+			Mov(x0, reinterpret_cast<uintptr_t>(&t2_last_pc));
+			Str(x29, MemOperand(x0));
+		}
 		GenCallRuntime(UpdateSystem);
 		Mov(lr, x29);
 		Cbnz(w0, &do_interrupts);
