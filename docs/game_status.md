@@ -21,7 +21,7 @@
 | **Skies of Arcadia** | drops pra 24 | pontual | falta um toque |
 | **Shenmue** | 18-30; cena pesada 17 → **23-25** | melhorou muito | retrorun thread (+24%) + stores em página de código (+16%, opt-in) |
 | **mslug6** | 30 (20 em boss) | consistente nos boss | resto do jogo full speed |
-| **Dead or Alive 2** | 25-30 (bench 23) | — | diagnosticado 2026-09-22: **emu-bound (SH4 saturado, 74%)**, render 2º gargalo; 60fps nativo |
+| **Dead or Alive 2** | ~32 (bench) com a região do nível 2 (`FC_TIER2=1`, 2026-09-24) | **sem os stutters** de antes | **o mais jogável até agora** (usuário, jogando): velocidade do jogo 86 → 94-96% e os pequenos stutters que apareciam mesmo com mais fps sumiram |
 | **Giga Wing 2** (`gwing2`) | — | **não é cauda** | **jogável** (antes não era); percebe-se o frameskip |
 | **samsptk** | **~59** (medido 2026-09-22) | boa (p99/p50=1,29x) | **full speed**; era 20fps por conversão de paleta na CPU — corrigido (GPU bilinear), aguarda validação visual |
 
@@ -139,6 +139,13 @@ savestate e o `FC_TA_SPLIT`/`FC_REND_SPLIT` para ver se o mapa do frame bate
 com o do mslug6 (upload de textura + submissão GL) ou se é outra coisa.
 
 ### Dead or Alive 2 — diagnosticado: emu-bound (SH4), não render-bound
+
+**2026-09-24, região do nível 2 (`FC_TIER2=1`, 4.57), avaliado jogando:** o
+jogo "pareceu mais jogável que nunca"; os pequenos stutters que aconteciam
+mesmo com mais fps apresentado não ocorrem mais. No benchmark o fps
+apresentado caiu (33,8 → 31,8) enquanto a velocidade do jogo subiu (86 →
+95%) e os underruns de áudio caíram pela metade — o que se sente segue a
+velocidade do jogo e a regularidade, não o fps apresentado.
 **Medido 2026-09-22** (savestate, `--benchmark 20`): 23,1 fps, jogo a **73,9%**
 de velocidade, 186 underruns. **É 60fps nativo** (confirmado:
 `req_native_fps=59,92`, sem RTT). **Gargalo primário: throughput de emulação
