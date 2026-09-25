@@ -280,8 +280,12 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 
 }
 
+void tier2_on_discard(RuntimeBlockInfo *block) __attribute__((weak));
+
 void bm_DiscardBlock(RuntimeBlockInfo* block)
 {
+	if (tier2_on_discard)
+		tier2_on_discard(block);
 	// Remove from block map
 	auto it = blkmap.find((void*)block->code);
 	verify(it != blkmap.end());

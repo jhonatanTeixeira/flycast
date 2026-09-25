@@ -606,14 +606,21 @@ void ngen_mainloop(void* v_cntx)
 	} while (restarting);
 }
 
+void tier2_init();
+
 void ngen_init()
 {
 	INFO_LOG(DYNAREC, "Initializing the ARM64 dynarec");
 	ngen_FailedToFindBlock = &ngen_FailedToFindBlock_nommu;
+	tier2_init();
 }
+
+void tier2_reset();
+bool tier2_owns_pc(uintptr_t pc);
 
 void ngen_ResetBlocks()
 {
+	tier2_reset();
 	mainloop = NULL;
 	compact_live_fregs.clear();
 	armv8a_site_spills.clear();
@@ -3672,7 +3679,7 @@ bool ngen_Rewrite(unat& host_pc, unat, unat acc)
 {
 	// regiao do nivel 2: codigo no .so (sem reescrita) e registradores vivos
 	// que o trampolim nao conhece; o experimento assume RAM/SQ
-	if (host_pc >= (unat)t2_doa2_begin && host_pc < (unat)t2_doa2_end)
+	if ((host_pc >= (unat)t2_doa2_begin && host_pc < (unat)t2_doa2_end) || tier2_owns_pc(host_pc))
 	{
 		ERROR_LOG(DYNAREC, "FC_TIER2: fault na regiao doa2 pc=%zx endereco=%08X", (size_t)host_pc, (u32)acc);
 		return false;

@@ -42,6 +42,7 @@ u8* TempCodeCache;
 uintptr_t cc_rx_offset;
 
 u32 LastAddr = 0;
+u32 tier2_code_reserve = 0;	// cauda do CodeCache do nivel 2 (rec-ARM64/tier2.cpp)
 u32 LastAddr_min = 0;
 u32 TempLastAddr = 0;
 u32* emit_ptr = nullptr;
@@ -120,7 +121,7 @@ u32 emit_FreeSpace()
 	if (emit_ptr)
 		return (emit_ptr_limit - emit_ptr) * sizeof(u32);
 	else
-		return CODE_SIZE-LastAddr;
+		return CODE_SIZE - tier2_code_reserve - LastAddr;
 }
 
 void AnalyseBlock(RuntimeBlockInfo* blk);

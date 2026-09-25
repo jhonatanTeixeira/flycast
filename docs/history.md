@@ -2539,3 +2539,12 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   do jogo 86 → 95%, underruns pela metade; fps apresentado 33,8 → 31,8 (render
   vira o gargalo, família do 4.29). Detalhe em 4.57.
 
+### 2026-09-24 — nível 2 em tempo de execução, etapa 1 (gerador C++)
+
+- `core/rec-ARM64/tier2.cpp`: porte do gerador para C++/VIXL, compilando a
+  região a partir do `oplist` dos blocos do JIT antigo num ponto seguro do
+  `UpdateSystem` e ligando por patch da 1a instrução do bloco antigo.
+- DOA2 com `FC_TIER2_RT` (mesma região do `.S` offline): IDÊNTICO no jogo
+  inteiro; velocidade igual à versão offline (94-98% contra 87% do JIT
+  antigo). Detalhe em 4.58.
+

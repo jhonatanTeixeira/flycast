@@ -19,9 +19,9 @@ seguro dentro da região.
 
 **in progress (2026-09-24): nível 2 em tempo de execução (segunda thread).**
 Etapas, cada uma validada com `state_compare` antes da próxima:
-1. gerador em C++ direto das ops do JIT antigo, região escolhida por
-   variável de ambiente e instalada na emu thread (tem que igualar o
-   `tier2_doa2.S`: IDÊNTICO e mesma velocidade);
+1. ~~gerador em C++ direto das ops do JIT antigo, região escolhida por
+   variável de ambiente e instalada na emu thread~~ **done** (4.58: IDÊNTICO,
+   mesma velocidade do `tier2_doa2.S`);
 2. perfil por amostragem (timer no pc da emu thread, ~1 kHz) + formação
    automática de região num ponto seguro;
 3. compilação na segunda thread (cópia das ops → fila fire-and-forget →

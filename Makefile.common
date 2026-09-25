@@ -424,6 +424,7 @@ ifneq ($(filter $(WITH_DYNAREC), arm64 aarch64),)
 	SOURCES_ASM += $(CORE_DIR)/core/rec-ARM64/tier2_doa2.S
 	SOURCES_CXX += $(CORE_DIR)/core/rec-ARM64/rec_arm64.cpp \
 					$(CORE_DIR)/core/rec-ARM64/jit_armv8_a.cpp \
+					$(CORE_DIR)/core/rec-ARM64/tier2.cpp \
 					$(DEPS_DIR)/vixl/code-buffer-vixl.cc \
 					$(DEPS_DIR)/vixl/compiler-intrinsics-vixl.cc \
 					$(DEPS_DIR)/vixl/cpu-features.cc \
