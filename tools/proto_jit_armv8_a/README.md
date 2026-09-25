@@ -112,3 +112,31 @@ harness é barato (no jogo a descarga chama o TA de verdade, o mesmo custo nos
 dois lados, o que dilui o ganho); as escritas na SQ vão direto para a memória
 nos dois lados (no emulador o JIT atual usa trampolim).
 
+## Gerador offline (`tools/tier2_gen.py`), v1
+
+Gera a região direto do SHIL do dump, com a mesma interface do harness:
+```
+python3 tools/tier2_gen.py <dir>/jit-<pid>.txt gen.S ENTRADA VADDR...
+aarch64-linux-gnu-gcc-13 -O2 -static -o proto_gen harness.c cur.S gen.S
+```
+Regras da v1: guardas de ciclos (entradas + volta de laço, a da volta sobe
+para o predecessor único que só leva ao bloco, antes das chamadas), SH4
+escrito em callee-saved, só lido recarregado depois de chamada (floats em
+s8-s15 não), XMTRX em v4-v7, liveness para spill/reload só do necessário em
+volta da descarga da SQ, `pref` sobe no bloco, layout a partir do bloco mais
+executado. Op fora do conjunto suportado recusa a região.
+
+| Região | JIT atual | Gerador v1 | À mão |
+|---|---|---|---|
+| DOA2, strip de 18 vértices | 4558 ns | 2797 ns (**1,63×**) | 2499 ns (1,85×) |
+| DOA2, strip de 5 vértices | 1179 ns | 772 ns (**1,53×**) | 662 ns (1,76×) |
+| Shenmue II, strip de 14 vértices | 3087 ns | 2198 ns (**1,40×**) | (à mão com ciclos errados) |
+
+Todas **IDÊNTICAS** incluindo ciclos (DOA2 341/87, Shenmue 257 — o gerador
+acerta o que o `new.S` do Shenmue errava). Caminho quente do DOA2: ~1616
+(atual) → 808 (gerado) → 564 bytes (à mão). Diferença para a versão à mão =
+regras ainda não implementadas: T fundido em flags (`cmp`+`cset`+`cbnz` →
+`b.cond`), stores agrupados, registrador derivado (r7), fpul "limpo no
+contexto" depois da chamada (sem reload), r2/r8 sem reload quando raros,
+blocos equivalentes compartilhados.
+

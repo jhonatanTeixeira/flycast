@@ -2520,3 +2520,13 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - O protótipo antigo do Shenmue falha na conferência de ciclos (602 × 257):
   a checagem única por volta não era a soma dos blocos. A refazer.
 
+### 2026-09-24 — gerador offline do nível 2 (v1)
+
+- `tools/tier2_gen.py`: região do dump → ARM64 com a interface do harness.
+  DOA2 IDÊNTICO com ciclos, 1,63× (18 vértices) / 1,53× (5); Shenmue II,
+  mesmo gerador sem mudança, IDÊNTICO com ciclos, 1,40×. Caminho quente do
+  DOA2 808 bytes (à mão 564, JIT atual ~1616). Primeiros bugs de regra
+  achados lendo o código gerado: guarda da volta depois da chamada (forçava
+  spill de 9 valores por vértice) → sobe para o predecessor; reload de floats
+  callee-saved; layout começando pelo bloco frio (4.56).
+
