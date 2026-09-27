@@ -35,6 +35,9 @@ opt-in.
 3. **Poucas regiões, alto reúso**: exigir o limiar de reúso ANTES de instalar
    (o Sonic Shuffle mostrou que formar+descartar dezenas é pior).
 
+**Knobs inteligentes (batch adaptativo / agressividade adaptativa por
+reúso+VEL):** plano aparte em `docs/tier2_adaptive_plan.md` (retomar depois).
+
 **Método:** cada uma atrás de env var, A/B com fps+VEL+p50/p95/p99 e
 `state_compare` (tier2 on×off) antes de virar padrão.
 

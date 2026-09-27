@@ -2860,3 +2860,23 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   **mslug6:** segue limpo (métrica de gradiente ~10,5).
 - **Conclusão:** a técnica vale (fica ligada por padrão), mas o **alvo de dev
   do tier2 é DOA2/Shenmue II**, não o Shenmue. Próximo: verificação neutra.
+
+## 2026-09-27 01:40 — tier2 inteiro na thread separada (design 1)
+
+- **Motivação:** o usuário queria o tier2 inteiramente numa thread; a medição
+  mostrou que a emu thread gastava **435 µs/frame** (Shenmue) / 283 (DOA2) nele
+  (amostragem/heat/formação/load), só o VIXL no worker.
+- **Desenho (1):** `bm_AddBlock` (emu) entrega o `RuntimeBlockInfoPtr` (shared_ptr,
+  mantém o bloco vivo — sem copiar o SHIL) numa **fila SPSC sem lock**; o worker
+  drena, mantém `workerBlocks`/`workerByCode` (não toca o `blkmap`, que não é
+  thread-safe) e faz amostragem→heat→formação→load→codegen. A emu thread só:
+  store da amostra + `finish` + `check_regions`/unhook. Park no futex, acordado
+  em lote (a cada 4096 polls, ~110/s). Flag `FC_TIER2_FULL_THREAD`.
+- **Por que não mutex no block manager:** `bm_GetBlock2` é chamado em
+  `rdv_DoInterrupts` (saída de bloco) — um lock ali custaria no caminho quente +
+  contenção cross-core. A fila evita o blkmap no worker.
+- **Bug pego:** `tier2_on_block_added` estava no `namespace {}` (linkage interno)
+  → o weak do blockmanager ficava indefinido; movido pra fora.
+- **Medido (Shenmue 2 pares):** on 26,4/26,4 fps e VEL 87,9/87,7% × off 26,3/25,9
+  e 87,4/86,2%. **Custo emu: 435 → 83 µs/frame** (DOA2 283 → 68). DOA2 VEL
+  94,8 → 95,8%. Fica **opt-in** (default off) até validar mais.
