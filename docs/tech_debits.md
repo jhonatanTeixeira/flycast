@@ -262,3 +262,11 @@ espera o frame inteiro).
 Medir antes de codar (regra do projeto): contador de "frame enfileirado cuja
 VRAM foi escrita antes do render consumir" dimensiona o problema e decide entre
 (1)-(4).
+
+**Custo do paliativo medido (2026-09-27, Shenmue II, savestate):** o `re.Wait`
+curto **regride o Shenmue II de 25,9 → 21,0 fps** (VEL 71,3 → 67,2%, `core_average`
+20,6 → 27,5ms) -- porque o `Process` do Shenmue II é longo e esperá-lo rouba
+~19%. `FC_EMU_WAIT_RE=0` recupera. `FC_TEX_SKIP_UNCHANGED` não tem efeito aqui.
+Ou seja: o paliativo é aceitável no MvC2 (~5%) mas caro no Shenmue II -- mais um
+motivo pra fechar o 4.87 (serializar sem esperar o `Process` inteiro). **Regressão
+a resolver na próxima implementação do tier2/render.**
