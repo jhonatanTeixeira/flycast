@@ -70,6 +70,8 @@ struct PipelineShader
 	GLint fog_clamp_min, fog_clamp_max;
 	GLint normal_matrix;
 	GLint palette_index;
+	GLint texRaw, uTexW, uTexH, uPal4;	// FC_TEX_GPU_MORTON
+	GLint uShowIdx;
 
 	//
 	bool cp_AlphaTest;
@@ -85,6 +87,7 @@ struct PipelineShader
 	bool fog_clamping;
 	bool trilinear;
 	int palette;	// 0 = sem paleta na GPU, 1 = nearest, 2 = bilinear
+	bool pp_GpuMorton;	// FC_TEX_GPU_MORTON: untwiddle Morton no fragment shader
 };
 
 
@@ -135,6 +138,13 @@ extern GLuint fbTextureId;
 extern float fb_scale_x, fb_scale_y;
 
 u64 gl_GetTexture(TSP tsp,TCW tcw);
+// FC_TEX_GPU_MORTON: textura crua (R8UI twiddled). Tabela por texid (o
+// PolyParam so carrega texid; dims/pal4 vem daqui no SetGPState).
+struct TexRawInfo { u32 w, h; bool pal4; };
+void gl_UploadRawTexture(u64 texID, u32 rw, u32 rh, const u8 *data);
+void gl_RegisterRawTexture(u64 texID, u32 rw, u32 rh, bool pal4);
+void gl_UnregisterRawTexture(u64 texID);
+const TexRawInfo* gl_GetRawInfo(u64 texID);
 struct text_info {
 	u16* pdata;
 	u32 width;
@@ -163,10 +173,11 @@ void ReadRTTBuffer();
 void RenderFramebuffer();
 void DrawFramebuffer();
 
+// gpu_morton: ultimo arg (FC_TEX_GPU_MORTON); ver gles.cpp
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
-		int palette);
+		int palette, bool gpu_morton);
 void vertex_buffer_unmap(void);
 
 void findGLVersion();

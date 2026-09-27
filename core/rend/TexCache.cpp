@@ -68,7 +68,15 @@ static bool TexSkipUnchangedEnabled()
 {
 	static int enabled = -1;
 	if (enabled == -1)
-		enabled = getenv("FC_TEX_SKIP_UNCHANGED") != nullptr ? 1 : 0;
+	{
+		// Default ON desde 2026-09-27: medido no MvC2, ~30% dos updates sao
+		// re-upload de conteudo IDENTICO (a invalidez por pagina de 4KB marca a
+		// textura suja mesmo quando a escrita caiu em outra textura da pagina).
+		// Seguro por construcao: a invalidacao continua igual, so evita refazer
+		// o trabalho quando os bytes nao mudaram. FC_TEX_SKIP_UNCHANGED=0 desliga.
+		const char *e = getenv("FC_TEX_SKIP_UNCHANGED");
+		enabled = (e != nullptr && e[0] == '0') ? 0 : 1;
+	}
 	return enabled == 1;
 }
 u32 g_texSkippedUploads;
@@ -131,6 +139,13 @@ u32 palette32_ram[1024];
 u32 pal_hash_256[4];
 u32 pal_hash_16[64];
 bool palette_updated;
+
+// No-wait (docs/frame_pacing_plan.md): a emu thread escreve a paleta em
+// palette_update() ENQUANTO a main thread sobe a textura de paleta
+// (UpdatePaletteTexture) do frame anterior -> pixels misturados nos sprites
+// paletizados. O wait antigo serializava isso. Mutex so na troca/frame (a
+// paleta nao e caminho quente) em vez de reintroduzir o wait.
+std::mutex g_palMutex;
 
 // Rough approximation of LoD bias from D adjust param, only used to increase LoD
 const std::array<f32, 16> D_Adjust_LoD_Bias = {
@@ -197,6 +212,7 @@ void palette_update()
 {
 	if (!pal_needs_update)
 		return;
+	std::lock_guard<std::mutex> lock(g_palMutex);
 	pal_needs_update = false;
 	palette_updated = true;
 
@@ -1021,6 +1037,9 @@ void BaseTextureCacheData::Update()
 	if (g_taSplitEnabled)
 		g_texConvUs += _conv_us;
 	u64 _up_t0 = g_taSplitEnabled ? ta_split_now_us() : 0;
+	// FC_TEX_GPU_MORTON: o upload cru (bytes twiddled) e feito dentro do
+	// UploadToGPU (o derivado tem texID); a flag informa o caminho.
+	gpu_morton = IsGpuMorton(tsp, tcw);
 	UploadToGPU(upscaled_w, upscaled_h, (u8*)temp_tex_buffer, IsMipmapped(), mipmapped);
 	if (g_taSplitEnabled)
 	{

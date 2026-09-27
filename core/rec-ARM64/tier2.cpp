@@ -119,6 +119,8 @@ struct Region
 	u8 *codeBegin = nullptr, *codeEnd = nullptr;	// faixa de codigo da regiao (RW)
 	bool hasPref = false;		// regiao descarrega a SQ (nao entra na autochecagem)
 	bool hasWrite = false;		// regiao escreve memoria (idem: replay nao e seguro)
+	u8 *bailStub = nullptr;		// saida de emergencia no 1o fault (fallback tier1)
+	std::vector<std::pair<uintptr_t, u32>> blockRanges;	// (host RX inicio, vaddr), ordenado
 };
 
 std::vector<Region> regions;
@@ -135,6 +137,11 @@ bool optionAuto;	// core option flycast2026_tier2 (libretro.cpp -> tier2_set_cor
 u32 installed;
 std::set<u32> inRegion;		// blocos em regiao viva (fora da formacao)
 std::set<u32> badBlocks;		// recusados de vez (fora das proximas janelas)
+// Self-healing generico: setado pelo handler de SIGSEGV quando uma regiao
+// acessa fora da RAM. Enquanto != 0, os ganchos de entrada de TODA regiao
+// desviam pro JIT normal (tier1) -- nenhuma regiao executa ate o ponto seguro
+// desfazer a culpada e zerar a flag. Ver docs/tier2_selfhealing_plan.md.
+volatile u32 tier2BailFlag = 0;
 
 // ---- design 1 (FC_TIER2_FULL_THREAD): tier2 inteiro na thread -------------
 // A emu thread entrega os blocos (shared_ptr) numa fila SPSC e so INSTALA o
@@ -397,6 +404,7 @@ public:
 	std::map<u32, Label *> blockLabel;
 	std::vector<Label *> owned;
 	std::map<u32, Label *> entryLabel;
+	Label *bailLabel = nullptr;	// saida de emergencia no 1o fault (self-healing)
 	// estado por bloco
 	std::map<const shil_opcode *, std::pair<int, s32>> groupOf;	// op -> (ptr x6/x7, deslocamento)
 	bool tAfterJcond = false;
@@ -413,6 +421,9 @@ public:
 		Str(w17, MemOperand(x16));
 	}
 	Register decision = w15;
+	// true enquanto emitimos o delay slot de um jcond: um call (pref->SQ) ali
+	// clobberaria o scratch da decisao (w15/w16) e o desvio sairia errado.
+	bool inJcondSlot = false;
 
 	~Tier2Compiler() { for (Label *l : owned) delete l; }
 	Label *newLabel() { Label *l = new Label(); owned.push_back(l); return l; }
@@ -942,6 +953,10 @@ public:
 			else Str(W_(r), Ctx(r));
 		}
 		Mov(w0, addr);
+		// call no delay slot de um jcond: a decisao do desvio (w15/w16) e
+		// scratch do host e seria clobbberada pelo call. Preserva.
+		bool protect = inJcondSlot;
+		if (protect) Str(decision, MemOperand(sp, -16, PreIndex));
 		if (groupsLive)		// ponteiros de grupo de store atravessam a chamada
 			Stp(x6, x7, MemOperand(sp, -16, PreIndex));
 		Sub(x9, x28, offsetof(Sh4RCB, cntx) - offsetof(Sh4RCB, do_sqw_nommu));
@@ -950,6 +965,7 @@ public:
 		Blr(x9);
 		if (groupsLive)
 			Ldp(x6, x7, MemOperand(sp, 16, PostIndex));
+		if (protect) Ldr(decision, MemOperand(sp, 16, PostIndex));
 		Add(x13, x28, sizeof(Sh4Context));
 		for (int r : spill)
 		{
@@ -1347,6 +1363,14 @@ public:
 			Label *el = newLabel();
 			entryLabel[e] = el;
 			Bind(el);
+			Label *rl = newLabel();
+			// self-healing generico (docs/tier2_selfhealing_plan.md): se uma
+			// regiao acessou fora da RAM, o handler marca a flag; nenhuma
+			// entrada de regiao executa -- cai no bloco antigo (tier1). A flag
+			// e zerada no ponto seguro, junto com o desfazimento da culpada.
+			Mov(x16, (u64)(uintptr_t)&tier2BailFlag);
+			Ldr(w0, MemOperand(x16));
+			Cbnz(w0, rl);
 			if (selfcheck)
 			{
 				// autochecagem: amostra o estado na entrada (o id e o PC da
@@ -1366,7 +1390,6 @@ public:
 				}
 			if (vec_xf)
 				Ld1(v4.V4S(), v5.V4S(), v6.V4S(), v7.V4S(), MemOperand(x28, ctx_off(reg_xf_0)));
-			Label *rl = newLabel();
 			Cmp(w27, guard[e]);
 			B(rl, lt);
 			bump(&cntEntries);
@@ -1446,6 +1469,7 @@ public:
 					if (d.test(reg_sr_T)) tAfterJcond = true;
 				}
 			decision = w15;
+			bool jcSlot = false;
 			for (size_t j = 0; j < b.ir.size(); j++)
 			{
 				const shil_opcode &o = b.ir[j];
@@ -1455,7 +1479,9 @@ public:
 						for (const shil_opcode &p : blk[vv].ir)
 							if (p.op == shop_writem && p.rs1.is_reg() && p.rs1._reg == o.rs1._reg)
 								sqLikely = true;
+				inJcondSlot = jcSlot;
 				op(o, after[j], sqLikely);
+				jcSlot = (o.op == shop_jcond);
 			}
 			u32 nxt = i + 1 < lay.size() ? lay[i + 1] : 0xFFFFFFFF;
 			if (b.dyn)
@@ -1503,6 +1529,22 @@ public:
 		}
 		for (size_t i = 0; i < cold.size(); i++)	// cold pode crescer? nao: stubs nao geram stubs
 			cold[i]();
+		// Self-healing: saida de emergencia no 1o fault. O handler de SIGSEGV
+		// escreve o vaddr do bloco que deu fault em Ctx(reg_nextpc) e salta
+		// pra ca; salvamos todos os registradores homed (como o exitStub) e
+		// devolvemos ao despachante, que reexecuta o bloco pelo JIT normal.
+		bailLabel = newLabel();
+		Bind(bailLabel);
+		for (int r = 0; r < sh4_reg_count; r++)
+		{
+			if (!W.test(r) || r == reg_sr_T || home[r] < 0)
+				continue;
+			if (is_fp(r)) Str(S_(r), Ctx(r));
+			else Str(W_(r), Ctx(r));
+		}
+		Str(w15, Ctx(reg_sr_T));
+		Ldr(w29, Ctx(reg_nextpc));
+		BranchAbs(t2_no_update);
 		// contadores numa linha de cache propria (sao escritos a cada volta)
 		while (GetBuffer()->GetCursorOffset() & 63)
 			dc32(0);
@@ -1882,6 +1924,13 @@ void finish()
 	reg.codeEnd = t2_ptr + size;
 	reg.hasPref = c->hasPref;
 	reg.hasWrite = c->hasWrite;
+	// self-healing: endereco (RX) do bail stub + mapa host-PC (RX) -> vaddr
+	reg.bailStub = c->bailLabel != nullptr
+			? (u8 *)CC_RW2RX(t2_ptr + c->bailLabel->GetLocation()) : nullptr;
+	reg.blockRanges.reserve(c->blockLabel.size());
+	for (auto &kv : c->blockLabel)
+		reg.blockRanges.push_back({(uintptr_t)CC_RW2RX(t2_ptr + kv.second->GetLocation()), kv.first});
+	std::sort(reg.blockRanges.begin(), reg.blockRanges.end());
 	installed++;
 	if (const char *dd = getenv("FC_TIER2_DUMP"))	// diagnostico: bytes da regiao
 	{
@@ -2615,10 +2664,11 @@ void tier2_safe_point()
 	{
 		u32 id = scUnhookId;
 		scUnhookId = 0;
+		tier2BailFlag = 0;		// fim do bail: regioes podem voltar a executar
 		for (Region &r : regions)
 			if (r.alive && r.id == id)
 			{
-				fprintf(stderr, "tier2: regiao #%u acessou MMIO -- desfeita (blocos marcados como lentos)\n", id);
+				fprintf(stderr, "tier2: regiao #%u acessou MMIO -- bail + desfeita (blocos marcados como lentos)\n", id);
 				unhook(r);
 				for (u32 va : r.blocks)
 					slowMem.insert(va);
@@ -2734,15 +2784,37 @@ bool tier2_fault(void *ucv, u32 guest)
 	if (!tier2_owns_pc(pc))
 		return false;
 	scFaulted = true;		// autochecagem: nao reexecuta esse trecho
-	// Acesso a MMIO dentro de regiao: a emulacao aqui nao reproduz o
-	// escalonamento por bloco do JIT (tempo global parado dentro do laco), o
-	// que trava jogos que fazem polling de timer. Marca a regiao pra desfazer.
+	// Self-healing generico (docs/tier2_selfhealing_plan.md): acesso fora da
+	// RAM dentro de uma regiao. Em vez de emular o acesso e DEIXAR A REGIAO
+	// CONTINUAR (o que corrompe estado ate o ponto seguro), sai da regiao na
+	// hora e devolve o bloco ao JIT normal (tier1), que tem o caminho lento
+	// correto. Marca a regiao pra desfazer e poe a flag de bail (ate o ponto
+	// seguro, os ganchos de entrada das regioes desviam pro JIT normal).
 	{
 		u8 *pcw = (u8 *)CC_RX2RW((void *)pc);
 		for (const Region &r : regions)
 			if (r.alive && pcw >= r.codeBegin && pcw < r.codeEnd)
 			{
 				scUnhookId = r.id;
+				u32 va = 0;
+				for (size_t i = 0; i < r.blockRanges.size(); i++)
+					if (r.blockRanges[i].first <= pc
+							&& (i + 1 == r.blockRanges.size() || r.blockRanges[i + 1].first > pc))
+					{
+						va = r.blockRanges[i].second;
+						break;
+					}
+				if (va != 0 && r.bailStub != nullptr)
+				{
+					static int nBail;
+					if (nBail++ < 8)
+						fprintf(stderr, "tier2: BAIL regiao #%u pc=%zx guest=%08X -> bloco %08X\n",
+								r.id, (size_t)pc, guest, va);
+					tier2BailFlag = 1;
+					p_sh4rcb->cntx.pc = va;
+					uc->uc_mcontext.pc = (uintptr_t)r.bailStub;
+					return true;
+				}
 				break;
 			}
 	}

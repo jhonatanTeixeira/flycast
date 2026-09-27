@@ -177,6 +177,7 @@ float g_declaredFps = 60.0f;
 // Wall-clock duration of the PREVIOUS full retro_run() call -- see extern
 // declaration in core/rend/transform_matrix.h.
 float g_lastFrameTimeMs = 0.0f;
+u64 g_lastPresentUs = 0;	// tempo do video_cb (present) do ultimo frame
 
 // Hicup (estabilidade): conta frames com tempo > 2x a mediana da janela. Mede
 // a CAUDA, que fps/p50 escondem. Despejado no FC_IDLE_FF_STATS. Ver 4.84.
@@ -1364,7 +1365,13 @@ void retro_run (void)
 	   dc_run();
    }
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES) || defined(HAVE_VULKAN)
-   video_cb(is_dupe ? 0 : RETRO_HW_FRAME_BUFFER_VALID, screen_width, screen_height, 0);
+   {
+      extern u64 g_lastPresentUs;
+      auto p0 = std::chrono::steady_clock::now();
+      video_cb(is_dupe ? 0 : RETRO_HW_FRAME_BUFFER_VALID, screen_width, screen_height, 0);
+      g_lastPresentUs = (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - p0).count();
+   }
 #endif
 #if !defined(TARGET_NO_THREADS)
    if (!settings.rend.ThreadedRendering)
@@ -1637,9 +1644,14 @@ void retro_run (void)
                 fprintf(f, "waited_for_render\t%u\n", g_queueWaits);
                 fprintf(f, "render_work_ms_ema\t%.2f\n", g_rendWorkUsEma.load() / 1000.0);
                 fprintf(f, "game_interval_ms_ema\t%.2f\n", g_rendIntervalCyclesEma / 200000.0);
-                fprintf(f, "hiccups\t%llu\n", (unsigned long long)g_hicCount);
-                fprintf(f, "hiccup_rate_pct\t%.2f\n", g_hicFrames ? 100.0 * (double)g_hicCount / g_hicFrames : 0.0);
-                fprintf(f, "frame_median_ms\t%.2f\n", g_hicMed);
+                 fprintf(f, "hiccups\t%llu\n", (unsigned long long)g_hicCount);
+                 fprintf(f, "hiccup_rate_pct\t%.2f\n", g_hicFrames ? 100.0 * (double)g_hicCount / g_hicFrames : 0.0);
+                 fprintf(f, "frame_median_ms\t%.2f\n", g_hicMed);
+                 extern u32 g_pacerDiv, g_pacerSkips;
+                 fprintf(f, "pacer_div\t%u\n", g_pacerDiv);
+                 fprintf(f, "pacer_skips\t%u\n", g_pacerSkips);
+                 extern u64 g_renderBudgetUs;
+                 fprintf(f, "render_budget_ms\t%.2f\n", g_renderBudgetUs / 1000.0);
 #if HOST_CPU == CPU_ARM64
                 extern u64 g_tier2EmuUs;
                 fprintf(f, "tier2_emu_us_total\t%llu\n", (unsigned long long)g_tier2EmuUs);

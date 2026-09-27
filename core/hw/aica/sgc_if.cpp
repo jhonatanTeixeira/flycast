@@ -28,6 +28,8 @@
 #include <chrono>
 #include <thread>
 #include <cstdlib>
+#include <mutex>
+#include <condition_variable>
 #undef FAR
 
 //#define CLIP_WARN
@@ -1565,6 +1567,13 @@ static std::atomic<u32> rqHead { 0 }, rqTail { 0 };
 static std::thread rqThread;
 static std::atomic<bool> rqQuit { false };
 static int rqMode = -1;	// -1 nao decidido, 0 sincrono, 1 thread
+// Handoff emu->mix por futex (docs/thread_separation_plan.md, invariantes 2 e 5:
+// "fila cheia -> descarta, nunca bloqueia o produtor"; "park em futex, 0 CPU").
+// Antes era spin/yield: o perf mostrou __sched_yield em ~20% do CPU da emu. O
+// mix (worker) e ~0,6%; a espera ativa so roubava o core dos outros.
+static std::mutex rqMx;
+static std::condition_variable rqCvData;	// acorda o worker quando ha bloco
+static std::condition_variable rqCvSpace;	// acorda a emu quando o worker drena
 
 static inline u64 aica_rticks()
 {
@@ -1703,16 +1712,23 @@ static void aica_render_worker()
 {
 	for (;;)
 	{
-		u32 t = rqTail.load(std::memory_order_relaxed);
-		if (t == rqHead.load(std::memory_order_acquire))
+		u32 t;
 		{
-			if (rqQuit.load(std::memory_order_acquire))
+			std::unique_lock<std::mutex> l(rqMx);
+			// park em futex: 0 CPU quando a fila esta vazia (era sleep de 1ms
+			// em loop -> acordava a toa). docs/thread_separation_plan.md, inv. 5.
+			rqCvData.wait(l, [&] {
+				return rqTail.load(std::memory_order_relaxed) != rqHead.load(std::memory_order_acquire)
+					|| rqQuit.load(std::memory_order_acquire);
+			});
+			if (rqQuit.load(std::memory_order_acquire)
+					&& rqTail.load(std::memory_order_relaxed) == rqHead.load(std::memory_order_acquire))
 				break;
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			continue;
+			t = rqTail.load(std::memory_order_relaxed);
 		}
 		aica_render_block(rq[t % rqCap]);
 		rqTail.store(t + 1, std::memory_order_release);
+		rqCvSpace.notify_one();	// liberou um slot pro produtor
 	}
 }
 
@@ -1721,8 +1737,11 @@ void aica_mix_sync()
 {
 	if (rqMode != 1)
 		return;
-	while (rqTail.load(std::memory_order_acquire) != rqHead.load(std::memory_order_relaxed))
-		std::this_thread::yield();
+	// savestate/reset/term: espera o worker drenar. Park em futex, nao spin.
+	std::unique_lock<std::mutex> l(rqMx);
+	rqCvSpace.wait(l, [] {
+		return rqTail.load(std::memory_order_acquire) == rqHead.load(std::memory_order_relaxed);
+	});
 }
 
 static void aica_render_stop()
@@ -1731,6 +1750,7 @@ static void aica_render_stop()
 	if (rqThread.joinable())
 	{
 		rqQuit.store(true, std::memory_order_release);
+		rqCvData.notify_all();	// acorda o worker parkeado pro join
 		rqThread.join();
 		rqQuit.store(false);
 	}
@@ -1757,8 +1777,11 @@ static RBlock& aica_block_acquire()
 		extern bool g_rendSplitEnabled;
 		if (g_rendSplitEnabled)
 			g_aicaQueueFullWaits++;
-		while (h - rqTail.load(std::memory_order_acquire) >= rqCap)
-			std::this_thread::yield();
+		// Fila cheia: park em futex (0 CPU) ate o worker drenar. Antes era
+		// yield/spin -> perf mostrou __sched_yield em ~20% do CPU da emu.
+		// docs/thread_separation_plan.md, invariante 5.
+		std::unique_lock<std::mutex> l(rqMx);
+		rqCvSpace.wait(l, [&] { return h - rqTail.load(std::memory_order_acquire) < rqCap; });
 	}
 	return rq[h % rqCap];
 }
@@ -1771,6 +1794,7 @@ static void aica_block_publish(RBlock& b)
 		return;
 	}
 	rqHead.store(rqHead.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+	rqCvData.notify_one();
 }
 
 void AICA_Sample32()

@@ -181,3 +181,84 @@ independentes, ambas confirmadas por medição — não uma "bala de prata" úni
   jogo em tempo real quando a cena fica pesada → só melhora com **qualidade do
   código gerado pelo JIT** (menos instruções ARM64 por opcode SH4 traduzido),
   não há "bug" pontual pra caçar aqui.
+
+## 4.86 — Crash do tier2 em Marvel vs. Capcom 2 e Capcom vs. SNK 2 (região de vértice/SQ)
+
+**Status: CORRIGIDO (2026-09-27).** Causa raiz: um `pref` (→ call SQ) no **delay
+slot de um `jcond`** clobbera o `decision` (w15/w16, scratch do host) — a
+liveness de SH4 não modela o uso do desvio, então o call não o preservava →
+desvio errado → stream de TA/SQ corrompido → `die()` no YUV. Fix: `sqCall`
+salva/restaura `decision` quando `inJcondSlot`. **Self-healing genérico** junto:
+no 1º fault fora da RAM, a região **baila** pro JIT normal (bail stub +
+`tier2BailFlag` nos ganchos de entrada) em vez de continuar. Medido: MvC2/CvS2
+EXIT 0; MvC2 neutro (520×519), DOA2 sem regressão (437×435). Detalhe na sessão
+2026-09-27 11:40 do `history.md`. (Os itens abaixo foram a fase de diagnóstico.)
+
+- **Sintoma:** os dois jogos de luta crasham com `die(): YUV_data : YUV decoder
+  not inited` (`core/hw/pvr/pvr_mem.cpp:145`), seguido de `DEBUGBREAK`
+  (`libretro.cpp:3796`), exit code 133. Reproduzido no device (fresh boot, sem
+  savestate — o modo benchmark do `retrorun3` roda com `saves=disabled`).
+- **A/B decisivo:** com `flycast2026_tier2 = disabled` os dois **não crasham**
+  (benchmark de 20s completo, EXIT 0). Com tier2 on, crasha em ~7s. **É o
+  tier2.**
+- **Isolamento (MvC2, `FC_TIER2_MAXREG`):** 1..7 → sem crash; **8 → crash**. A
+  8ª região é a de 9 blocos `8C13059A 8C1304F6 8C1305CE 8C1305C6 8C130590
+  8C13059C 8C1305D6 8C1305DE 8C1304E6` (loop de transformação de vértice + SQ:
+  `ftrv`, muitos `writem` em `r6` decrescente e `pref`). No CvS2 a região
+  análoga é a #2, mesma assinatura "9 blocos, 34 spills em 4 chamadas".
+- **Mecanismo:** a região (1) lê ponteiros fora da RAM (MvC2: `14F5A010`,
+  `4C6AAD38`; CvS2: `FFD8000C`), é marcada "acessou MMIO -- desfeita", mas (2)
+  o desfazimento só acontece no **próximo ponto seguro** (`tier2_safe_point`,
+  gated `&63`), então a região **continua executando depois do fault**. O
+  resultado é stream de TA/SQ corrompido → o parser da TA lê um comando YUV sem
+  `YUV_init` → `die()`. A `die()` já chama `YUV_init()` em seguida (o autor
+  queria recuperar), mas o `DEBUGBREAK` mata o processo antes.
+- **Buraco de segurança (a raiz do "self-healing" faltando):**
+  1. `tier2_selfcheck` **recusa** região com `hasPref`/`hasWrite`
+     (`tier2.cpp:2443`) — justamente as regiões de vértice/SQ ficam **sem
+     autochecagem**.
+  2. O `tier2_fault` **emula o fault e deixa a região continuar** (só agenda o
+     desfazimento). A janela entre o 1º fault e o ponto seguro é onde a
+     corrupção acontece.
+  3. `tier2_fault` não decodifica **load de grupo com offset imediato**
+     (`ldr wt, [xn, #imm]`, `insn & 0xFFC00000 == 0xB9400000`): cai no `return
+     false` (`tier2.cpp:2811`) e o SIGSEGV segue pro `ngen_Rewrite` — outro
+     caminho de crash latente.
+- **Próximo (self-healing, `docs/thread_separation_plan.md` §5):** no 1º fault
+  dentro de uma região, **abortar a região imediatamente e voltar pro JIT
+  normal** (fallback tier1) em vez de emular e continuar; e/ou estender a
+  verificação neutra para cobrir `hasPref`/`hasWrite`. Ver plano na sessão
+  2026-09-27 10:30 em `docs/history.md`.
+
+## 4.87 — ABERTO (ideia futura): como serializar a VRAM sem o `re.Wait` curto
+
+**Status: aberto — procurar abordagem melhor.** Contexto: com o modelo no-wait
+(`4.85`/`docs/frame_pacing_plan.md`), o `no-wait` deixou a **emu thread correr à
+frente do render**, e isso expôs uma **corrida na VRAM**: a emu escreve o sprite
+N+1 (streaming de sprites) enquanto a main thread ainda lê/subiu a textura do
+frame N → sprite com blocos de cor errada ("glitch"). Não é o Morton — com o
+wait antigo nunca aparecia; o Morton só tornou visível (sobe bytes crus).
+
+**Paliativo atual:** `g_emuWaitRe` (`FC_EMU_WAIT_RE`, default 1) —
+`rend_end_render` faz `re.Wait()` **só até o `Process`** (upload de textura),
+não até o draw. Corrige o glitch custando ~5% de frames no MvC2 (~733→718,
+`core_average` ~7,0→7,8ms). Muito mais barato que o `FC_EMU_WAIT=1` cheio (que
+espera o frame inteiro).
+
+**O que investigar (a ideia futura):** como garantir que o render leia a VRAM
+**consistente com o frame enfileirado** sem bloquear a emu:
+1. **Snapshot da VRAM atrelado ao frame** — a `TA_context` guarda geometria/
+   endereços, não o **conteúdo** da textura no momento do enfileiramento. Copiar
+   (ou versionar por página) a VRAM referenciada no frame resolveria por
+   construção, sem wait. Custo: memória/cópia (avaliar dirty-page tracking).
+2. **Wait por dependência** — só esperar se o frame referencia página de VRAM que
+   a emu **vai** tocar antes do render consumir (hoje é sempre).
+3. **Fence/GRANULARIDADE por textura** — marcar as texturas de um frame e atrasar
+   o upload/uso só delas até o render anterior liberar.
+4. **Ler a VRAM no `Process` (main), não no `Render`** — se o upload já copiou os
+   bytes pro GL, a sobrescrita da VRAM depois não afeta; o furo é texto lida
+   *depois* do `Process` (ex.: upload preguiçoso/`Update` no draw).
+
+Medir antes de codar (regra do projeto): contador de "frame enfileirado cuja
+VRAM foi escrita antes do render consumir" dimensiona o problema e decide entre
+(1)-(4).

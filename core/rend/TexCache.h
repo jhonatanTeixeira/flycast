@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
 extern u8* vq_codebook;
@@ -17,6 +18,9 @@ extern u32 pal_hash_256[4];
 extern u32 pal_hash_16[64];
 extern bool KillTex;
 extern bool palette_updated;
+// protege palette32_ram/palette16_ram entre a emu thread (palette_update) e a
+// main thread (UpdatePaletteTexture) -- ver TexCache.cpp.
+extern std::mutex g_palMutex;
 // true quando o renderer GL ativo compila o shader de paleta bilinear
 // (pp_Palette == 2); define se IsGpuHandledPaletted aceita FilterMode == 1.
 extern bool g_paletteBilinearSupported;
@@ -699,6 +703,24 @@ public:
 	bool content_hash_valid;	// ...whether content_hash holds anything yet
 	u32 last_update_frame;		// FrameCount do ultimo Update(), p/ detectar re-upload no mesmo frame
 	u32 vq_codebook;            // VQ quantizers table for compressed textures
+	// FC_TEX_GPU_MORTON: sobe os bytes crus twiddled (pal4/pal8, nearest) e o
+	// shader faz o untwiddle Morton + paleta por fragmento (fiel ao PowerVR).
+	// raw_w/raw_h = dimensoes da textura R8 crua (raw_h = bytes/raw_w).
+	bool gpu_morton = false;
+	u32 raw_w = 0, raw_h = 0;
+	bool is_pal8 = false;
+	static bool GpuMortonEnabled()
+	{
+		static int e = -1;
+		if (e == -1) e = getenv("FC_TEX_GPU_MORTON") != nullptr ? 1 : 0;
+		return e == 1;
+	}
+	// Elegivel: paletizada, nearest, sem VQ/mipmap/upscale/dump -- subir cru.
+	bool IsGpuMorton(TSP tsp, TCW tcw)
+	{
+		return GpuMortonEnabled() && IsGpuHandledPaletted(tsp, tcw)
+				&& tsp.FilterMode == 0 && !tcw.MipMapped && !tcw.VQ_Comp;
+	}
 	u32 texture_hash;			// xxhash of texture data, used for custom textures
 	u32 old_texture_hash;		// legacy hash
 	u8* custom_image_data;		// loaded custom image data
