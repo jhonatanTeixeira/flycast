@@ -92,6 +92,7 @@ extern "C" void tier2_check_exit(u32 id, u32 pc);
 extern u8 *CodeCache;
 extern u32 tier2_code_reserve;		// driver.cpp: cauda do cache reservada
 extern bool tier2_poll;		// sh4_interpreter.cpp: UpdateSystem chama tier2_safe_point
+extern u32 tier2_poll_mask;	// sh4_interpreter.cpp: chamar o safe_point a cada (mask+1) fatias
 
 // Reserva da cauda do cache de codigo. FC_TIER2_AREA (bytes) para A/B.
 static u32 T2_AREA = 1024 * 1024;
@@ -1519,6 +1520,13 @@ void read_cfg()
 {
 	cfg_read = true;
 	T2_AREA = t2AreaInit();
+	{
+		// Chamar o safe_point a cada (mask+1) fatias. Default 63 = 1/64: o call
+		// por fatia custava ~0,9 fps no Shenmue (4.85); a amostragem interna
+		// compensa (amostra toda chamada, drena a cada 64).
+		const char *pm = getenv("FC_TIER2_POLL_MASK");
+		tier2_poll_mask = pm != nullptr ? (u32)atoi(pm) : 63;
+	}
 	if (const char *m = getenv("FC_TIER2_MAXREG"))
 		maxRegions = (u32)atoi(m);
 	{
@@ -2633,10 +2641,9 @@ void tier2_safe_point()
 	}
 	if (autoMode || optionAuto)
 	{
-		// 1 amostra a cada 64 fatias (~7 mil/s): cada uma custa uma busca
-		// no mapa de blocos, cara no A53 (todas as fatias = -12% no DOA2)
-		if (++pollCount & 63)
-			return;
+		// O call ja vem gateado (1/64 fatias via tier2_poll_mask): amostra toda
+		// chamada (= 1/64 fatias) e drena a cada 64 chamadas (= 1/4096 fatias).
+		// Chamar por fatia custava ~0,9 fps no Shenmue (4.85).
 		Tier2EmuAcc _emuAcc;
 		if (inFlight)
 		{
@@ -2650,7 +2657,7 @@ void tier2_safe_point()
 			sampleBuf[w & (SAMPLE_BUF - 1)] = t2_last_pc;
 			sampleW.store(w + 1, std::memory_order_release);
 		}
-		if (pollCount & 4095)
+		if (++pollCount & 63)
 			return;
 		check_regions();
 		if (fullThreadEnabled())

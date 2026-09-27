@@ -2880,3 +2880,15 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Medido (Shenmue 2 pares):** on 26,4/26,4 fps e VEL 87,9/87,7% × off 26,3/25,9
   e 87,4/86,2%. **Custo emu: 435 → 83 µs/frame** (DOA2 283 → 68). DOA2 VEL
   94,8 → 95,8%. Fica **opt-in** (default off) até validar mais.
+
+## 2026-09-27 03:00 — tier2: o overhead do Shenmue era o call por fatia
+
+- A conta não fechava (tier2 era perda líquida no Shenmue). Isolado: não eram as
+  regiões (desfazer todas não recuperava) nem o trabalho da emu thread (83 µs).
+- **Era o `tier2_safe_point` chamado do `UpdateSystem` a CADA fatia** (com tier2
+  desligado o call nem acontece). `FC_TIER2_POLL_MASK`: mask0 26,3 / mask63 27,1
+  / mask1023 27,3 / off 27,2 fps — o call era ~0,9 fps.
+- **Fix:** gate `&63` no call site (default 1/64) + amostrar toda chamada
+  (cadência de amostragem/drain idêntica, 64× menos calls).
+- **Medido:** Shenmue 26,3 → 26,8 (off 27,3; os ~0,5 restantes são as 16
+  regiões); DOA2 38,6/88,6% → 39,1/96,4%. Deploy `a03a0503`.
