@@ -1906,6 +1906,83 @@ bool group_has_loop(const std::vector<u32> &members, const std::map<u32, Runtime
 	return false;
 }
 
+// Dolphin-style branch following: completa um grupo (laco) seguindo as arestas
+// estaticas BranchBlock/NextBlock ate blocos FRIOS que fecham o ciclo. Entra o
+// bloco que esta num caminho que sai do grupo e VOLTA a ele; sem isso, um laco
+// com blocos frios no meio (Shenmue: transformacao de vertices, ~7 blocos por
+// vertice) se fragmenta em varios grupos pequenos de baixo reuso e e removido.
+// FC_TIER2_FOLLOW=0 desliga. docs/current_plan.md.
+static bool followEnabled()
+{
+	static const bool e = getenv("FC_TIER2_FOLLOW") == nullptr;
+	return e;
+}
+
+static RuntimeBlockInfo *rbiOf(u32 va, std::map<u32, RuntimeBlockInfo *> &rb)
+{
+	auto it = rb.find(va);
+	if (it != rb.end())
+		return it->second;
+	RuntimeBlockInfo *b = bm_GetBlock(va).get();
+	if (b != nullptr)
+		rb[va] = b;
+	return b;
+}
+
+static void complete_loop(std::vector<u32> &group, std::map<u32, RuntimeBlockInfo *> &rb, u32 maxBlocks)
+{
+	std::set<u32> G(group.begin(), group.end());
+	std::set<u32> fwd = G;
+	std::vector<u32> q(group.begin(), group.end());
+	for (size_t i = 0; i < q.size() && fwd.size() < maxBlocks; i++)
+	{
+		RuntimeBlockInfo *b = rbiOf(q[i], rb);
+		if (b == nullptr)
+			continue;
+		u32 s[2] = { b->BranchBlock, b->NextBlock };
+		for (u32 t : s)
+		{
+			if (t == 0xFFFFFFFF || fwd.count(t) || slowMem.count(t))
+				continue;
+			RuntimeBlockInfo *tb = bm_GetBlock(t).get();
+			if (tb == nullptr || !block_ok(tb))
+				continue;
+			fwd.insert(t);
+			rb[t] = tb;
+			q.push_back(t);
+			if (fwd.size() >= maxBlocks)
+				break;
+		}
+	}
+	// arestas reversas dentro de fwd
+	std::map<u32, std::vector<u32>> rev;
+	for (u32 v : fwd)
+	{
+		RuntimeBlockInfo *b = rbiOf(v, rb);
+		if (b == nullptr)
+			continue;
+		u32 s[2] = { b->BranchBlock, b->NextBlock };
+		for (u32 t : s)
+			if (t != 0xFFFFFFFF && fwd.count(t))
+				rev[t].push_back(v);
+	}
+	// blocos de fwd que alcancam o grupo (BFS reverso a partir do grupo)
+	std::set<u32> back = G;
+	std::vector<u32> q2(group.begin(), group.end());
+	for (size_t i = 0; i < q2.size(); i++)
+	{
+		auto it = rev.find(q2[i]);
+		if (it == rev.end())
+			continue;
+		for (u32 p : it->second)
+			if (back.insert(p).second)
+				q2.push_back(p);
+	}
+	for (u32 v : fwd)
+		if (back.count(v) && !G.count(v))
+			group.push_back(v);
+}
+
 void form_regions()
 {
 	u64 total = 0;
@@ -1968,6 +2045,8 @@ void form_regions()
 	std::vector<std::pair<u64, std::vector<u32>>> cand;
 	for (auto &kv : groups)
 	{
+		if (followEnabled())
+			complete_loop(kv.second, rb, 40);
 		u64 hsum = 0;
 		for (u32 v : kv.second)
 			hsum += heat[v];
