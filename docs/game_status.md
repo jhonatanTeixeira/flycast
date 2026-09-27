@@ -86,6 +86,13 @@ mslug6 (upload de textura) ou outro. É um candidato barato para o próximo
 corte, porque o problema é localizado.
 
 ### Shenmue — melhorou muito
+**2026-09-26:** com tier2 ligado, no state do parque, **98,8% de velocidade,
+29,6 fps** (benchmark limpo, `perfmax performance`). **Glitch do chão:** o
+usuário viu o chão sumir em algumas áreas durante gameplay; investigado em
+4.76 — era corrupção de estado esporádica do tier2 (com input), não
+reproduzível de forma determinística (a autochecagem opt-in foi implementada
+pra caçar). Com tier2 desligado, determinístico e correto.
+
 **Medido em 2026-09-19 (savestate novo do usuário, cena de ~20fps):** 17,2
 fps, jogo a 57,7% de velocidade. **Não é CPU emulada** (ela sobra). É render:
 GPU ~35ms/frame (majoritariamente fill-rate) + envio GL ~20ms (586 draw
@@ -270,6 +277,10 @@ padrão): ~19 frames/s. Próximo passo: pular o laço de atraso. Ver 4.39.
 console), avaliado pelo usuário: "isso é o le mans que eu me lembro".
 Caminho: strlen cobrado x30 corrigido (4.41), laço de atraso pulado (4.40),
 clock 0.8 só para ele (4.42).
+**Atualização 2026-09-26:** o save novo (mesma pista/carro) voltou a 15 fps
+por um **laço de espera encadeado de 4 blocos** que o detector por bloco não
+via; assinatura nova (`chained-wait-loop-getter-cmp`) → **30 fps a 99,9%** (4.81).
+Aguardando validação do usuário jogando.
 
 ### Shenmue II (DC, Europe) — medido 2026-09-24
 Save numa cena de ~20 fps. Limitado pela emulação do SH4 (não GPU: 320×240
@@ -278,3 +289,180 @@ velocidade, 20 → 25 fps. Usuário vai criar save de cena mais pesada. 4.43.
 Save novo (pesado, 2026-09-24): 56,5% / 17 fps (jogo pede 30). Com o render
 do som em thread própria: 60,6% / 18,2 fps. O resto é JIT do SH4 (~50ms por
 frame, perfil plano) + 8ms de som/ARM7 na emu thread. 4.44.
+
+## Bateria de 27 jogos — 2026-09-25, core `2ea46c054` (commit `2ea46c054`)
+
+Core do device = build do commit `2ea46c054` (o de ontem, sem tier2, sem AICA
+thread, sem CHD thread), cfgs originais (`sh4clock=d10`, `framerate=normal`,
+`frame_budget_skip_translucent=disabled`). 1 rodada por jogo, savestate
+`.fc2021-rrstate.auto`, 20s + 8s de warmup, `retrorun3 --benchmark`,
+**governor `ondemand` fora do `perfmax`** (o ES usa `perfmax performance`,
+tech_debits 4.70, então esses números são piores que os do ES). Tempos em ms.
+VEL% = `audio_frames / (duração × 44100)`.
+
+| jogo | sistema | VEL% | fps | média | p50 | p95 | p99 | underruns |
+|---|---|---|---|---|---|---|---|---|
+| ggx15 | Atomiswave | 100,0 | 47,6 | 19,4 | 18,2 | 43,0 | 53,2 | 1 |
+| kofnw | Atomiswave | 99,9 | 51,2 | 18,3 | 13,4 | 37,1 | 44,3 | 2 |
+| kofxi | Atomiswave | 99,9 | 59,0 | 14,4 | 6,8 | 36,3 | 38,1 | 4 |
+| mslug6 | Atomiswave | 70,4 | 21,1 | 46,3 | 45,8 | 50,6 | 57,3 | 126 |
+| ngbc | Atomiswave | 100,0 | 56,0 | 15,6 | 7,5 | 37,5 | 40,2 | 3 |
+| samsptk | Atomiswave | 100,0 | 43,6 | 20,8 | 16,1 | 40,5 | 44,2 | 2 |
+| ggxx | Naomi | crash (`Trace/breakpoint trap`, sem JSON; 4.71) | | | | | | |
+| ggxxsla | Naomi | 100,1 | 57,4 | 15,9 | 13,6 | 30,8 | 40,8 | 2 |
+| gwing2 | Naomi | 96,6 | 51,9 | 17,4 | 16,0 | 28,3 | 42,8 | 33 |
+| mbaa | Naomi | 99,9 | 59,8 | 14,9 | 7,9 | 35,2 | 37,3 | 2 |
+| meltybld | Naomi | 82,7 | 47,8 | 19,8 | 10,9 | 41,9 | 100,5 | 54 |
+| sfz3ugd | Naomi | 100,1 | 59,7 | 12,0 | 9,0 | 32,0 | 35,1 | 1 |
+| slashout | Naomi | 100,1 | 36,2 | 26,3 | 24,8 | 41,9 | 51,3 | 3 |
+| zombrvn | Naomi | 100,3 | 51,9 | 18,2 | 16,2 | 28,5 | 34,4 | 4 |
+| Soulcalibur | Dreamcast | 100,2 | 60,0 | 15,4 | 14,1 | 21,5 | 27,0 | 11 |
+| Project Justice | Dreamcast | 99,9 | 59,5 | 14,7 | 13,0 | 27,9 | 35,5 | 3 |
+| KOF Evolution | Dreamcast | 100,0 | 55,2 | 15,9 | 14,0 | 26,8 | 32,8 | 3 |
+| Sonic Adventure 2 | Dreamcast | 100,0 | 52,6 | 16,1 | 12,0 | 34,1 | 45,0 | 6 |
+| DOA2 | Dreamcast | 86,4 | 38,8 | 24,6 | 19,8 | 38,4 | 48,4 | 72 |
+| Grandia II | Dreamcast | 99,9 | 29,9 | 32,1 | 31,8 | 45,4 | 59,8 | 1 |
+| Napple Tale | Dreamcast | 99,9 | 29,9 | 32,0 | 29,4 | 49,1 | 59,8 | 2 |
+| Phantasy Star Online 2 | Dreamcast | 100,1 | 30,0 | 32,4 | 40,1 | 46,4 | 83,1 | 2 |
+| Skies of Arcadia | Dreamcast | 100,0 | 30,0 | 32,2 | 28,6 | 44,3 | 45,5 | 1 |
+| Shenmue | Dreamcast | 72,6 | 21,8 | 44,7 | 43,9 | 51,0 | 73,5 | 133 |
+| Shenmue II | Dreamcast | 59,5 | 17,9 | 54,7 | 47,8 | 77,1 | 79,1 | 170 |
+| Le Mans | Dreamcast | 51,4 | 15,4 | 63,9 | 63,3 | 67,0 | 74,4 | 208 |
+| Sonic Shuffle | Dreamcast | 100,2 | 15,0 | 65,4 | 64,3 | 71,6 | 74,1 | 6 |
+
+Leitura: Le Mans a 51% (ontem ~100% a 30 fps) e `ggx15`/`samsptk` a 100% de
+velocidade com fps baixo (apresentação, não emulação). O usuário reporta tudo
+a ~45 fps no ES desde hoje; ver tech_debits 4.70. A perda do kofnw (~2-3%) é
+efeito colateral aceito do acesso compacto à RAM (4.27).
+
+## Bateria de 27 jogos — 2026-09-26
+
+Core `f1a537dd` (build normal, tier2 ligado por padrão), **`perfmax performance`**
+(condição do ES), savestate automático, **40 s + 8 s de warmup**, 1 rodada por
+jogo para os números (sem dump) e depois 1 rodada com dump das imagens
+(`FC_FB_DUMP`, 4 por jogo). VEL% = `audio_frames / (duração × 44100)`.
+Tempos em ms. Imagens em `batery/` (94 no total; `ggxx` não tem
+porque crashou, `sa2`/`ggxxsla` idem, `lemans`/`skies` têm menos de 4 porque o
+jogo renderiza poucos frames em 40s).
+
+| jogo | sistema | VEL% | fps | média | p50 | p95 | p99 | underruns |
+|---|---|---|---|---|---|---|---|---|
+| ggx15 | Atomiswave | 100.0 | 49.4 | 18.9 | 18.1 | 42.5 | 51.1 | 2 |
+| kofnw | Atomiswave | 98.9 | 54.2 | 17.2 | 9.1 | 38.3 | 45.3 | 4 |
+| kofxi | Atomiswave | 100.0 | 58.6 | 15.5 | 7.1 | 36.6 | 38.6 | 4 |
+| mslug6 | Atomiswave | 82.8 | 21.9 | 42.3 | 44.1 | 67.0 | 76.2 | 128 |
+| ngbc | Atomiswave | 100.0 | 54.9 | 16.7 | 7.8 | 38.0 | 42.2 | 3 |
+| samsptk | Atomiswave | 100.0 | 42.6 | 22.4 | 18.1 | 43.1 | 46.1 | 3 |
+| ggxx | Naomi | crash (sem JSON) | | | | | | |
+| ggxxsla | Naomi | crash (sem JSON) | | | | | | |
+| gwing2 | Naomi | 96.3 | 56.2 | 16.0 | 15.6 | 37.5 | 44.6 | 57 |
+| mbaa | Naomi | 100.0 | 59.8 | 15.4 | 7.4 | 36.6 | 38.9 | 6 |
+| meltybld | Naomi | 92.3 | 54.3 | 14.8 | 9.6 | 38.7 | 51.0 | 51 |
+| sfz3ugd | Naomi | 100.0 | 59.7 | 13.3 | 8.8 | 31.9 | 36.4 | 1 |
+| slashout | Naomi | 100.0 | 37.9 | 25.0 | 24.5 | 42.0 | 44.9 | 2 |
+| zombrvn | Naomi | 100.1 | 43.4 | 21.9 | 18.5 | 42.4 | 46.2 | 5 |
+| Soulcalibur | Dreamcast | 100.0 | 59.7 | 15.4 | 13.8 | 24.3 | 33.1 | 6 |
+| Project Justice | Dreamcast | 100.0 | 59.6 | 14.8 | 12.3 | 27.8 | 32.1 | 3 |
+| KOF Evolution | Dreamcast | 100.0 | 57.7 | 15.2 | 14.3 | 24.4 | 28.5 | 3 |
+| Sonic Adventure 2 | Dreamcast | crash (sem JSON) | | | | | | |
+| DOA2 | Dreamcast | 99.4 | 35.8 | 23.8 | 23.3 | 34.0 | 45.8 | 16 |
+| Grandia II | Dreamcast | 100.0 | 30.0 | 32.3 | 32.7 | 45.3 | 46.3 | 1 |
+| Napple Tale | Dreamcast | 100.0 | 30.0 | 32.2 | 29.4 | 49.4 | 58.2 | 2 |
+| Phantasy Star Online 2 | Dreamcast | 99.9 | 9.9 | 100.5 | 100.5 | 100.7 | 100.8 | 2 |
+| Skies of Arcadia | Dreamcast | 100.0 | 18.3 | 53.7 | 39.3 | 100.6 | 100.7 | 1 |
+| Shenmue | Dreamcast | 91.9 | 27.5 | 35.3 | 34.9 | 38.5 | 46.8 | 81 |
+| Shenmue II | Dreamcast | 64.4 | 19.3 | 50.6 | 44.9 | 76.1 | 80.4 | 269 |
+| Le Mans | Dreamcast | 52.0 | 15.6 | 63.2 | 62.9 | 64.9 | 70.6 | 365 |
+| Sonic Shuffle | Dreamcast | 100.0 | 15.7 | 62.8 | 61.4 | 75.7 | 84.8 | 4 |
+
+**Crashes (`ggxx`, `ggxxsla`, `sa2`) — diagnosticados e corrigidos depois desta
+bateria (4.77):** não era o JIT/tier2 e sim o **carregamento do savestate** —
+os savestates desses jogos são antigos (ggxx de 2026-07-10) e o contador de
+placas JVS lido do savestate vem lixo, derrubando o core no `unserialize`.
+Corrigido o crash (guarda no JVS + aborto limpo do load). Além disso, uma
+região do tier2 que lia MMIO (timer TMU) travava/loopava (SA2/ggxxsla);
+`tier2_fault` agora desfaz a região que toca MMIO. Os **savestates vão ser
+regenerados** (o estado antigo meio-carregado não renderiza); depois re-rodar
+esta bateria.
+
+### Imagens por jogo (4 por jogo, intervalo de ~200 frames)
+
+#### ggx15 (Atomiswave) — VEL 100.0 / 49.4 fps
+![ggx15_1](batery/ggx15_1.png) ![ggx15_2](batery/ggx15_2.png) ![ggx15_3](batery/ggx15_3.png) ![ggx15_4](batery/ggx15_4.png)
+
+#### kofnw (Atomiswave) — VEL 98.9 / 54.2 fps
+![kofnw_1](batery/kofnw_1.png) ![kofnw_2](batery/kofnw_2.png) ![kofnw_3](batery/kofnw_3.png) ![kofnw_4](batery/kofnw_4.png)
+
+#### kofxi (Atomiswave) — VEL 100.0 / 58.6 fps
+![kofxi_1](batery/kofxi_1.png) ![kofxi_2](batery/kofxi_2.png) ![kofxi_3](batery/kofxi_3.png) ![kofxi_4](batery/kofxi_4.png)
+
+#### mslug6 (Atomiswave) — VEL 82.8 / 21.9 fps
+![mslug6_1](batery/mslug6_1.png) ![mslug6_2](batery/mslug6_2.png) ![mslug6_3](batery/mslug6_3.png) ![mslug6_4](batery/mslug6_4.png)
+
+#### ngbc (Atomiswave) — VEL 100.0 / 54.9 fps
+![ngbc_1](batery/ngbc_1.png) ![ngbc_2](batery/ngbc_2.png) ![ngbc_3](batery/ngbc_3.png) ![ngbc_4](batery/ngbc_4.png)
+
+#### samsptk (Atomiswave) — VEL 100.0 / 42.6 fps
+![samsptk_1](batery/samsptk_1.png) ![samsptk_2](batery/samsptk_2.png) ![samsptk_3](batery/samsptk_3.png) ![samsptk_4](batery/samsptk_4.png)
+
+#### ggxx (Naomi) — sem imagens (crash)
+
+#### ggxxsla (Naomi) — sem imagens (crash)
+
+#### gwing2 (Naomi) — VEL 96.3 / 56.2 fps
+![gwing2_1](batery/gwing2_1.png) ![gwing2_2](batery/gwing2_2.png) ![gwing2_3](batery/gwing2_3.png) ![gwing2_4](batery/gwing2_4.png)
+
+#### mbaa (Naomi) — VEL 100.0 / 59.8 fps
+![mbaa_1](batery/mbaa_1.png) ![mbaa_2](batery/mbaa_2.png) ![mbaa_3](batery/mbaa_3.png) ![mbaa_4](batery/mbaa_4.png)
+
+#### meltybld (Naomi) — VEL 92.3 / 54.3 fps
+![meltybld_1](batery/meltybld_1.png) ![meltybld_2](batery/meltybld_2.png) ![meltybld_3](batery/meltybld_3.png) ![meltybld_4](batery/meltybld_4.png)
+
+#### sfz3ugd (Naomi) — VEL 100.0 / 59.7 fps
+![sfz3ugd_1](batery/sfz3ugd_1.png) ![sfz3ugd_2](batery/sfz3ugd_2.png) ![sfz3ugd_3](batery/sfz3ugd_3.png) ![sfz3ugd_4](batery/sfz3ugd_4.png)
+
+#### slashout (Naomi) — VEL 100.0 / 37.9 fps
+![slashout_1](batery/slashout_1.png) ![slashout_2](batery/slashout_2.png) ![slashout_3](batery/slashout_3.png) ![slashout_4](batery/slashout_4.png)
+
+#### zombrvn (Naomi) — VEL 100.1 / 43.4 fps
+![zombrvn_1](batery/zombrvn_1.png) ![zombrvn_2](batery/zombrvn_2.png) ![zombrvn_3](batery/zombrvn_3.png) ![zombrvn_4](batery/zombrvn_4.png)
+
+#### Soulcalibur (Dreamcast) — VEL 100.0 / 59.7 fps
+![soulcal_1](batery/soulcal_1.png) ![soulcal_2](batery/soulcal_2.png) ![soulcal_3](batery/soulcal_3.png) ![soulcal_4](batery/soulcal_4.png)
+
+#### Project Justice (Dreamcast) — VEL 100.0 / 59.6 fps
+![pjustice_1](batery/pjustice_1.png) ![pjustice_2](batery/pjustice_2.png) ![pjustice_3](batery/pjustice_3.png) ![pjustice_4](batery/pjustice_4.png)
+
+#### KOF Evolution (Dreamcast) — VEL 100.0 / 57.7 fps
+![kofevo_1](batery/kofevo_1.png) ![kofevo_2](batery/kofevo_2.png) ![kofevo_3](batery/kofevo_3.png) ![kofevo_4](batery/kofevo_4.png)
+
+#### Sonic Adventure 2 (Dreamcast) — 1 imagem(ns)
+![sa2_1](batery/sa2_1.png)
+
+#### DOA2 (Dreamcast) — VEL 99.4 / 35.8 fps
+![doa2_1](batery/doa2_1.png) ![doa2_2](batery/doa2_2.png) ![doa2_3](batery/doa2_3.png) ![doa2_4](batery/doa2_4.png)
+
+#### Grandia II (Dreamcast) — VEL 100.0 / 30.0 fps
+![grandia2_1](batery/grandia2_1.png) ![grandia2_2](batery/grandia2_2.png) ![grandia2_3](batery/grandia2_3.png) ![grandia2_4](batery/grandia2_4.png)
+
+#### Napple Tale (Dreamcast) — VEL 100.0 / 30.0 fps
+![napple_1](batery/napple_1.png) ![napple_2](batery/napple_2.png) ![napple_3](batery/napple_3.png) ![napple_4](batery/napple_4.png)
+
+#### Phantasy Star Online 2 (Dreamcast) — VEL 99.9 / 9.9 fps
+![pso2_1](batery/pso2_1.png) ![pso2_2](batery/pso2_2.png) ![pso2_3](batery/pso2_3.png) ![pso2_4](batery/pso2_4.png)
+
+#### Skies of Arcadia (Dreamcast) — VEL 100.0 / 18.3 fps
+![skies_1](batery/skies_1.png) ![skies_2](batery/skies_2.png)
+
+#### Shenmue (Dreamcast) — VEL 91.9 / 27.5 fps
+![shenmue_1](batery/shenmue_1.png) ![shenmue_2](batery/shenmue_2.png) ![shenmue_3](batery/shenmue_3.png) ![shenmue_4](batery/shenmue_4.png)
+
+#### Shenmue II (Dreamcast) — VEL 64.4 / 19.3 fps
+![shenmue2_1](batery/shenmue2_1.png) ![shenmue2_2](batery/shenmue2_2.png) ![shenmue2_3](batery/shenmue2_3.png) ![shenmue2_4](batery/shenmue2_4.png)
+
+#### Le Mans (Dreamcast) — VEL 52.0 / 15.6 fps
+![lemans_1](batery/lemans_1.png) ![lemans_2](batery/lemans_2.png) ![lemans_3](batery/lemans_3.png)
+
+#### Sonic Shuffle (Dreamcast) — VEL 100.0 / 15.7 fps
+![sonicshfl_1](batery/sonicshfl_1.png) ![sonicshfl_2](batery/sonicshfl_2.png) ![sonicshfl_3](batery/sonicshfl_3.png) ![sonicshfl_4](batery/sonicshfl_4.png)
+

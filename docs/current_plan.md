@@ -6,6 +6,83 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-09-26, noite 3): tier2 estilo Dolphin — plano e primeiro passo
+
+**feito agora:** (1) **renomeação dos padrões** para nomes genéricos (a forma,
+não o jogo): `wait-flag-cmp-loop`, `wait-flag-task-loop(-v2)`,
+`coop-yield-self-idle-loop`, `chained-wait-loop-getter-cmp`,
+`region-bad-store-burst`; o log agora diz a classe do padrão. (2) Confirmado que
+o `block_ok` **já exclui** blocos com truque de ciclo (`idle_fastforward ||
+delay_skip || scan_skip || dt_skip`) das regiões — o item "não misturar truque
+de tempo com região" já existia. (3) **Call following por literal de PC**
+(análogo ao `bl`-following do Dolphin): `call_target` agora resolve alvo
+carregado de `mov.l @(disp,PC),rN` (`readm` de endereço constante) e lê o
+ponteiro do guest — atrás de `FC_TIER2_INLINE_LIT` (padrão desligado). **Medido:
+sem ganho** (o `inlineLeaves` só embute função-folha e o `leaf_blocks` rejeita
+os alvos; Shenmue resolveu 4 alvos, 0 embutidas, fps igual). Fica como hook
+opt-in.
+
+**técnicas do Dolphin ainda a fazer (em ordem, cada uma atrás de flag + A/B):**
+1. **Formação por branch following** (`form_regions`): hoje só une blocos
+   QUENTES por arestas estáticas; o Dolphin segue as arestas até blocos frios
+   para fechar o laço. Fechar o grupo pelo ciclo estático (limite de tamanho).
+2. **Verificação neutra sempre-ligada** (`tier2_selfcheck`): tornar o replay do
+   interpretador neutro (salvar/restaurar scheduler/interrupções além de
+   RAM+ctx) e rodar em toda região — "só regiões verificadas". É o contrato de
+   correção que teria pego mslug6/Shenmue.
+3. **Poucas regiões, alto reúso**: exigir o limiar de reúso ANTES de instalar
+   (o Sonic Shuffle mostrou que formar+descartar dezenas é pior).
+
+**Método:** cada uma atrás de env var, A/B com fps+VEL+p50/p95/p99 e
+`state_compare` (tier2 on×off) antes de virar padrão.
+
+## Agora (2026-09-26, noite 2): Le Mans — laço de espera encadeado
+
+**done** — o save da corrida rodava a 15 fps / ~50% (não era regressão de
+código: 3 cores dão o mesmo). O laço de atraso do 4.40 (`8C1730F6`) existe na
+RAM mas não roda nesta cena. O gargalo é um **ciclo de 4 blocos**
+(`8C01BF1E`→`8C100340`→`8C01BF24`→`8C01BF6C`, 72 mil voltas/s; o getter sozinho
+= 49,8% do trabalho). Fix: assinatura `chained-wait-loop-getter-cmp` no
+`idle_ff_sigs` → **15 → 30 fps a 99,9% de VEL**; sem match falso em
+Shenmue/gwing2/mslug6. Detalhe em 4.81.
+
+**Próximo:** (1) procurar outros laços encadeados do mesmo tipo (o método é
+`FC_JIT_DUMP` + `FC_JIT_TRACE_ALL` pra achar ciclos de poucos blocos sem laço
+próprio); (2) validação do usuário jogando o Le Mans.
+
+## Agora (2026-09-26, noite): Shenmue idle_ff + orçamento de frameskip + mslug6/tier2
+
+**done** — (1) **Shenmue 1** de 13,2 → **26,6 fps**: a assinatura
+`bios-wait-flag-r2-r3` casava 22 blocos falsos (idioma "if (*p == 0)"); agora
+exige desvio para trás e apertado (`target ∈ {addr, addr-2}`) e o gwing2 mantém
+os 2 laços reais. (2) **Orçamento de frameskip** (`flycast2026_frameskip_budget`,
+padrão 33%): teto de frames que o core pode descartar para manter 100% de VEL;
+acima do teto espera o render (VEL cai). Medido no Shenmue (33 → 26,8 fps /
+89,4% VEL × 100 → 16,5 / 95,6%). (3) **mslug6 estriado com tier2**: a 4ª região
+automática (`8C01254A`+`8C01255C`, stores `mov.l rX,@(0x18,r2)`) é a culpada;
+`tier2_bad_pattern` casa o prefixo e chama `tier2_exclude_block` (bloco fora das
+regiões, tier2 ligado no resto) → frames limpos, fps igual ao tier2 off.
+
+**Próximo:** (1) validar o orçamento de frameskip em mais jogos com A/B limpo
+(mesma cena — a VEL difere e confunde); (2) procurar outros padrões que o tier2
+quebra (o isolamento por `FC_TIER2_MAXREG` + métrica de gradiente é o método);
+(3) deploy do core corrigido no device (backup do oficial antes).
+
+## Agora (2026-09-26): Shenmue 1 — glitch do chão e autochecagem do tier2
+
+**investigado (4.76)** — o chão sumido esporádico do Shenmue 1 era **corrupção
+de estado** gravada no savestate (reproduz com tier2 on/off e com o core
+pré-tier2). Com um state novo e limpo, o tier2 é determinísticamente correto
+(`state_compare` 0 divergências, framebuffer idêntico) e a bateria de 4 jogos
+(Shenmue 1/2, Zombie, MBAA) passou IDÊNTICA. A corrupção só aparece com input
+de gameplay — não reproduzível sozinho. **Implementada autochecagem opt-in**
+(`FC_TIER2_SELFCHECK=1`): região × interpretador, desfaz a região se divergir.
+Limitação: o replay ainda perturba levemente o `ctx`; é diagnóstico, não
+caminho de jogo. **Próximo:** (1) tornar a autochecagem neutra (hash de
+`Sh4RCB`/SQ/PVR antes/depois do replay); (2) reproduzir o glitch com input e
+capturar a região culpada; (3) a causa raiz do 4.74 (laço interno com store no
+delay slot) segue aberta.
+
 ## Agora (2026-09-24): nível 2 — experimento no emulador feito (DOA2)
 
 **done** — região do DOA2 gerada offline (`tools/tier2_gen.py --emu`) e
@@ -30,6 +107,48 @@ Etapas, cada uma validada com `state_compare` antes da próxima:
 4. cobertura: fault seguro dentro da região, stores em RAM.
 **Plano B / outras ideias:** patches de velocidade por jogo numa pasta,
 `docs/tier2_patches.md`.
+
+**done (2026-09-25):** nível 2 virou opção do core (`flycast2026_tier2`,
+disabled/enabled), em vez de só `FC_TIER2_AUTO`. Deploy no device confirmado
+**estável** pelo usuário jogando vários jogos — essa é a primeira vez que o
+device roda a thread do AICA (4.44), a thread do CHD (4.62) e o nível 2
+juntos. Detalhe em 4.65.
+
+## Agora (2026-09-25, fim do dia): regressão geral "tudo a 45 fps" e diferença ES × SSH
+
+**in progress** — o usuário relata que nada roda mais a 60 fps (tudo ~45), com tier2 ligado ou desligado. Device restaurado ao estado de ontem (core `2ea46c054` + cfgs originais; estado de hoje em `*.bak-hoje-pre-restauracao`). Achado (4.70): o ES roda os jogos entre `sudo perfmax performance` e `perfnorm`, e todos os testes por SSH rodavam em `ondemand` puro. **Próximos, nesta ordem:** (1) repetir `ggx15`, `samsptk` e Le Mans com `perfmax performance` (2 rodadas rápidas cada, pergunta aberta ao usuário sobre o que viu na tela); (2) investigar o crash do `ggxx` (4.71); (3) só depois voltar ao Sonic Shuffle (skip do laço de varredura escrito, nunca validado; tier2 ligado precisa de validação por `state_compare` em todos os jogos antes de reativar, o usuário reportou crash com glitch). Ideia futura registrada em 4.72 (isolar o tradeoff do acesso compacto).
+
+## Sonic Shuffle (contexto do dia) "sempre a 10fps"
+
+**in progress, achado importante no caminho** — não é render (vídeo
+<1ms/frame; confirmado por `perf stat` que modo benchmark = modo real,
+instruções/ciclos idênticos). Duas savestates (pesada 65,6ms/leve 48,7ms,
+trocadas por cópia de arquivo) + dump do JIT dos dois: achado o laço de
+busca de 2 blocos (4.66, 20% do custo, presente nas duas cenas) MAIS um
+cluster de ~8 blocos (`8C0402C2`-`8C0413D6`, cálculo de vetor 3D) que é
+8,35% do custo só na cena pesada (4.68).
+
+**BUG achado no caminho (4.67):** a opção do core do nível 2 nunca ligava a
+formação automática de verdade (`tier2_safe_point` checava a env var crua,
+não a opção) — corrigido. Com o fix, a formação automática rodou pra
+valer pela primeira vez (23 regiões no Sonic Shuffle, cobrindo o cluster
+achado) — e o jogo **piorou** (65 → 100ms/frame). `flycast2026_tier2`
+voltou pra `disabled` no device. Detalhe em 4.68.
+
+**done (2026-09-25): classificação por padrão** — `group_has_loop()`
+separa grupo com laço interno de verdade (limiar de sempre, 0,5%) de
+trecho sem retorno interno (4× mais quente exigido, 2%). Regressão do
+Sonic Shuffle eliminada (100,6 → 64,9ms, empate com o baseline sem tier2).
+`flycast2026_tier2` reativado no device. Detalhe em 4.69.
+
+**in progress / pendente:** a causa raiz do "sempre 10fps" no Sonic
+Shuffle (por que a cena pesada pede tanto do cluster de vetor 3D) ainda não
+foi atacada — é trabalho legítimo (confirmado em 4.66) rodando
+proporcionalmente mais vezes, não uma estrutura ruim isolada; o nível 2
+agora ajuda um pedaço dele (região #9, 7 blocos) sem regredir, mas não foi
+medido se isso move o fps de verdade numa sessão de jogo real (só
+benchmark). Validar em DOA2/Shenmue que a mudança do limiar não regrediu
+os laços que já funcionavam bem (não medido nesta sessão).
 
 ## 2026-09-24: nível 2 com otimização de região (estilo LTO) — projeto
 

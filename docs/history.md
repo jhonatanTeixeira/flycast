@@ -2565,3 +2565,276 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - Jogando: DOA2 jogável, Giga Wing 2 jogável parecendo 100%, Shenmue 1 26
   fps; Zombie de volta ao normal (99%) depois do conserto do congelamento.
 
+### 2026-09-25 — Le Mans investigado (sem regressão), nível 2 virou opção do core, samsptk e Sonic Shuffle
+
+- **Le Mans "perdeu performance":** investigado a fundo (código, config, e
+  reprodução no device) — o core no device estava parado em `2ea46c054`
+  desde a correção (nenhum commit novo chegou a ser deployado), config
+  idêntica. Reprodução controlada (mesma savestate automática, mesmo core,
+  mesmo cfg) bateu frame a frame com o baseline bom (586 frames em 20s dos
+  dois lados). Conclusão: sem regressão de código; provavelmente throttling
+  térmico/bateria daquela sessão específica.
+- **Nível 2 virou opção do core** (`flycast2026_tier2`), no lugar de só
+  `FC_TIER2_AUTO`. Build limpo em `32ff91ca1` (primeira vez que a thread do
+  AICA (4.44) e a thread do CHD (4.62) chegam ao device — estavam commitadas
+  mas nunca deployadas). Deploy com backup do `.so` e dos cfgs. Usuário
+  jogou vários jogos e confirmou **estável**. Detalhe em 4.65.
+- **Regressão relatada no samsptk** (60→45 fps a "100%"): bateria A/B no
+  device (tier2 on/off, thread do AICA off, thread do CHD off, e até o
+  `.so` antigo puro) deu o MESMO número em todas as variantes — não
+  reproduzido na savestate automática, usuário confirmou que não controlou
+  a cena entre as duas comparações. **Decisão: deixar como está, reinvestigar
+  depois.** Detalhe em 4.65.
+- **Sonic Shuffle "sempre a 10fps":** não é render (vídeo <1ms/frame no
+  benchmark). Dump do JIT achou um laço de busca linear (2 blocos, 9 instr
+  SH4) rodando 1,25 milhão de vezes por segundo, 20% do custo total,
+  76-88% dele em puro despacho/registrador (não é laço de espera mal
+  classificado — endereço avança, `idle=0` corretamente). Forçar essa
+  região exata no nível 2 (`FC_TIER2_RT`) instalou sem crash mas não
+  mudou o frame time medido — porém a savestate automática desse jogo
+  variou 43-66ms de frame emulado só de rodada pra rodada (não é cena
+  parada), então o teste de 1 rodada não prova nada. Próximo passo:
+  savestate fixa antes de julgar. Detalhe em 4.66.
+
+### 2026-09-25 (continuação) — bug real na opção do nível 2, cluster da cena pesada, disco do device cheio
+
+- **Isolado modo benchmark × modo real:** `perf stat` (instruções/ciclos) em
+  janelas de 12s idênticas nos dois modos deu o MESMO número exato (12,113
+  bilhões de instruções, IPC 0,41) — o benchmark reflete fielmente o custo
+  real de CPU, não esconde vsync/apresentação. A diferença que o usuário via
+  entre "aqui" e "lá" (ES) era cena, não metodologia.
+- **Duas savestates (pesada/leve) do Sonic Shuffle, trocadas por cópia de
+  arquivo, dump do JIT dos dois:** achado um cluster de ~8 blocos vizinhos
+  (`8C0402C2`-`8C0413D6`, cálculo de vetor 3D entre peças) que é 8,35% do
+  custo na cena pesada e nem aparece no top-20 da leve — mesma estrutura
+  rodando proporcionalmente mais, não uma estrutura nova. Detalhe em 4.68.
+- **BUG achado e corrigido:** a opção do core do nível 2 (4.65) nunca ligava
+  a formação automática de verdade — `tier2_safe_point()` checava a
+  variável de ambiente crua em vez da opção do core, então se desligava
+  sozinha na primeira checagem sempre que só a opção estava ligada (sem
+  `FC_TIER2_AUTO`). **Isso significa que todo A/B do dia com a opção do
+  core (samsptk 4.65, Sonic Shuffle antes deste ponto) comparava "desligado"
+  × "desligado"** — só a variável de ambiente (`FC_TIER2_RT`) funcionava de
+  verdade. Corrigido em `tier2_sampling()`/`tier2_safe_point()`. Detalhe em
+  4.67.
+- **Com o bug corrigido, a formação automática realmente rodou no Sonic
+  Shuffle (23 regiões, incluindo o cluster da cena pesada) — e o jogo
+  PIOROU: 65 → 100ms/frame (~55% mais lento).** O custo de formar e
+  descartar dezenas de regiões de baixo reaproveitamento superou o ganho
+  das poucas que colaram. `flycast2026_tier2` revertido pra `disabled` nos
+  cfgs do device (primeira vez que essa opção realmente faz diferença).
+  Detalhe em 4.68.
+- **Disco do device (`/dev/mmcblk0p2`, `/home/ark`) ficou 100% cheio** de
+  dumps acumulados de várias sessões (não só hoje) — usuário confirmou que
+  esse disco inteiro é descartável (o que importa está no sd2, `/roms2`).
+  Limpeza (2,9GB) feita pelo próprio usuário via terminal do device (o
+  classificador de segurança bloqueou o `rm -rf` em lote via SSH remoto).
+  Confirmado antes de apagar: saves do PPSSPP ficam em `~/.config/ppsspp`
+  (vazio, preservado) e os saves de verdade (incl. PSP) estão no sd2.
+- **Classificação por padrão no nível 2 (pedido direto do usuário: "isolar
+  soluções só para cada padrão"):** causa exata da regressão do 4.68 —
+  grupos SEM laço interno (trecho que só é atravessado uma vez por entrada,
+  ex.: pedaços do cluster de vetor 3D) entravam no mesmo limiar frouxo dos
+  laços de verdade e só eram descartados DEPOIS de instalar e rodar até
+  4000 entradas com guarda extra a toa. `group_has_loop()` (DFS nas mesmas
+  arestas estáticas que já formam o grupo) separa os dois padrões: laço de
+  verdade mantém o limiar de sempre, sem-laço agora precisa de 4× mais
+  calor pra tentar instalar. **Medido (mesma cena pesada do 4.68):**
+  100,6ms (regredido) → **64,9ms (empate com os 65,1ms sem tier2 —
+  regressão eliminada)**; 9 regiões formadas em vez de 23, quase todo
+  descarte por "1,00 blocos por entrada" sumiu, o laço de busca e um
+  pedaço real do cluster de vetor 3D continuam fundindo. `flycast2026_tier2`
+  reativado no device. Detalhe em 4.69. **Não validado:** efeito no
+  DOA2/Shenmue (limiar deles não mudou, risco baixo mas não medido hoje).
+
+
+### 2026-09-25 (fim) — varredura de configs para desempenho
+
+- Revisadas todas as opções `flycast2026_*` e as do retrorun. Quase tudo já
+  estava no ajuste mais rápido (alpha_sorting per-strip, sem anisotrópico,
+  sem PVR2 filter, sem texupscale, sem DSP, threaded_rendering, sem
+  synchronous/delay swap, hle_bios, gdrom_fast_loading, div_matching auto,
+  sh4clock d10 -- d8 mede pior em DOA2/Shenmue, ver 4.42, tier2 ligado).
+- Ligado `flycast2026_frame_budget_skip_translucent = low` (retrorun.cfg e
+  retroarch-core-options.cfg): speedhack só age em frame que já estourou o
+  orçamento, sem custo no caso normal.
+- `sh4_timeslice = 2x` testado uma vez no Sonic Shuffle (cena pesada): 64,6ms
+  contra 64,9ms do baseline, sem ganho, então NÃO aplicado (só risco de
+  glitch de timing/áudio). Resolução interna não mexida: vídeo <1ms/frame
+  nos dumps, jogo é CPU-bound, baixar resolução não rende.
+
+### 2026-09-25 (noite) — regressão geral reportada, diferença ES × SSH achada
+
+- Usuário: crash com glitch com tier2 ligado; depois "tudo caiu para 45 fps, ligado ou desligado". Tier2 desligado e device restaurado ao estado de ontem (core `2ea46c054`, cfgs originais).
+- Bateria de 27 jogos com o core de ontem, em `ondemand`: números em 4.70. `ggxx` crasha (4.71); Le Mans a 15 fps (era 30); `ggx15` 47,6 e `samsptk` 43,6.
+- **Achado:** o ES roda `sudo perfmax performance <rom>` antes do jogo; os testes por SSH nunca passaram por isso (4.70).
+- Usuário aceitou a perda do kofnw (2-3%, acesso compacto 4.27) como efeito colateral; ideia de isolar por padrão registrada em 4.72.
+- Skip do laço de varredura do Sonic Shuffle escrito no código (`scan_loop_match`, `sh4_scan_loop_skip`), sem uso ainda: o log não mostrou match nas duas rodadas.
+
+### 2026-09-25 (madrugada) — tier2: padrão cooperativo desligado, Shenmue 1 destravado
+
+- Bateria com a build mais nova (tier2 ligado): vários defeitos vistos na tela (KOF XI, MBAA, mslug6, samsptk, Sonic Shuffle com gráfico bagunçado; ggx15 tela preta; PSO 2 congelado; Shenmue 1 e Skies abortando ao iniciar). Ganhos vistos em DOA2, Shenmue II e gwing2. Detalhe em 4.73.
+- Hipótese do usuário (jogos com a biblioteca de threads cooperativas) implementada como desligamento do tier2 por padrão de código (4.75): KOF XI e MBAA voltaram a ficar corretos na tela.
+- Shenmue 1 (que o usuário quer com tier2, é jogo que precisa de ganho): isolado à região do laço `0C1DC912` (memcpy de bytes, store no delay slot); contornado por padrão (laço com store no slot não fica dentro da região), com DOA2 95,2% e Shenmue II 60,9% preservados; causa raiz segue aberta (4.74).
+- Ferramentas novas de diagnóstico: `FC_TIER2_MAXREG`, `FC_TIER2_NOLOOP`, `FC_TIER2_DUMP`, contexto guest no `iNimp`.
+
+### 2026-09-26 — Shenmue 1: chão sumido esporádico, autochecagem do tier2
+
+- **O glitch:** o usuário reportou o chão sumindo em algumas áreas durante
+  gameplay normal com tier2 ligado, e deixou um savestate no lugar. Dump de
+  framebuffer (`FC_FB_DUMP`) mostrou a rua/terreno ausente (cor de céu). O
+  state reproduzia o glitch com tier2 **on e off** e também com o core antigo
+  `2ea46c054` (pré-tier2) → **o save gravou o glitch no estado emulado**. Um
+  state novo, salvo com tier2 desligado (a rua presente), mostra só o
+  transiente normal de carregamento (~20 quadros) e recupera nas duas configs.
+- **tier2 é determinísticamente correto nesse state:** `state_compare` (off ×
+  on, input neutro) 0 divergências; framebuffer pixel-idêntico em 570 quadros;
+  assinatura do `scan_loop` não casa no Shenmue; as 5 regiões formadas foram
+  desmontadas (`FC_TIER2_DUMP` + `objdump`) e estão corretas — inclusive o
+  bloco `0C1DC912` do 4.74, onde o `slotStore` realmente sai do laço a cada
+  volta. **Bateria (Shenmue 1/2, Zombie Revenge, MBAA):** `state_compare`
+  IDÊNTICO nos 4 (estado+áudio) e frames batem; perf limpa (tier2 on): Shenmue 1
+  98,8%/29,6fps, Shenmue 2 65,4%/19,6fps, Zombie 100,4%/52fps, MBAA 100,1%/59,9fps.
+- **Conclusão:** a corrupção é esporádica e só aparece com input de gameplay
+  (input neutro nunca diverge) — não é reproduzível sozinho.
+- **Autochecagem do tier2 (pedido do usuário, 4.76):** em amostragem a região
+  captura o estado na entrada e na saída; no ponto seguro o estado de entrada é
+  restaurado e o **interpretador** roda o mesmo trecho até o PC de saída,
+  comparando registradores/T/FPU/FPSCR. Divergiu → região desfeita + log.
+  Restrita a regiões sem `pref`/`writem` (o `WriteMem` do interpretador dispara
+  `bm_RamWriteAccess` em página de código, descartando blocos). **Limitação:**
+  mesmo em região de leitura o replay ainda perturba levemente o `ctx`
+  (~5/340 pedidos) — é diagnóstico opt-in (`FC_TIER2_SELFCHECK=1`), não caminho
+  de jogo; com a env var ausente o binário é idêntico ao anterior (bateria dos 4
+  jogos IDÊNTICA). Deployado como `flycast2026` (backup
+  `.bak-pre-selfcheck`).
+- **Ferramentas:** `FC_TIER2_SELFCHECK`, `FC_TIER2_SELFCHECK_PERIOD`; scripts
+  `run_fb*.sh`, `run_statecmp.sh`, `battery.sh`, `run_selfcheck.sh` no device.
+
+### 2026-09-26 (continuação) — bateria completa dos 27 jogos com savestate + imagens
+
+- A pedido do usuário (pausada a caça ao crash esporádico do Shenmue 1; hipótese
+  dele: savestate corrompendo estado). Core normal `f1a537dd` (tier2 ligado por
+  padrão), **`perfmax performance`** (condição do ES), savestate automático,
+  **40s + 8s de warmup, 1 rodada por jogo**; depois uma segunda rodada por jogo
+  só pra dumpar **4 imagens** (`FC_FB_DUMP`, passo de 200 frames) — as imagens
+  não entram na rodada dos números. Tabela completa e imagens embutidas na nova
+  seção **"Bateria de 27 jogos — 2026-09-26"** em `docs/game_status.md`
+  (imagens em `docs/batery/`, 94 no total).
+- **Crashes (`DEBUGBREAK!`/SIGILL) na passada dos números:** `ggxx` (já conhecido,
+  4.71) e `ggxxsla` (intermitente: a rodada de imagens passou); `sa2` crashou as
+  duas. Os três ficaram "sem JSON". `meltybld` ficou lento mas gerou JSON.
+- **Números melhores que a bateria de 2026-09-25** porque agora é `perfmax
+  performance` (a de ontem foi em `ondemand`): DOA2 86,4%→99,4%, Shenmue
+  72,6%→91,9%, Soulcalibur 60→59,7 fps estável, MBAA 59,8 fps/100%.
+- **Assinatura de 100,5ms reaparece:** PSO 2 (9,9 fps, média/p50/p95/p99 =
+  100,5/100,5/100,7/100,8ms) e cauda do Skies (p95/p99 ~100,6ms) — o mesmo
+  padrão do 4.73; não investigado nesta sessão.
+
+### 2026-09-26 (continuação) — destravados os 3 jogos que não abriam (ggxx, ggxxsla, sa2)
+
+- **Contexto:** a bateria de 27 jogos (item anterior) deixou `ggxx`, `ggxxsla`
+  e `sa2` sem abrir (`DEBUGBREAK!`/SIGILL). O usuário confirmou que os
+  savestates são antigos (ggxx de 2026-07-10) e vai atualizá-los depois.
+- **Backtrace no handler de SIGSEGV** (`core/libretro/common.cpp`,
+  `backtrace_symbols_fd` no caminho fatal) mostrou a cadeia real:
+  `retro_unserialize` → `mcfg_UnserializeDevices` →
+  `maple_naomi_jamma::maple_unserialize` → `jvs_io_board::maple_unserialize` →
+  `ra_unserialize` → `memcpy` com ponteiro quase-nulo (`si_addr` 0x29/0xa8,
+  `dyna code 0`). **Não era o JIT/tier2 — era o load de savestate.**
+- **Causa 1:** `maple_naomi_jamma::maple_unserialize` usava o `board_count`
+  lido do savestate pra indexar `io_boards[i]` sem validar. Savestate antigo →
+  `board_count=281479271677953` (lixo) com `io_boards=1` → índice fora dos
+  limites → crash. Todos os savestates do device são V12 e o core escreve V13;
+  o do ggxx é um V12 mais antigo. **Fix:** guarda + `g_unserializeBad` aborta o
+  load limpo.
+- **Causa 2 (tier2):** região que lê MMIO (TMU TCNT0 `0xFFD8000C`) via
+  `tier2_fault` — o tempo global não avança dentro do laço interno da região,
+  então o polling do jogo nunca sai (travava/loopava). **Fix:** `tier2_fault`
+  marca a região; no ponto seguro ela é desfeita e os blocos vão pra `slowMem`.
+- **Bônus:** o `FC_BLOCK_PROF` injetava o contador antes do `subs w27`, o que
+  fazia o tier2 recusar **todas** as regiões (foi por isso que a bateria
+  instrumentada "não crashava" — o tier2 estava inativo). Movido pra depois do
+  `subs`. Novo `FC_TIER2_STATE` (dump periódico do estado/contadores das
+  regiões) e `FC_JIT_DUMP_NODYN` (não gravar o `dyn-*.bin` gigante).
+- **Estado:** `sa2` e `ggxxsla` não crasham mais; `ggxx` aborta o load antigo
+  (sem crash). Core no device `17812822`; backups `.bak-pre-mmio`/
+  `.bak-pre-statedump`/`.bak-pre-profpos`. **Pendente:** o usuário vai
+  regenerar os savestates dos 3 jogos; depois re-rodar a bateria.
+
+## 2026-09-26 21:33 — Shenmue idle_ff, orçamento de frameskip e padrão do mslug6
+
+- **Shenmue 1 (13,2 fps / 100% VEL) — corrigido.** A assinatura nova
+  `bios-wait-flag-r2-r3` (4 instruções terminando em `bt`) é o idioma genérico
+  "if (*p == 0)" e casou em **22 blocos do Shenmue** (log `FC_IDLE_LOG=1`), todos
+  com `bt` **para frente** (não são laços). O fast-forward pulava tempo em
+  trabalho real → emulação a 100%, fila de render desaba. **Fix:** campo
+  `self_loop` exige desvio para trás e apertado (`target == addr` ou `addr-2`);
+  o laço do BIOS Naomi (`0C02F3A4`) desvia para `0C02F3A2`, então `target==addr`
+  sozinho zerava o gwing2. **Medido:** 22 → 1 match real, **26,6 fps / core
+  36,6 ms** (era 13,2 / 74); gwing2 boot mantém os 2 laços e o fps.
+- **Orçamento de frameskip (opção nova `flycast2026_frameskip_budget`, padrão
+  33%).** Pedido do usuário (estilo PPSSPP): quantos % de frames o core pode
+  descartar para manter 100% de VEL; acima do teto, para de descartar e espera o
+  render (VEL cai, apresentação não degrada mais). Implementado em `QueueRender`
+  (`ta_ctx.cpp`) com EMA da fração descartada; `FC_SKIP_BUDGET` para A/B; 100 =
+  antigo. **Shenmue 25s:** 100 → 16,5 fps/95,6% VEL/p95 100,6 ms/149 dup;
+  33 → **26,8 fps/89,4% VEL/p95 40,4 ms/1 dup**; 0 igual ao 33. Ressalva: a VEL
+  difere, então as rodadas avançam conteúdo emulado diferente.
+- **mslug6 estriado com tier2 — corrigido por padrão de código.** Confirmado que
+  o glitch é do tier2 (limpo com tier2 off). Isolamento por métrica de gradiente
+  (limpo ~10,5 × glitch 20-33): cada região sozinha e o merge explícito limpos;
+  `FC_TIER2_MAXREG` 1/2/3 limpos, **4 glitcha** → a 4ª região
+  (`8C01254A`+`8C01255C`) é a culpada. `8C01255C` tem 7 stores
+  `mov.l rX,@(0x18,r2)` e um `bra`. **Fix (pedido: desligar para o PADRÃO, não
+  para o jogo):** `tier2_bad_pattern` casa o prefixo e chama
+  `tier2_exclude_block` (vai pra `badBlocks`); o bloco não entra em região, o
+  tier2 segue ligado nas outras 3. **Medido:** região #4 some, frames limpos
+  (~10,5) e fps igual ao tier2 off. O padrão não dispara no Shenmue nem no
+  gwing2. Novo dump cru no `FC_DUMP_BLOCK` (`.raw`).
+- **Ferramentas novas de diagnóstico:** `FC_IDLE_LOG` loga cada assinatura de
+  idle casada e cada rejeição de laço; `FC_DUMP_BLOCK` agora grava os bytes
+  crus do bloco (`.raw`).
+
+## 2026-09-26 22:30 — Le Mans: laço de espera encadeado (15 → 30 fps)
+
+- **Savestate restaurado** (`/roms2/dreamcast/...Le Mans....fc2021-rrstate.auto`,
+  md5 `42e1159c`, do backup). O save antigo (que dava 30 fps) tinha som quebrado
+  e bugou na versão nova; o usuário criou outro, mesma pista/carro/situação.
+- **Diagnóstico:** a cena roda a 15 fps e **~50% de velocidade** (lap time
+  0:02,879 → 0:04,871 em 4,0 s reais), emu-bound (core 66 ms). **Não é regressão
+  de código** — `core_2ea` (o do clock por jogo), `core_32ff` e o atual dão os
+  mesmos 15 fps e `delay_skip=0`. O laço de atraso do 4.40 (`8C1730F6`) existe na
+  RAM mas **não roda nesta cena** (nenhum bloco compilado perto; watch validado).
+- **Achado (dump dinâmico `FC_JIT_DUMP` + `FC_JIT_TRACE_ALL`):** o gargalo é um
+  **ciclo exato de 4 blocos** (`8C01BF1E` jsr getter → `8C100340` getter-folha →
+  `8C01BF24` compara → `8C01BF6C` tst → volta), 72.362 voltas/s. O getter sozinho
+  = 66M execuções = **49,8% de todo o trabalho**. Nenhum bloco é laço próprio, daí
+  o "limpador de jit não detectava".
+- **Fix:** assinatura de 10 ops (`chained-wait-loop-getter-cmp`) no `idle_ff_sigs`
+  cobrindo o trecho contíguo `8C01BF1E..8C01BF30`, marcando `8C01BF1E` como idle
+  fast-forward (avança até o próximo evento). **Medido: 15 → 30 fps** (600
+  frames/20 s, core 66 → 32 ms); lap time 0:04,682 → 0:09,679 em 150 frames a
+  30 fps = **99,9%**. Sem match falso em Shenmue/gwing2/mslug6; boot frio ok.
+- **Ferramentas novas:** `FC_MEM_READ=<addr>:<n>` (dump de memória do guest),
+  `FC_ADDR_WATCH=<lo>-<hi>` (loga blocos compilados na faixa) e o `FC_DUMP_BLOCK`
+  agora grava bytes crus (`.raw`).
+
+## 2026-09-26 23:15 — padrões com nomes genéricos + plano tier2 estilo Dolphin
+
+- **Renomeação:** as assinaturas passam a ter nome da FORMA (não do jogo):
+  `wait-flag-cmp-loop`, `wait-flag-task-loop`/`-v2`, `coop-yield-self-idle-loop`,
+  `chained-wait-loop-getter-cmp`, e o padrão do tier2 vira
+  `region-bad-store-burst` (agora `tier2_exclude_block(va, nome)` loga a
+  classe). O comentário guarda o jogo como evidência. Docs atualizados.
+- **Tier2 (mantendo o que existe):** confirmado que o `block_ok` já exclui
+  blocos com truque de ciclo das regiões. Implementado **call following por
+  literal de PC** (`call_target` resolve `mov.l @(disp,PC),rN` e lê o ponteiro)
+  atrás de `FC_TIER2_INLINE_LIT` — **sem ganho medido** (o `leaf_blocks` rejeita
+  os alvos; Shenmue: 4 alvos resolvidos, 0 embutidas, fps igual). Fica opt-in.
+- **Próximas técnicas do Dolphin (plano em `current_plan.md`):** formação por
+  branch following (fechar o laço por arestas estáticas), verificação neutra
+  sempre-ligada, e limiar de reúso antes de instalar. Cada uma atrás de flag +
+  A/B + `state_compare`.
+- **Deploy:** oficial `509ef7d4` (renomeação; comportamento inalterado — o hook
+  novo é desligado por padrão). Backup em `/roms2/dumps/core_pre_rename.so`.

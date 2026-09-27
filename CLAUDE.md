@@ -102,6 +102,24 @@ dois é uma ferramenta de investigação legítima.
   confiável em geral — depois de editar QUALQUER header amplamente incluído
   (`types.h` em especial), sempre passe pelo `make clean` completo acima, mesmo
   que o build incremental "funcione" sem erro.
+- **Além de tudo que já se olhava (fps, frame time p50/p95/p99, média), agora
+  também sempre olhar a % de velocidade do jogo (VEL%), a que o usuário lê na
+  tela.** Do JSON do benchmark ela sai de
+  `audio_frames / (duration_seconds * sample_rate)` (sample_rate 44100), a
+  fórmula histórica do projeto (bate com Le Mans 97,8%, DOA2 88%, Shenmue II
+  60%). Sempre incluir a coluna VEL% nas tabelas, ao lado de fps, frame time e
+  underruns. Cuidado: VEL% ~100% com fps baixo (Sonic Shuffle 100% a 15 fps)
+  quer dizer que o jogo, em tempo emulado, pede poucos frames/s; e o
+  número que vale como confirmação final é o que o usuário lê na tela.
+- **Toda medição no device roda entre `sudo perfmax performance <rom>` e
+  `sudo perfnorm`** (é assim que o ES lança dreamcast/naomi/atomiswave,
+  `governor = performance` no `es_settings.cfg`); em `ondemand` puro os números
+  saem piores (item 4.70).
+- **Medição no device: sempre só DUAS rodadas, rápidas (20s + 8s de warmup), e
+  depois fazer uma pergunta de texto aberto ao usuário sobre o que ele viu na
+  tela** (VEL% mostrado, sensação, hicups) em vez de repetir A/B atrás de sinal
+  limpo. Anunciar antes o que cada uma das duas rodadas mede. Se o resultado
+  das duas empatar, a conclusão é "sem ganho medido", não "mais uma rodada".
 - **Métrica de performance é frame time + fps, sempre os dois, sempre em
   p50/p95/p99 E média geral — nunca só um número.** Olhar só a média (de fps ou
   de frame time) já escondeu ganho real mais de uma vez neste projeto, e olhar só
