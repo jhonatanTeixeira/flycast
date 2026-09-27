@@ -2838,3 +2838,25 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   A/B + `state_compare`.
 - **Deploy:** oficial `509ef7d4` (renomeação; comportamento inalterado — o hook
   novo é desligado por padrão). Backup em `/roms2/dumps/core_pre_rename.so`.
+
+## 2026-09-27 00:10 — tier2: branch following (Dolphin) — DOA2 +VEL, Shenmue é alvo ruim
+
+- **Alvo de dev = Shenmue** (pedido do usuário). Baseline: 26,6 fps / 88,6% com
+  tier2; **27,3 fps / 91,0% com tier2 OFF** → o tier2 **piora** o Shenmue
+  (overhead de gerir regiões > ganho). Achado registrado (4.82).
+- **Diagnóstico:** os blocos quentes do Shenmue são o laço de transformação de
+  vértices (`0C1ED...`, ~7 blocos/vértice, terminando em `jcond` dinâmico). Os
+  edges estão em `BranchBlock`/`NextBlock`, mas os blocos intermediários do
+  laço não estão quentes → a união estática fragmentava em grupos pequenos
+  (#2/#3/#4) que eram removidos por baixo reúso.
+- **Implementado (Dolphin block merging):** `complete_loop` em `form_regions`
+  segue as arestas estáticas a partir do grupo e adiciona os blocos de um
+  caminho que sai e **volta** ao grupo (BFS direto ∩ reverso, limite 40).
+  `FC_TIER2_FOLLOW=0` desliga.
+- **Medido (DOA2, 15s, 2 pares):** ligado **39,2/39,5 fps, VEL 96,3/96,2%**;
+  desligado 38,3/39,3 fps, VEL 93,6/91,7% → ganho de VEL consistente (+3,6); o
+  reúso da região #1 vai de 32,8 → 65,1 blocos/entrada. **Shenmue:** estrutura
+  melhorou (região #2 de 3 → 7 blocos, reúso 2,8 → 4,3) mas fps neutro.
+  **mslug6:** segue limpo (métrica de gradiente ~10,5).
+- **Conclusão:** a técnica vale (fica ligada por padrão), mas o **alvo de dev
+  do tier2 é DOA2/Shenmue II**, não o Shenmue. Próximo: verificação neutra.

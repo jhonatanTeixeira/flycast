@@ -22,14 +22,16 @@ sem ganho** (o `inlineLeaves` só embute função-folha e o `leaf_blocks` rejeit
 os alvos; Shenmue resolveu 4 alvos, 0 embutidas, fps igual). Fica como hook
 opt-in.
 
-**técnicas do Dolphin ainda a fazer (em ordem, cada uma atrás de flag + A/B):**
-1. **Formação por branch following** (`form_regions`): hoje só une blocos
-   QUENTES por arestas estáticas; o Dolphin segue as arestas até blocos frios
-   para fechar o laço. Fechar o grupo pelo ciclo estático (limite de tamanho).
+**técnicas do Dolphin (em ordem, cada uma atrás de flag + A/B):**
+1. ~~**Formação por branch following** (`form_regions`)~~ **done** (4.82): a
+   closure `complete_loop` segue as arestas estáticas até blocos frios que
+   fecham o ciclo. **DOA2: VEL 93,6/91,7 → 96,3/96,2%** (2 pares); Shenmue
+   neutro; mslug6 limpo. `FC_TIER2_FOLLOW=0` desliga. **Achado:** o tier2
+   **piora** o Shenmue (26,5 × 27,3 fps com off) — o alvo de dev do tier2 é
+   DOA2/Shenmue II.
 2. **Verificação neutra sempre-ligada** (`tier2_selfcheck`): tornar o replay do
    interpretador neutro (salvar/restaurar scheduler/interrupções além de
-   RAM+ctx) e rodar em toda região — "só regiões verificadas". É o contrato de
-   correção que teria pego mslug6/Shenmue.
+   RAM+ctx) e rodar em toda região — "só regiões verificadas".
 3. **Poucas regiões, alto reúso**: exigir o limiar de reúso ANTES de instalar
    (o Sonic Shuffle mostrou que formar+descartar dezenas é pior).
 
