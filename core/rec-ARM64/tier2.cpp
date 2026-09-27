@@ -93,7 +93,13 @@ extern u8 *CodeCache;
 extern u32 tier2_code_reserve;		// driver.cpp: cauda do cache reservada
 extern bool tier2_poll;		// sh4_interpreter.cpp: UpdateSystem chama tier2_safe_point
 
-static const u32 T2_AREA = 1024 * 1024;
+// Reserva da cauda do cache de codigo. FC_TIER2_AREA (bytes) para A/B.
+static u32 T2_AREA = 1024 * 1024;
+static u32 t2AreaInit()
+{
+	const char *e = getenv("FC_TIER2_AREA");
+	return e != nullptr ? (u32)atoi(e) : (1024 * 1024);
+}
 
 namespace {
 
@@ -128,6 +134,17 @@ bool optionAuto;	// core option flycast2026_tier2 (libretro.cpp -> tier2_set_cor
 u32 installed;
 std::set<u32> inRegion;		// blocos em regiao viva (fora da formacao)
 std::set<u32> badBlocks;		// recusados de vez (fora das proximas janelas)
+
+// ---- design 1 (FC_TIER2_FULL_THREAD): tier2 inteiro na thread -------------
+// A emu thread entrega os blocos (shared_ptr) numa fila SPSC e so INSTALA o
+// resultado (finish). O worker faz amostragem/heat/formacao/load/codegen.
+// workerBlocks = mapa vaddr->bloco do lado do worker (evita o blkmap, que nao
+// e thread-safe). Declarado cedo porque a formacao (acima) usa.
+std::map<u32, RuntimeBlockInfoPtr> workerBlocks;
+std::map<void *, RuntimeBlockInfoPtr> workerByCode;
+bool fullThreadEnabled();
+RuntimeBlockInfoPtr t2GetBlock(u32 va);
+RuntimeBlockInfoPtr t2MapPc(void *pc);
 
 // FC_TIER2_SELFCHECK (diagnostico, docs/tech_debits.md): compara a execucao
 // de uma regiao com o interpretador, do MESMO estado de entrada, e desfaz a
@@ -299,7 +316,7 @@ bool leaf_blocks(u32 T, std::vector<u32> *out)
 		seen.insert(x);
 		if (seen.size() > 6)
 			return false;
-		RuntimeBlockInfo *b = bm_GetBlock(x).get();
+		RuntimeBlockInfo *b = t2GetBlock(x).get();
 		if (b == nullptr || !block_ok(b))
 			return false;
 		ninstr += b->guest_opcodes;
@@ -418,7 +435,7 @@ public:
 	// um bloco do JIT antigo como BlockIn (fschg em par sai; pref sobe)
 	BlockIn makeBlock(u32 va)
 	{
-		RuntimeBlockInfo *rbi = bm_GetBlock(va).get();
+		RuntimeBlockInfo *rbi = t2GetBlock(va).get();
 		if (rbi == nullptr)
 			throw Reject{ "bloco nao compilado" };
 		if (!rbi->read_only || rbi->temp_block || rbi->idle_fastforward || rbi->delay_skip || rbi->scan_skip || rbi->dt_skip)
@@ -1501,6 +1518,7 @@ public:
 void read_cfg()
 {
 	cfg_read = true;
+	T2_AREA = t2AreaInit();
 	if (const char *m = getenv("FC_TIER2_MAXREG"))
 		maxRegions = (u32)atoi(m);
 	{
@@ -1564,17 +1582,141 @@ bool inFlight;
 bool workerStarted;
 u32 generation;
 
+// ---- design 1 (FC_TIER2_FULL_THREAD): fila SPSC + park (batching) ---------
+// A emu thread entrega os blocos numa fila SPSC sem lock e acorda o worker so
+// a cada T2QBATCH (o "sino" 1:1 custaria mais que o item). O worker dorme no
+// futex (jobCv) e, ao acordar, drena e roda o pipeline inteiro.
+static const u32 T2Q = 8192;
+static const u32 T2QBATCH = 64;
+RuntimeBlockInfoPtr t2BlockQ[T2Q];
+std::atomic<u32> t2QHead{0}, t2QTail{0};
+std::atomic<u32> t2QBatch{0};
+std::atomic<bool> pipelineRequested{false};	// emu pede o worker p/ rodar o pipeline
+
+bool fullThreadEnabled()
+{
+	// Design 1 ligado por padrao (docs/tech_debits.md 4.83): o tier2 roda
+	// inteiro na thread separada. FC_TIER2_FULL_THREAD=0 desliga (A/B).
+	static int e = -1;
+	if (e == -1)
+	{
+		const char *s = getenv("FC_TIER2_FULL_THREAD");
+		e = (s == nullptr || atoi(s) != 0) ? 1 : 0;
+	}
+	return e == 1;
+}
+
+RuntimeBlockInfoPtr t2GetBlock(u32 va)
+{
+	if (fullThreadEnabled())
+	{
+		auto it = workerBlocks.find(va);
+		return it == workerBlocks.end() ? nullptr : it->second;
+	}
+	return bm_GetBlock(va);
+}
+
+RuntimeBlockInfoPtr t2MapPc(void *pc)
+{
+	if (fullThreadEnabled())
+	{
+		void *pcrw = CC_RX2RW(pc);
+		auto it = workerByCode.upper_bound(pcrw);
+		if (it == workerByCode.begin())
+			return nullptr;
+		it--;
+		RuntimeBlockInfo *b = it->second.get();
+		if ((u8 *)b->code + b->host_code_size < (u8 *)pcrw)
+			return nullptr;
+		return it->second;
+	}
+	return bm_GetBlock2(pc);
+}
+
+// Chamado de bm_AddBlock (emu thread): entrega o bloco recem-compilado.
+// Implementacao interna; o simbolo externo (fora do namespace anonimo) e
+// tier2_on_block_added, mais abaixo.
+void worker_loop();
+void tier2_on_block_added_impl(const RuntimeBlockInfoPtr &b)
+{
+	if (!fullThreadEnabled() || patternOff)
+		return;
+	if (!workerStarted)
+	{
+		// design 1: o worker tem de existir antes do primeiro submit (que
+		// agora roda NELE). Inicia aqui, no primeiro bloco.
+		workerStarted = true;
+		std::thread(worker_loop).detach();
+	}
+	u32 h = t2QHead.load(std::memory_order_relaxed);
+	u32 t = t2QTail.load(std::memory_order_acquire);
+	if (h - t >= T2Q)
+		return;		// cheia: descarta (fire-and-forget)
+	t2BlockQ[h % T2Q] = b;
+	t2QHead.store(h + 1, std::memory_order_release);
+	if (t2QBatch.fetch_add(1, std::memory_order_relaxed) + 1 >= T2QBATCH)
+	{
+		t2QBatch.store(0, std::memory_order_relaxed);
+		jobCv.notify_one();
+	}
+}
+
+// worker: move a fila pro mapa local (worker-owned).
+void workerDrainBlocks()
+{
+	u32 t = t2QTail.load(std::memory_order_relaxed);
+	u32 h = t2QHead.load(std::memory_order_acquire);
+	for (; t != h; t++)
+	{
+		RuntimeBlockInfoPtr b = t2BlockQ[t % T2Q];
+		t2BlockQ[t % T2Q] = nullptr;
+		if (b != nullptr)
+		{
+			workerBlocks[b->vaddr] = b;
+			workerByCode[(void *)b->code] = b;
+		}
+	}
+	t2QTail.store(t, std::memory_order_release);
+}
+
+void drain_samples();
+void form_regions();
+void next_candidate();
+void check_regions();
+extern u32 windowSamples;
+
 void worker_loop()
 {
 	for (;;)
 	{
-		Job *j;
+		Job *j = nullptr;
 		{
 			std::unique_lock<std::mutex> l(jobMx);
-			jobCv.wait(l, [] { return jobPending != nullptr; });
+			jobCv.wait(l, [] {
+				return jobPending != nullptr
+					|| pipelineRequested.load(std::memory_order_relaxed)
+					|| (fullThreadEnabled() && t2QHead.load(std::memory_order_acquire) != t2QTail.load(std::memory_order_relaxed));
+			});
 			j = jobPending;
 			jobPending = nullptr;
 		}
+		if (fullThreadEnabled())
+		{
+			pipelineRequested.store(false, std::memory_order_relaxed);
+			workerDrainBlocks();
+			if (j == nullptr)
+			{
+				// design 1: pipeline inteiro no worker (amostras -> heat ->
+				// formacao -> submit). submit vira um job que este laco pega.
+				drain_samples();
+				if (windowSamples >= 4000)
+					form_regions();
+				next_candidate();
+				continue;
+			}
+		}
+		if (j == nullptr)
+			continue;
 		auto t0 = std::chrono::steady_clock::now();
 		try
 		{
@@ -1601,7 +1743,7 @@ int submit(const std::vector<u32> &entryList, const std::vector<u32> &blockList,
 	if (inFlight)
 		return 1;
 	for (u32 va : blockList)
-		if (bm_GetBlock(va).get() == nullptr)
+		if (t2GetBlock(va).get() == nullptr)
 			return 1;
 	size_t room = area_end() - t2_ptr;
 	if (room < 16 * 1024)
@@ -1763,18 +1905,30 @@ void finish()
 // da regiao a cada volta e paga carga + descarga + despachante). Desfaz.
 void check_regions()
 {
+	// Knobs de A/B (docs/tech_debits.md 4.84): quantas entradas antes de julgar
+	// e o limiar de blocos/entrada. Avaliar mais cedo desfaz regiao de baixo
+	// reuso antes (hoje ela roda 4000 entradas pagando o custo).
+	static int checkEntries = -1;
+	static double checkBpe = -1;
+	if (checkEntries == -1)
+	{
+		const char *e = getenv("FC_TIER2_CHECK_ENTRIES");
+		checkEntries = e != nullptr ? atoi(e) : 4000;
+		const char *b = getenv("FC_TIER2_CHECK_BPE");
+		checkBpe = b != nullptr ? atof(b) : 2.5;
+	}
 	for (Region &r : regions)
 	{
 		if (!r.alive || r.checked || r.entries == nullptr)
 			continue;
 		u32 en = *r.entries, pa = *r.passes;
-		if (en < 4000)
+		if (en < (u32)checkEntries)
 			continue;
 		r.checked = true;
 		// blocos executados por entrada: < 2,5 = a regiao paga carga e descarga
 		// de tudo para rodar 1-2 blocos (Zombie: caminho quente saindo dela)
 		double bpe = (double)pa / en;
-		if (bpe < 2.5)
+		if (bpe < checkBpe)
 		{
 			unhook(r);
 			for (u32 va : r.blocks)
@@ -1799,8 +1953,8 @@ void check_regions()
 // cada bloco, sem sinal (um timer de 1 kHz por sinal custou ~6% no DOA2).
 const u32 SAMPLE_BUF = 4096;
 uintptr_t sampleBuf[SAMPLE_BUF];
-u32 sampleW;
-u32 sampleR;
+std::atomic<u32> sampleW{0};	// emu thread escreve, worker le (design 1)
+std::atomic<u32> sampleR{0};	// worker escreve, emu le (limite do anel)
 std::unordered_map<u32, u32> heat;
 u32 windowSamples;
 uintptr_t lastLo, lastHi;	// cache do ultimo bloco amostrado (zerado em descarte/reset)
@@ -1851,11 +2005,11 @@ bool stores_are_sq(const std::vector<u32> &blocks)
 {
 	std::set<int> prefBase;
 	for (u32 va : blocks)
-		for (const shil_opcode &o : bm_GetBlock(va)->oplist)
+		for (const shil_opcode &o : t2GetBlock(va)->oplist)
 			if (o.op == shop_pref && o.rs1.is_reg())
 				prefBase.insert(o.rs1._reg);
 	for (u32 va : blocks)
-		for (const shil_opcode &o : bm_GetBlock(va)->oplist)
+		for (const shil_opcode &o : t2GetBlock(va)->oplist)
 			if (o.op == shop_writem && (!o.rs1.is_reg() || !prefBase.count(o.rs1._reg)))
 				return false;
 	return true;
@@ -1923,7 +2077,7 @@ static RuntimeBlockInfo *rbiOf(u32 va, std::map<u32, RuntimeBlockInfo *> &rb)
 	auto it = rb.find(va);
 	if (it != rb.end())
 		return it->second;
-	RuntimeBlockInfo *b = bm_GetBlock(va).get();
+	RuntimeBlockInfo *b = t2GetBlock(va).get();
 	if (b != nullptr)
 		rb[va] = b;
 	return b;
@@ -1944,7 +2098,7 @@ static void complete_loop(std::vector<u32> &group, std::map<u32, RuntimeBlockInf
 		{
 			if (t == 0xFFFFFFFF || fwd.count(t) || slowMem.count(t))
 				continue;
-			RuntimeBlockInfo *tb = bm_GetBlock(t).get();
+			RuntimeBlockInfo *tb = t2GetBlock(t).get();
 			if (tb == nullptr || !block_ok(tb))
 				continue;
 			fwd.insert(t);
@@ -2005,7 +2159,7 @@ void form_regions()
 		u32 va = h.second;
 		if (inRegion.count(va) || badBlocks.count(va))
 			continue;
-		RuntimeBlockInfo *b = bm_GetBlock(va).get();
+		RuntimeBlockInfo *b = t2GetBlock(va).get();
 		if (b == nullptr)
 			continue;
 		if (!block_ok(b))
@@ -2113,7 +2267,7 @@ void next_candidate()
 				for (u32 va : blocks)
 				{
 					bool st = false;
-					for (const shil_opcode &o : bm_GetBlock(va)->oplist)
+					for (const shil_opcode &o : t2GetBlock(va)->oplist)
 						st |= o.op == shop_writem;
 					if (!st)
 						keep.push_back(va);
@@ -2140,13 +2294,14 @@ void next_candidate()
 
 void drain_samples()
 {
-	u32 w = sampleW;
-	if (w - sampleR > SAMPLE_BUF)
-		sampleR = w - SAMPLE_BUF;
+	u32 w = sampleW.load(std::memory_order_acquire);
+	u32 r = sampleR.load(std::memory_order_relaxed);
+	if (w - r > SAMPLE_BUF)
+		r = w - SAMPLE_BUF;
 	const uintptr_t lo = (uintptr_t)CC_RW2RX(CodeCache), hi = (uintptr_t)CC_RW2RX(area_begin());
-	for (; sampleR != w; sampleR++)
+	for (; r != w; r++)
 	{
-		uintptr_t pc = sampleBuf[sampleR & (SAMPLE_BUF - 1)];
+		uintptr_t pc = sampleBuf[r & (SAMPLE_BUF - 1)];
 		if (pc < lo || pc >= hi)
 			continue;
 		u32 va;
@@ -2154,7 +2309,7 @@ void drain_samples()
 			va = lastVa;		// mesmo bloco da amostra anterior (laco)
 		else
 		{
-			RuntimeBlockInfo *b = bm_GetBlock2((void *)pc).get();
+			RuntimeBlockInfo *b = t2MapPc((void *)pc).get();
 			if (b == nullptr)
 				continue;
 			lastLo = (uintptr_t)CC_RW2RX((void *)b->code);
@@ -2164,12 +2319,17 @@ void drain_samples()
 		heat[va]++;
 		windowSamples++;
 	}
-	check_regions();
-	if (windowSamples >= 4000)
-		form_regions();
+	sampleR.store(r, std::memory_order_release);
 }
 
 } // namespace
+
+// design 1: simbolo EXTERNO (linkage externo) que o blockmanager chama via
+// weak. A implementacao fica no namespace anonimo (tier2_on_block_added_impl).
+void tier2_on_block_added(const RuntimeBlockInfoPtr &b)
+{
+	tier2_on_block_added_impl(b);
+}
 
 // ------------------------------------------------------------- autochecagem
 // FC_TIER2_SELFCHECK (ver topo do arquivo): a regiao amostra o estado na
@@ -2424,6 +2584,19 @@ bool tier2_sampling()
 
 void tier2_selfcheck();
 void tier2_dump_state();
+// Tempo (us) que a EMU THREAD gasta no tier2 (amostragem + drain + form +
+// submit/load + finish). So mede o caminho caro (depois do `& 63`), ~7 mil/s.
+u64 g_tier2EmuUs;
+struct Tier2EmuAcc
+{
+	std::chrono::steady_clock::time_point t0;
+	Tier2EmuAcc() : t0(std::chrono::steady_clock::now()) {}
+	~Tier2EmuAcc()
+	{
+		g_tier2EmuUs += (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - t0).count();
+	}
+};
 void tier2_safe_point()
 {
 	if (stateDir != nullptr)
@@ -2464,16 +2637,35 @@ void tier2_safe_point()
 		// no mapa de blocos, cara no A53 (todas as fatias = -12% no DOA2)
 		if (++pollCount & 63)
 			return;
+		Tier2EmuAcc _emuAcc;
 		if (inFlight)
 		{
 			finish();
-			if (!inFlight)
+			if (!inFlight && !fullThreadEnabled())
 				next_candidate();
 		}
-		sampleBuf[sampleW++ & (SAMPLE_BUF - 1)] = t2_last_pc;
+		{
+			// amostra = um store barato; o worker drena (design 1).
+			u32 w = sampleW.load(std::memory_order_relaxed);
+			sampleBuf[w & (SAMPLE_BUF - 1)] = t2_last_pc;
+			sampleW.store(w + 1, std::memory_order_release);
+		}
 		if (pollCount & 4095)
 			return;
-		drain_samples();
+		check_regions();
+		if (fullThreadEnabled())
+		{
+			// acorda o worker (em lote, ~110/s) pra drenar as amostras e rodar
+			// o pipeline inteiro. 1:1 custaria mais que o item.
+			pipelineRequested.store(true, std::memory_order_relaxed);
+			jobCv.notify_one();
+		}
+		else
+		{
+			drain_samples();
+			if (windowSamples >= 4000)
+				form_regions();
+		}
 		return;
 	}
 	if (++pollCount & 255)

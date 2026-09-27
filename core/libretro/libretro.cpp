@@ -177,6 +177,13 @@ float g_declaredFps = 60.0f;
 // Wall-clock duration of the PREVIOUS full retro_run() call -- see extern
 // declaration in core/rend/transform_matrix.h.
 float g_lastFrameTimeMs = 0.0f;
+
+// Hicup (estabilidade): conta frames com tempo > 2x a mediana da janela. Mede
+// a CAUDA, que fps/p50 escondem. Despejado no FC_IDLE_FF_STATS. Ver 4.84.
+static float g_hicWin[256];
+static int g_hicN = 0, g_hicIdx = 0;
+static float g_hicMed = 0.0f;
+static u64 g_hicCount = 0, g_hicFrames = 0;
 // Live measured retro_run() call rate -- see extern declaration in
 // core/rend/transform_matrix.h. 0 until the first ~1s window completes.
 float g_measuredFps = 0.0f;
@@ -1366,6 +1373,24 @@ void retro_run (void)
 
    g_lastFrameTimeMs = (float)std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
 
+   // Hicup: janela de 256 frames; mediana recomputada a cada 64; conta frames
+   // acima de 2x a mediana. Custo desprezivel (so na medicao, a cada 64).
+   {
+      g_hicWin[g_hicIdx++ & 255] = g_lastFrameTimeMs;
+      if (g_hicN < 256)
+         g_hicN++;
+      g_hicFrames++;
+      if ((g_hicFrames & 63) == 0 && g_hicN >= 64)
+      {
+         float tmp[256];
+         memcpy(tmp, g_hicWin, g_hicN * sizeof(float));
+         std::sort(tmp, tmp + g_hicN);
+         g_hicMed = tmp[g_hicN / 2];
+      }
+      if (g_hicMed > 0.0f && g_lastFrameTimeMs > 2.0f * g_hicMed)
+         g_hicCount++;
+   }
+
    // FC_IFB_COUNT (opt-in, see rec_arm64.cpp): periodically flush the
    // interpreter-fallback opcode hit counts to /tmp/ifb-counts-<pid>.txt
    // so they're readable mid-session (this core's clean-shutdown path is
@@ -1607,12 +1632,20 @@ void retro_run (void)
                extern u32 g_foldedReads, g_foldInvalidations;
                fprintf(f, "folded_reads_tracked\t%u\n", g_foldedReads);
                fprintf(f, "fold_invalidations\t%u\n", g_foldInvalidations);
-               extern u32 g_queueWaits, g_rendIntervalCyclesEma;
-               extern std::atomic<u32> g_rendWorkUsEma;
-               fprintf(f, "waited_for_render\t%u\n", g_queueWaits);
-               fprintf(f, "render_work_ms_ema\t%.2f\n", g_rendWorkUsEma.load() / 1000.0);
-               fprintf(f, "game_interval_ms_ema\t%.2f\n", g_rendIntervalCyclesEma / 200000.0);
-               fclose(f);
+                extern u32 g_queueWaits, g_rendIntervalCyclesEma;
+                extern std::atomic<u32> g_rendWorkUsEma;
+                fprintf(f, "waited_for_render\t%u\n", g_queueWaits);
+                fprintf(f, "render_work_ms_ema\t%.2f\n", g_rendWorkUsEma.load() / 1000.0);
+                fprintf(f, "game_interval_ms_ema\t%.2f\n", g_rendIntervalCyclesEma / 200000.0);
+                fprintf(f, "hiccups\t%llu\n", (unsigned long long)g_hicCount);
+                fprintf(f, "hiccup_rate_pct\t%.2f\n", g_hicFrames ? 100.0 * (double)g_hicCount / g_hicFrames : 0.0);
+                fprintf(f, "frame_median_ms\t%.2f\n", g_hicMed);
+#if HOST_CPU == CPU_ARM64
+                extern u64 g_tier2EmuUs;
+                fprintf(f, "tier2_emu_us_total\t%llu\n", (unsigned long long)g_tier2EmuUs);
+                fprintf(f, "tier2_emu_us_per_frame\t%.1f\n", (double)g_tier2EmuUs / idleFrames);
+#endif
+                fclose(f);
             }
          }
       }
