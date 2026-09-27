@@ -61,11 +61,49 @@ extern "C" struct retro_hw_render_callback hw_render;
 
 void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded)
 {
+	// FC_TEX_GPU_MORTON: sobe os bytes CRUS twiddled (R8UI); o shader faz o
+	// untwiddle Morton + paleta por fragmento (fiel ao PowerVR).
+	if (gpu_morton && texID != 0)
+	{
+		u32 nbytes = w * h / (tcw.PixelFmt == PixelPal4 ? 2 : 1);
+		u32 rw = w, rh = (nbytes + rw - 1) / rw;
+		static thread_local std::vector<u8> rawbuf;
+		rawbuf.assign((size_t)rw * rh, 0);
+		u32 avail = (size > 0 && (u64)sa + size <= VRAM_SIZE) ? size : nbytes;
+		if (avail > rw * rh) avail = rw * rh;
+		memcpy(rawbuf.data(), &vram[sa], avail);
+		gl_UploadRawTexture(texID, rw, rh, rawbuf.data());
+		gl_RegisterRawTexture(texID, w, h, tcw.PixelFmt == PixelPal4);
+		// CRITICO: sem este lock a textura nunca e invalidada quando o jogo
+		// escreve na VRAM -> sprite velho/corrompido na tela (glitch). O
+		// caminho normal faz isso depois da conversao; aqui tambem tem de ser.
+		libCore_vramlock_Lock(sa_tex, sa + size - 1, this);
+		if (getenv("FC_MORTON_LOG"))
+			NOTICE_LOG(RENDERER, "MORTON upload: texid=%llu w=%u h=%u pix=%d sa=%u size=%u nbytes=%u rw=%u rh=%u stride=%d StrideSel=%d Mip=%d",
+				(unsigned long long)texID, w, h, tcw.PixelFmt, sa, size, nbytes, rw, rh,
+				(tcw.StrideSel ? (TEXT_CONTROL & 31) * 32 : (int)w), tcw.StrideSel, tcw.MipMapped);
+		{
+			const char *d = getenv("FC_MORTON_DUMP");
+			static int dumps = 0;
+			if (d && dumps < 6)
+			{
+				dumps++;
+				char fn[128];
+				snprintf(fn, sizeof(fn), "%s/raw_%llu.bin", d, (unsigned long long)texID);
+				FILE *rf = fopen(fn, "wb");
+				if (rf) { fwrite(rawbuf.data(), 1, rw * rh, rf); fclose(rf); }
+				snprintf(fn, sizeof(fn), "%s/vram_%llu.bin", d, (unsigned long long)texID);
+				rf = fopen(fn, "wb");
+				if (rf) { fwrite(&vram[sa], 1, rw * rh, rf); fclose(rf); }
+			}
+		}
+		return;
+	}
 	if (texID != 0)
 	{
 		//upload to OpenGL !
 		u64 _b0 = g_taSplitEnabled ? tex_now_us() : 0;
-		glcache.BindTexture(GL_TEXTURE_2D, texID);
+		glcache.BindTexture(GL_TEXTURE_2D, (GLuint)texID);
 		if (g_taSplitEnabled)
 			g_texBindUs += tex_now_us() - _b0;
 		GLuint comps = tex_type == TextureType::_8 ? gl.single_channel_format : GL_RGBA;
@@ -237,6 +275,7 @@ bool TextureCacheData::Delete()
 		return false;
 
 	if (texID) {
+		gl_UnregisterRawTexture(texID);
 		glcache.DeleteTextures(1, &texID);
 	}
 	
@@ -434,6 +473,7 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
    {
 		tf->Create();
 		tf->texID = glcache.GenTexture();
+		gl_UnregisterRawTexture(tf->texID);	// nome GL reciclado: nao herdar registro velho
 		tf->gl_w = tf->gl_h = tf->gl_comps = tf->gl_type = 0;	// alocacao nova
 	}
 
@@ -450,8 +490,10 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
    {
       if (tf->IsCustomTextureAvailable())
       {
+      	gl_UnregisterRawTexture(tf->texID);
       	glcache.DeleteTextures(1, &tf->texID);
       	tf->texID = glcache.GenTexture();
+      	gl_UnregisterRawTexture(tf->texID);
       	tf->gl_w = tf->gl_h = tf->gl_comps = tf->gl_type = 0;	// alocacao nova
       	tf->CheckCustomTexture();
       }
@@ -463,6 +505,41 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
 	return tf->texID;
 }
 
+
+// FC_TEX_GPU_MORTON: sobe os bytes CRUS (twiddled) como R8UI. O shader faz o
+// untwiddle Morton + paleta por fragmento. rw x rh = layout linear dos bytes.
+void gl_UploadRawTexture(u64 texID, u32 rw, u32 rh, const u8 *data)
+{
+	// GL cru de proposito: glcache.BindTexture/TexParameteri cacheiam por
+	// textura ignorando a unidade ativa e podem pular o bind -> o
+	// glTexImage2D cairia no binding errado. Aqui sempre na unidade 0.
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, (GLuint)texID);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	// GL_R8=0x8229, GL_RED=0x1903 (nao existem no header GLES2 daqui). sampler2D
+	// float normalizado -> mesmo tipo do `tex`, sem conflito de unidade.
+	glTexImage2D(GL_TEXTURE_2D, 0, 0x8229, rw, rh, 0, 0x1903, GL_UNSIGNED_BYTE, data);
+	glCheck();
+}
+
+static std::unordered_map<GLuint, TexRawInfo> g_rawTextures;
+void gl_RegisterRawTexture(u64 texID, u32 rw, u32 rh, bool pal4)
+{
+	g_rawTextures[(GLuint)texID] = { rw, rh, pal4 };
+}
+const TexRawInfo* gl_GetRawInfo(u64 texID)
+{
+	auto it = g_rawTextures.find((GLuint)texID);
+	return it == g_rawTextures.end() ? nullptr : &it->second;
+}
+void gl_UnregisterRawTexture(u64 texID)
+{
+	g_rawTextures.erase((GLuint)texID);
+}
 
 GLuint fbTextureId;
 

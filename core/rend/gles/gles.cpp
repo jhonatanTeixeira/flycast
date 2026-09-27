@@ -154,6 +154,7 @@ R"(%s
 #define FogClamping %d
 #define pp_TriLinear %d
 #define pp_Palette %d
+#define pp_GpuMorton %d
 
 #define PI 3.1415926
 
@@ -243,17 +244,74 @@ highp vec4 fog_clamp(highp vec4 col)
 #endif
 }
 
-#if pp_Palette != 0
-
-// A paleta deste fork e uma textura 1024x1 RGBA. O canal de uma textura de
-// indice carrega o indice normalizado (indice/255); a busca abaixo reproduz a
-// semantica do caminho nearest original (indice*255 + base da paleta).
+#if pp_Palette != 0 || pp_GpuMorton != 0
+// A paleta pode ser resolvida na GPU. O canal lido da textura carrega o INDICE
+// (0..255). getPaletteEntry mapeia o indice normalizado para a paleta 1024x1
+// (indice*255 + base), preservando a semantica do caminho nearest original
+// (indice*255 + base da paleta).
 lowp vec4 getPaletteEntry(highp float colorIndex)
 {
 	highp vec2 c = vec2((colorIndex * 255.0 + float(palette_index)) / 1023.0, 0.5);
 	return texture(palette, c);
 }
 
+#endif
+
+#if pp_GpuMorton != 0
+// FC_TEX_GPU_MORTON: a textura sobe CRUA (twiddled, 1 canal). O shader faz o
+// untwiddle (interleave Morton, y primeiro) por fragmento e le o indice --
+// fiel ao PowerVR, que amostrava a VRAM no formato nativo. Validado no Mali-G31
+// (ver /tmp/opencode/mali_morton_sdl.c). uTexW/uTexH = dimensoes logicas.
+precision highp int;
+// sampler2D (float, GL_R8 normalizado): MESMO tipo do `tex`, entao os dois
+// podem dividir a unidade 0 sem erro de tipo no GLES. O `tex` fica morto aqui.
+uniform highp sampler2D texRaw;
+uniform int uTexW, uTexH;
+uniform int uPal4;	// 1 = pal4, 0 = pal8
+uniform int uShowIdx;	// debug: 1 = mostra o indice cru
+#define TEXRAW_BYTE(bo) uint(texelFetch(texRaw, ivec2((bo) %% uTexW, (bo) / uTexW), 0).r * 255.0 + 0.5)
+uint _p1(uint x){ x&=0xffffu; x=(x|(x<<8))&0x00FF00FFu; x=(x|(x<<4))&0x0F0F0F0Fu; x=(x|(x<<2))&0x33333333u; x=(x|(x<<1))&0x55555555u; return x; }
+uint _morton(int x,int y){ return _p1(uint(y))|(_p1(uint(x))<<1); }
+lowp vec4 palettePixelMorton(highp vec2 coords)
+{
+	highp vec2 texSize = vec2(float(uTexW), float(uTexH));
+	highp vec2 pixCoord = floor(coords * texSize);
+	int x = int(pixCoord.x); int y = int(pixCoord.y);
+	x = (x < 0) ? 0 : (x >= uTexW ? uTexW-1 : x);
+	y = (y < 0) ? 0 : (y >= uTexH ? uTexH-1 : y);
+	uint idx = _morton(x, y);
+	highp float colorIndex;
+	if (uPal4 == 1)
+	{
+		// pal4: byte = (idx/16)*8 + b(lx,ly); nibble = (ly par)? low : high
+		uint group = idx / 16u;
+		int lx = x & 3; int ly = y & 3;
+		uint b = uint((lx & 1) + (lx >> 1) * 4 + (ly >> 1) * 2);
+		int bo = int(group * 8u + b);
+		uint wb = TEXRAW_BYTE(bo);
+		uint nib = ((y & 1) == 0) ? (wb & 0xFu) : ((wb >> 4) & 0xFu);
+		colorIndex = float(nib) / 255.0;
+	}
+	else
+	{
+		// pal8: bloco 2x4 (xpp=2,ypp=4)=8 bytes; os 3 bits baixos do Morton sao
+		// a posicao intra-bloco, logo idx/8 e o grupo. Mapa do byte
+		// (convPAL8PT_TW): (0,0)=0 (0,1)=1 (1,0)=2 (1,1)=3 (0,2)=4 (0,3)=5 (1,2)=6 (1,3)=7.
+		uint group = idx / 8u;
+		int lx = x & 1; int ly = y & 3;
+		uint b = uint(lx * 2 + (ly & 1) + (ly >> 1) * 4);
+		int bo = int(group * 8u + b);
+		uint wb = TEXRAW_BYTE(bo);
+		colorIndex = float(wb) / 255.0;
+	}
+	if (uShowIdx == 1)
+	{
+		// R = byte lido (colorIndex*255), G = uTexW, B = bo baixo / 255
+		int bo2 = int(idx / 8u) * 8;
+		return vec4(colorIndex, float(uTexW) / 255.0, float(bo2 & 255) / 255.0, 1.0);
+	}
+	return getPaletteEntry(colorIndex);
+}
 #endif
 
 #if pp_Palette == 1		// Nearest filtering
@@ -312,7 +370,9 @@ void main()
 	#endif
 	#if pp_Texture==1
 	{
-		#if pp_Palette == 0
+		#if pp_GpuMorton == 1
+			lowp vec4 texcol = palettePixelMorton(vtx_uv);
+		#elif pp_Palette == 0
 			lowp vec4 texcol = texture(tex, vtx_uv);
 		#elif pp_Palette == 1
 			lowp vec4 texcol = palettePixel(vtx_uv);
@@ -436,7 +496,7 @@ glm::mat4 ViewportMatrix;
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
-		int palette)
+		int palette, bool gpu_morton)
 {
 	u32 rv=0;
 
@@ -453,6 +513,7 @@ PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 	rv<<=1; rv|=fog_clamping;
 	rv<<=1; rv|=trilinear;
 	rv<<=2; rv|=palette;
+	rv<<=1; rv|=gpu_morton;
 
 	PipelineShader *shader = &gl.shaders[rv];
 	if (shader->program == 0)
@@ -470,6 +531,7 @@ PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		shader->fog_clamping = fog_clamping;
 		shader->trilinear = trilinear;
 		shader->palette = palette;
+		shader->pp_GpuMorton = gpu_morton;
 		CompilePipelineShader(shader);
 	}
 
@@ -676,13 +738,18 @@ bool CompilePipelineShader(	PipelineShader* s)
 	int rc = sprintf(vshader, VertexShaderSource, gl.glsl_version_header, gl.gl_version, s->pp_Gouraud);
 	verify(rc + 1 <= (int)sizeof(vshader));
 
-	char pshader[8192];
+	char pshader[16384];
 
 	rc = sprintf(pshader,PixelPipelineShader, gl.glsl_version_header, gl.gl_version,
                 s->cp_AlphaTest,s->pp_InsideClipping,s->pp_UseAlpha,
                 s->pp_Texture,s->pp_IgnoreTexA,s->pp_ShadInstr,s->pp_Offset,s->pp_FogCtrl, s->pp_Gouraud, s->pp_BumpMap,
-				s->fog_clamping, s->trilinear, s->palette);
+				s->fog_clamping, s->trilinear, s->palette, s->pp_GpuMorton);
 	verify(rc + 1 <= (int)sizeof(pshader));
+	if (getenv("FC_SHADER_DUMP") != nullptr && s->pp_GpuMorton)
+	{
+		FILE *sf = fopen("/tmp/morton_shader.frag", "w");
+		if (sf) { fprintf(sf, "%s", pshader); fclose(sf); }
+	}
 
 	s->program=gl_CompileAndLink(vshader, pshader);
 
@@ -723,6 +790,20 @@ bool CompilePipelineShader(	PipelineShader* s)
 	if (gu != -1)
 		glUniform1i(gu, 2);
 	s->palette_index = glGetUniformLocation(s->program, "palette_index");
+	if (s->pp_GpuMorton)
+	{
+		s->texRaw = glGetUniformLocation(s->program, "texRaw");
+		s->uTexW = glGetUniformLocation(s->program, "uTexW");
+		s->uTexH = glGetUniformLocation(s->program, "uTexH");
+		s->uPal4 = glGetUniformLocation(s->program, "uPal4");
+		s->uShowIdx = glGetUniformLocation(s->program, "uShowIdx");
+		if (s->uShowIdx != -1) glUniform1i(s->uShowIdx, getenv("FC_MORTON_SHOWIDX") ? 1 : 0);
+		// texRaw vai na unidade 3: a unidade 0 tem `sampler2D tex` e uma unidade
+		// nao pode ter dois tipos de sampler no mesmo draw (GLES).
+		glUniform1i(s->texRaw, 3);
+	}
+	else
+		s->texRaw = s->uTexW = s->uTexH = s->uPal4 = s->uShowIdx = -1;
 
 	s->trilinear_alpha = glGetUniformLocation(s->program, "trilinear_alpha");
 	
@@ -872,7 +953,11 @@ void UpdatePaletteTexture(GLenum texture_slot)
 		glcache.BindTexture(GL_TEXTURE_2D, paletteTextureId);
 
    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1024, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, palette32_ram);
+	{
+		// no-wait: serializa com palette_update() da emu thread (TexCache.cpp)
+		std::lock_guard<std::mutex> lock(g_palMutex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1024, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, palette32_ram);
+	}
 	glCheck();
 
 	glActiveTexture(GL_TEXTURE0);

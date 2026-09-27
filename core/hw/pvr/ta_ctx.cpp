@@ -21,11 +21,46 @@ u32 g_queueDrops, g_queueOk, g_queueWaits;	// QueueRender: frames dropped / queu
 u32 g_queueBusyDrops;	// descartados por render ainda ocupado apos liberacao antecipada
 u32 g_rendIntervalCyclesEma;	// game's render interval, emulated cycles (QueueRender)
 
+// ---- Frame pacer (docs/frame_pacing_plan.md) -------------------------------
+// Apresenta 1 a cada `g_pacerDiv` frames do jogo, para os frames apresentados
+// ficarem IGUALMENTE espacados quando a main thread (Process+Render+present)
+// nao sustenta a taxa nativa. Em vez do descarte reativo irregular, pula
+// determinísticamente. Adapta devagar (janela de ~120 frames) pelo descarte
+// residual: ainda descarta -> aperta (div++); sem descarte e div>1 -> afrouxa.
+// Medido 2026-09-27 (MvC2): pular frames PIORA (div 2 -> p50 13,9ms/423 frames;
+// div 3 -> 33,7ms/286; off -> 10,4ms/517). A main thread fica ociosa (nao e
+// CPU-bound): pular so faz ela esperar mais no rs.Wait, sem reduzir o custo por
+// frame apresentado. Fica opt-in (FC_PACER=1) para nao perder o mecanismo.
+u32 g_pacerDiv = 1;
+u32 g_pacerSkips;		// frames pulados pelo pacer (diagnostico)
+int g_pacerEnabled = 0;		// FC_PACER=1 liga (medido pior; ver plano)
+static u32 pacerTick, pacerWinDrops, pacerWinFrames;
+
+// ---- Orcamento de render por TEMPO (docs/frame_pacing_plan.md) --------------
+// Alvo de frame time: se um frame chega ANTES de `g_renderBudgetUs` desde o
+// ultimo renderizado, descarta a renderizacao e SEGUE (nao espera). 0 = off.
+// Substitui o "esperar o render": o emulador nunca bloqueia, so descarta o que
+// chegou cedo demais. FC_RENDER_BUDGET_MS=<ms> (A/B).
+u64 g_renderBudgetUs = 0;
+static u64 lastRenderUs = 0;
+
 // Teto de frameskip (opcao do core, padrao 33%): quantos % dos frames o core
 // pode descartar para manter o jogo a 100% de velocidade. Acima do teto ele
 // para de descartar e espera o render -- a velocidade cai, mas a apresentacao
 // nao degrada mais. 0 = nunca descarta; 100 = sempre descarta (comportamento
 // antigo). Setado pela opcao do core; FC_SKIP_BUDGET sobrescreve para A/B.
+// Modelo novo (docs/frame_pacing_plan.md): a emu NUNCA espera o render -- roda
+// sempre a 100%. O renderizador descarta o que nao cabe (gate: a fila tem 1
+// slot; se o render ainda esta no frame anterior, o novo e ignorado).
+// FC_EMU_WAIT=1 restaura o comportamento antigo (espera) para A/B.
+int g_emuNeverWaits = 1;
+// FC_EMU_WAIT_RE (default 1): mesmo no modelo no-wait, a emu espera o re.Set()
+// do rend_end_render. Esse re e sinalizado logo apos o Process (upload de
+// textura), nao depois do draw -- e o unico ponto que precisa serializar para a
+// VRAM nao ser sobrescrita enquanto o render ainda le as texturas (glitch de
+// sprite). Custa o Process, nao o frame inteiro.
+int g_emuWaitRe = 1;
+
 int g_frameskipBudgetPct = 33;
 void ta_set_frameskip_budget(int pct)
 {
@@ -142,6 +177,95 @@ bool QueueRender(TA_context* ctx)
    dropRateEma = dropRateEma * (31.f / 32.f) + (lastFrameDropped ? 1.f : 0.f) * (1.f / 32.f);
    lastFrameDropped = false;
 
+   // Frame pacer (docs/frame_pacing_plan.md): pula determinísticamente os
+   // frames que nao serao apresentados, para os apresentados ficarem even.
+   static int pacerEnvInit = 0;
+   if (pacerEnvInit == 0)
+   {
+      pacerEnvInit = 1;
+      const char *e = getenv("FC_PACER");
+      if (e != nullptr)
+         g_pacerEnabled = atoi(e) != 0;
+      const char *d = getenv("FC_PACER_DIV");
+      if (d != nullptr)		// diagnostico: div fixo, sem adaptacao
+      {
+         g_pacerDiv = (u32)atoi(d);
+         if (g_pacerDiv < 1) g_pacerDiv = 1;
+      }
+   }
+   static bool pacerFixed = getenv("FC_PACER_DIV") != nullptr;
+   if (g_pacerEnabled)
+   {
+      pacerWinFrames++;
+      if (!pacerFixed && pacerWinFrames >= 120)
+      {
+         float resid = (float)pacerWinDrops / (float)pacerWinFrames;
+         if (resid > 0.05f && g_pacerDiv < 4)
+            g_pacerDiv++;
+         else if (resid < 0.01f && g_pacerDiv > 1)
+            g_pacerDiv--;
+         pacerWinDrops = 0;
+         pacerWinFrames = 0;
+      }
+      pacerTick++;
+      if (g_pacerDiv > 1 && (pacerTick % g_pacerDiv) != 0)
+      {
+         g_pacerSkips++;
+         tactx_Recycle(ctx);
+         return false;	// nao conta como drop do budget (proativo, even)
+      }
+   }
+
+   // Orcamento por TEMPO: descarta a renderizacao se o frame chegou antes do
+   // alvo de frame time. Nao espera -- segue em frente (VEL 100%). Adaptativo:
+   // descarte residual (fila ocupada) -> aumenta o intervalo; sem descarte por
+   // varias janelas -> diminui (probe). FC_RENDER_BUDGET_MS fixa (A/B).
+   static int budgetMsInit = 0;
+   static bool budgetFixed = false;
+   static u32 budgetWinFrames, budgetWinDrops, budgetCool;
+   if (budgetMsInit == 0)
+   {
+      budgetMsInit = 1;
+      const char *b = getenv("FC_RENDER_BUDGET_MS");
+      if (b != nullptr)
+      {
+         g_renderBudgetUs = (u64)atoi(b) * 1000ull;
+         budgetFixed = true;
+      }
+   }
+   static u64 budgetTail;
+   static int budgetAdaptive = -1;
+   if (budgetAdaptive == -1)
+      budgetAdaptive = getenv("FC_RENDER_BUDGET") != nullptr ? 1 : 0;
+   if (!budgetFixed && budgetAdaptive)
+   {
+      // TOC: o intervalo entre frames renderizados tem de caber a CAUDA do
+      // custo (Process+Render+present), nao a media. A cauda "diz que esta
+      // estrangulada" -> alivia (aumenta o budget); se ela cai, aperta.
+      extern u64 g_lastRendWorkUs, g_lastPresentUs;
+      u64 cause = g_lastRendWorkUs + g_lastPresentUs;
+      if (cause != 0)
+      {
+         budgetTail = (u64)(budgetTail * 0.90);	// decai ~10 frames
+         if (cause > budgetTail)
+            budgetTail = cause;			// sobe na hora (cauda)
+      }
+      u64 want = budgetTail + budgetTail / 8 + 1000;	// cauda + folga
+      if (want > 60000) want = 60000;
+      g_renderBudgetUs = want;
+   }
+   if (g_renderBudgetUs != 0)
+   {
+      u64 nowUs = (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+      if (lastRenderUs != 0 && nowUs - lastRenderUs < g_renderBudgetUs)
+      {
+         tactx_Recycle(ctx);
+         return false;
+      }
+      lastRenderUs = nowUs;
+   }
+
    if (FrameSkipping && frameskip) {
  		frameskip=1-frameskip;
  		tactx_Recycle(ctx);
@@ -244,7 +368,17 @@ bool QueueRender(TA_context* ctx)
       }
       const int budgetPct = budgetEnv >= 0 ? budgetEnv : g_frameskipBudgetPct;
       const bool overBudget = dropRateEma * 100.f > (float)budgetPct;
-      if (rqueue && settings.rend.ThreadedRendering
+      // Modelo novo: a emu nunca espera -- descarta e segue (o gate da fila
+      // cuida de nao acumular). FC_EMU_WAIT=1 restaura a espera (A/B).
+      static int emuWaitInit = 0;
+      if (emuWaitInit == 0)
+      {
+         emuWaitInit = 1;
+         const char *e = getenv("FC_EMU_WAIT");
+         if (e != nullptr)
+            g_emuNeverWaits = atoi(e) == 0;
+      }
+      if (!g_emuNeverWaits && rqueue && settings.rend.ThreadedRendering
             && (autoskip == 0 || (autoskip == 1 && SH4FastEnough && (renderKeepsUp || overBudget))))
       {
          g_queueWaits++;
@@ -274,6 +408,8 @@ bool QueueRender(TA_context* ctx)
 			{
 				g_queueDrops++;
 				g_queueBusyDrops++;
+				pacerWinDrops++;
+				budgetWinDrops++;
 				lastFrameDropped = true;
 				tactx_Recycle(ctx);
 				return false;
@@ -286,6 +422,8 @@ bool QueueRender(TA_context* ctx)
 		// this one is thrown away. Counted because it's silent otherwise and
 		// only happens once emulation runs ahead of presentation.
 		g_queueDrops++;
+		pacerWinDrops++;
+		budgetWinDrops++;
 		lastFrameDropped = true;
 		tactx_Recycle(ctx);
 		return false;

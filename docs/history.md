@@ -2892,3 +2892,165 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   (cadência de amostragem/drain idêntica, 64× menos calls).
 - **Medido:** Shenmue 26,3 → 26,8 (off 27,3; os ~0,5 restantes são as 16
   regiões); DOA2 38,6/88,6% → 39,1/96,4%. Deploy `a03a0503`.
+
+## 2026-09-27 10:00 — plano: topologia de threads (2 quentes + N parkeadas)
+
+- **Contexto:** discussão de modelo distribuído por TOC. Conclusão: a topologia
+  não é uma linha de 3 estágios (JIT → tier2 → execução); é **2 quentes** (emu
+  e main/GL) **+ N helpers parkeados** (tier2, AICA, CHD). O critério é
+  **sensibilidade a latência + propriedade de recurso**, não estágio: caminho
+  crítico fica no core quente; trabalho cold/adiável vira pulmão parkeado.
+- **Fatos que sustentam:** compilação de bloco = ~1,2% do tempo (item 9), então
+  separar o JIT da execução tem teto ~1% e risco de fallback interpretado;
+  `ThreadedRendering` já é **padrão enabled** (`libretro_core_options.h:671`) —
+  o GL **já está** fora da emu thread; o bastão/pulmão do tier2 já existe e já
+  foi medido (435 → 83 µs/frame, 4.83).
+- **Novo doc:** `docs/thread_separation_plan.md` (topologia, invariantes, gap
+  analysis, itens ordenados, anti-padrões, validação).
+- **Primeiros passos propostos:** confirmar `threaded_rendering=enabled` no
+  device; medir o stall `re.Wait()` por frame; contadores do pulmão do tier2.
+  Nada de código nesta sessão — é plano.
+
+## 2026-09-27 10:30 — crash do tier2 no MvC2/CvS2: causa isolada (região de vértice/SQ)
+
+- **Reproduzido no device** (SSH, `perfmax performance` + `retrorun3
+  --benchmark`, sem savestate — benchmark roda `saves=disabled`): MvC2 e CvS2
+  crasham com `die(): YUV_data : YUV decoder not inited` (`pvr_mem.cpp:145`) +
+  `DEBUGBREAK` (exit 133) em ~7s.
+- **A/B decisivo:** `flycast2026_tier2=disabled` → os dois passam (EXIT 0).
+  Tier2 on → crasham. **É o tier2.**
+- **Isolamento (MvC2, `FC_TIER2_MAXREG`):** 1..7 sem crash, **8 crasha**. A 8ª
+  região é o loop de vértice/SQ (9 blocos `8C1305xx`, `ftrv` + muitos `writem`
+  em `r6` + `pref`). No CvS2 a análoga é a #2 (mesma assinatura: 9 blocos, 34
+  spills em 4 chamadas). Dump do SHIL em `/tmp/block-8C1305xx.txt`.
+- **Mecanismo:** a região lê ponteiros fora da RAM, é marcada "acessou MMIO --
+  desfeita", mas o desfazimento é no **próximo ponto seguro** → a região segue
+  executando e corrompe o stream de TA/SQ → parser lê YUV sem init → die.
+- **Buraco de segurança:** `tier2_selfcheck` **recusa** região `hasPref`/
+  `hasWrite` (`tier2.cpp:2443`) — as regiões de vértice/SQ ficam sem
+  autochecagem; `tier2_fault` não aborta; e não decodifica load de grupo com
+  offset imediato (`tier2.cpp:2811`).
+- **Docs:** achado em `tech_debits.md` 4.86; plano do self-healing (fallback
+  pro tier1 no 1º fault) em `docs/tier2_selfhealing_plan.md`. **Sem código
+  ainda** — próxima sessão implementa (começar pelo bug D do plano).
+
+## 2026-09-27 11:40 — MvC2/CvS2 descrascharam: bug do `decision` + self-healing genérico
+
+- **Causa raiz (o crash NÃO era o fault):** o bail no fault (hipótese do 4.86) foi
+  implementado e **não** resolveu — o fault até sumiu, o crash ficou. Logo a
+  corrupção é um **miscompile silencioso**, não a continuação pós-fault.
+- **Bug achado:** um `pref` (→ `sqCall`/`do_sqw_nommu`) no **delay slot de um
+  `jcond`** clobbera o registrador de decisão do desvio (`decision` = w15/w16,
+  scratch do host). A liveness de SH4 não modela esse uso (o desvio lê T via
+  codegen), então o call não o preservava → **desvio errado** → stream de TA/SQ
+  corrompido → YUV sem init → `die()`. É genérico (qualquer região com call no
+  delay slot de um `jcond`), não um padrão por jogo.
+- **Fix 1 (correção):** `sqCall` salva/restaura `decision` na pilha quando
+  `inJcondSlot` (`tier2.cpp`). Custo ~0 (só no padrão).
+- **Fix 2 (self-healing genérico, pedido do usuário):** no 1º acesso fora da RAM
+  dentro de uma região, `tier2_fault` **não** emula e continua: escreve o vaddr
+  do bloco em `Ctx(pc)`, salta pro **bail stub** da região (salva todos os regs
+  homed e devolve ao despachante) e seta `tier2BailFlag`; os ganchos de entrada
+  de toda região desviam pro JIT normal (tier1) até o ponto seguro desfazer a
+  culpada e zerar a flag. Nada de desligar o tier2.
+- **Medido (com savestate de luta carregado — benchmark do retrorun3 com
+  `retrorun_auto_load=true`):**
+  - MvC2: **EXIT 0** (era crash), tier2 on 520 frames/15,6ms × off 519/15,6ms
+    (**neutro**), VEL 95,8%.
+  - CvS2: **EXIT 0** (era crash); bail disparou em 2 regiões (MMIO) sem crash.
+  - DOA2: test (fix) **437** frames / VEL 87,7% × core deployado (sem fix)
+    **435** / 86,2% → **sem regressão** (levemente melhor).
+  - O bail disparou de verdade (regiões de MMIO) e funcionou.
+- **Infra:** savestate do retrorun3 só carrega com `retrorun_auto_load=true`
+  (e o log do load é DEBUG); o core upstream usa path de state próprio e **não**
+  carrega o nosso save (`load=0`) — comparação com upstream exige cuidado.
+- **Deploy:** `flycast2026_libretro.so` (md5 `28b7f52a...`), backup
+  `.bak-pre-selfheal`. Usuário vai avaliar a sensação manualmente vs upstream.
+
+## 2026-09-27 13:05 — pacing de frames: pacer determinístico medido (negativo)
+
+- **Pedido do usuário:** estabilizar a cauda (hicups) e distribuir frames,
+  limitando a apresentação ao fps sustentável (melhor fps × VEL).
+- **Diagnóstico (MvC2, save, `FC_REND_SPLIT`+`FC_IDLE_FF_STATS`):**
+  `game_interval=16,5ms` (60fps), `render_work=10,5ms`, `video_p50=13,9ms`
+  (present), `dropped_frames_rqueue_busy=321` de ~908 (~35%), `hiccup_rate=8,16%`,
+  `core_p99=100ms`. **A main thread fica ociosa** (p50 10,4ms, 517 frames em 15s
+  = ~5,4s de trabalho).
+- **Implementado:** `g_pacerDiv` em `ta_ctx.cpp` (pula 1 a cada N frames) +
+  adaptação por descarte residual; `FC_PACER` / `FC_PACER_DIV` (fixo).
+- **Medido (negativo):** off 517 frames/p50 10,4/p95 33,7 × div2 423/13,9/54,8 ×
+  div3 286/33,7/96,2. **Pular piora** e a adaptação **oscilou** (div 1↔2, lição
+  5.2). Pular não reduz o custo por frame apresentado — só faz a main thread
+  esperar mais no `rs.Wait`.
+- **Decisão:** pacer fica **opt-in** (default off). **Pivô:** o gargalo é o custo
+  por frame apresentado + o motivo do descarte (rqueue ocupada com a main
+  ociosa), não o número de frames. Plano em `docs/frame_pacing_plan.md` §2b.
+- **Deploy:** core com o pacer opt-in no device (`flycast_test.so`); o
+  `flycast2026` do usuário segue a versão do self-heal (sem pacer ativo).
+
+## 2026-09-27 14:20 — MODELO NOVO: emu nunca espera (remover o wait) — cauda desabou
+
+- **Direção do usuário:** "mudar o modelo e remover o wait; emulação sempre a
+  100%; set e não espera; um gate no renderizador descarta o set se ainda está
+  no frame anterior".
+- **Achado:** o `core_p99=100ms` era o **`rs.Wait(100)` da MAIN thread** (não a
+  emu esperando — tirei os waits da emu, `re.Wait`/`frame_finished.Wait`, e a
+  cauda não mudou). A main thread dormia o timeout inteiro quando a emu travava.
+- **Implementado:** `g_emuNeverWaits` (default 1; `FC_EMU_WAIT=1` restaura):
+  (1) `QueueRender` não chama `frame_finished.Wait()`; (2) `rend_end_render` não
+  chama `re.Wait()`; (3) **`rend_single_frame` não chama `rs.Wait`** — dequeue
+  não-bloqueante; sem frame pronto → devolve duplicado (o gate da fila de 1
+  slot já descartou o que não caberia).
+- **Medido (benchmark 15s, save, budget off):**
+
+  | Jogo | frames | VEL% | core_p50 | core_p95 | core_p99 | dupes |
+  |---|---|---|---|---|---|---|
+  | MvC2 | 740 | 97,1 | 8,0 | 11,8 | **39,1** | 300 |
+  | MvC2 (com wait) | 518 | 95,2 | 10,4 | 31,0 | 100,4 | 10 |
+  | CvS2 | 856 | **99,9** | 6,8 | 8,9 | **11,2** | 288 |
+  | DOA2 | 472 | **100,0** | 17,8 | 23,4 | 33,2 | 46 |
+  | Shenmue | 610 | 89,5 | 12,6 | 13,8 | **14,9** | 208 |
+
+  **A cauda desabou** (p99 100 → 11-39ms) e a VEL subiu a ~100% nos jogos que
+  não são emu-bound. Custo: `duplicated_frames` alto (~1/3 — a main thread
+  devolve duplicado quando não há frame pronto).
+- **Budget por tempo:** ficou **opt-in** (`FC_RENDER_BUDGET`, ou
+  `FC_RENDER_BUDGET_MS` fixo) — medido pior que o no-wait puro. O pacer também
+  segue opt-in.
+- **Deploy:** `flycast2026_libretro.so` = no-wait (md5 `96b0a5a8...`), backups
+  `.bak-pre-nowait` / `.bak-pre-selfheal`. Usuário avalia a sensação.
+
+## 2026-09-27 19:45 — untwiddle Morton na GPU (A) + glitch de sprite + wait-curto
+
+- **Objetivo (usuário):** usar a GPU, que tem folga (Mali ~45% em clock máx).
+  Investigado o caminho de textura: `convPAL4PT_TW`/`convPAL8PT_TW` são
+  *"untwiddle only"* -- a CPU desfaz o Morton pixel-a-pixel mesmo com a paleta
+  na GPU. É imposto de emulação (o PowerVR amostrava nativo).
+- **Isolado e medido antes de codar:** (1) script CPU×GPU
+  (`/tmp/opencode/twiddle_bench.cu`, RTX 3060): untwiddle CPU ~8µs/64², GPU
+  kernel 2,2µs; ganho depende do tamanho (512²: 73×; 8×8: 20× **pior**);
+  (2) shader Morton validado **exato** contra a CPU (pal4 e pal8, 0 erros);
+  (3) harness SDL/E2E no Mali-G31 (`/tmp/opencode/mali_morton_sdl.c`) provou
+  R8UI+usampler2D+texelFetch OK (0..7) e custo +0,05ms/frame.
+- **A implementado** (`FC_TEX_GPU_MORTON`, default off): sobe os bytes crus
+  twiddled (R8) e o fragment shader faz o Morton + paleta. **3 bugs reais
+  achados no caminho:** (a) `%` no GLSL consumido pelo `sprintf` do shader
+  (escapar `%%`); (b) `float`/`int` sem `precision` default no Mali (adicionar
+  `precision highp int;` e qualificar float); (c) **`usampler2D`+`texelFetch` na
+  mesma unidade de um `sampler2D` invalida no Mali r13p0** (o `texelFetch` lia 0
+  → sprite vazio). Fix: `sampler2D`+`GL_R8` (mesmo tipo do `tex`).
+- **Glitch dos sprites:** com Morton on, personagens com blocos de cor errada.
+  Diagnóstico: **não é o Morton** -- é a **corrida na VRAM exposta pelo no-wait**
+  (emu escreve sprite N+1 enquanto o render lê o N). Prova: `FC_EMU_WAIT=1` e
+  `FC_NO_EARLY_RELEASE=1` limpam; o early-release só agrava.
+- **Fix (sem o wait caro):** `g_emuWaitRe` (`FC_EMU_WAIT_RE`, default 1) --
+  `re.Wait()` **só até o `Process`** (upload de textura), não até o draw.
+  **Medido (MvC2):** wait-curto on 717/718 frames / `core_average` 7,77ms ×
+  sem-wait 750/727 / 6,97ms → glitch resolvido por ~5%, muito abaixo do wait
+  cheio. Usuário confirmou "resolveu".
+- **`FC_TEX_SKIP_UNCHANGED` virou default ON:** MvC2 ~30% dos updates eram
+  re-upload idêntico; frames 829/821 × 782/796, `core_average` 5,70 × 6,99ms.
+- **Aberta 4.87:** nova abordagem pra serializar a VRAM sem o `re.Wait` curto
+  (snapshot/versionamento por página, wait por dependência, fence por textura).
+- **Estado:** tudo em `flycast_test.so`; `flycast2026` intocado. A/B do Morton
+  no MvC2 = neutro (paletizada ~1%); falta o **mslug6** (caso grande).

@@ -179,6 +179,22 @@ __forceinline
 	if (BaseTextureCacheData::IsGpuHandledPaletted(gp->tsp, gp->tcw))
 		palette = gp->tsp.FilterMode + 1;
 
+	// FC_TEX_GPU_MORTON: material com textura crua registrada -> shader Morton.
+	const TexRawInfo* rawInfo = gp->texid == (u64)-1 ? nullptr : gl_GetRawInfo((GLuint)gp->texid);
+	bool gpu_morton = rawInfo != nullptr
+			&& (gp->tcw.PixelFmt == PixelPal4 || gp->tcw.PixelFmt == PixelPal8)
+			&& rawInfo->pal4 == (gp->tcw.PixelFmt == PixelPal4);
+	{
+		static int dbgN = 0;
+		if (getenv("FC_MORTON_LOG") && dbgN < 12 && gp->pcw.Texture)
+		{
+			dbgN++;
+			NOTICE_LOG(RENDERER, "MORTON dbg: texid=%llu raw=%d pix=%d pal4=%d w=%u h=%u filter=%d",
+				(unsigned long long)gp->texid, rawInfo?1:0, gp->tcw.PixelFmt,
+				rawInfo?rawInfo->pal4:0, rawInfo?rawInfo->w:0, rawInfo?rawInfo->h:0, gp->tsp.FilterMode);
+		}
+	}
+
 	CurrentShader = GetProgram(Type == ListType_Punch_Through ? true : false,
 								  clipmode == TileClipping::Inside,
 								  gp->pcw.Texture,
@@ -191,9 +207,21 @@ __forceinline
 								  gp->tcw.PixelFmt == PixelBumpMap,
 								  color_clamp,
 								  ShaderUniforms.trilinear_alpha != 1.f,
-								  palette);
+								  palette, gpu_morton);
 
 	glcache.UseProgram(CurrentShader->program);
+	if (gpu_morton)
+	{
+		if (gp->tcw.PixelFmt == PixelPal4)
+			ShaderUniforms.palette_index = gp->tcw.PalSelect << 4;
+		else
+			ShaderUniforms.palette_index = (gp->tcw.PalSelect >> 4) << 8;
+		glUniform1i(CurrentShader->palette_index, ShaderUniforms.palette_index);
+		glUniform1i(CurrentShader->texRaw, 3);
+		glUniform1i(CurrentShader->uTexW, (GLint)rawInfo->w);
+		glUniform1i(CurrentShader->uTexH, (GLint)rawInfo->h);
+		glUniform1i(CurrentShader->uPal4, rawInfo->pal4 ? 1 : 0);
+	}
 	if (CurrentShader->trilinear_alpha != -1)
 		glUniform1f(CurrentShader->trilinear_alpha, ShaderUniforms.trilinear_alpha);
 	if (palette)
@@ -221,7 +249,20 @@ __forceinline
 
 	glcache.StencilFunc(GL_ALWAYS,stencil,stencil);
 
-	glcache.BindTexture(GL_TEXTURE_2D, gp->texid == (u64)-1 ? 0 : (GLuint)gp->texid);
+	if (gpu_morton)
+	{
+		// A textura crua e R8UI (sampler inteiro). Na unidade 0 o shader tem
+		// `sampler2D tex` (branch de paleta) -- amarrar um R8UI a um sampler
+		// float no GLES invalida o texelFetch (le 0). Binda a crua na unidade 3
+		// (texRaw) e deixa a 0 sem textura.
+		glActiveTexture(GL_TEXTURE3);
+		// bind DIRETO: o glcache ignora a unidade ativa (cacheia por textura),
+		// entao pularia o bind aqui e a unidade 3 ficaria sem textura.
+		glBindTexture(GL_TEXTURE_2D, gp->texid == (u64)-1 ? 0 : (GLuint)gp->texid);
+		glActiveTexture(GL_TEXTURE0);
+	}
+	else
+		glcache.BindTexture(GL_TEXTURE_2D, gp->texid == (u64)-1 ? 0 : (GLuint)gp->texid);
 
 	SetTextureRepeatMode(GL_TEXTURE_WRAP_S, gp->tsp.ClampU, gp->tsp.FlipU);
 	SetTextureRepeatMode(GL_TEXTURE_WRAP_T, gp->tsp.ClampV, gp->tsp.FlipV);
@@ -983,7 +1024,7 @@ static void DrawQuad(GLuint texId, float x, float y, float w, float h, float u0,
 
 	ShaderUniforms.trilinear_alpha = 1.0;
 
-	PipelineShader *shader = GetProgram(false, false, true, false, true, 0, false, 2, false, false, false, false, false);
+	PipelineShader *shader = GetProgram(false, false, true, false, true, 0, false, 2, false, false, false, false, false, false);
 	glcache.UseProgram(shader->program);
 
 	glActiveTexture(GL_TEXTURE0);
@@ -1114,7 +1155,7 @@ void DrawVmuTexture(u8 vmu_screen_number)
 	glcache.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	SetupMainVBO();
-	PipelineShader *shader = GetProgram(0, false, 1, 1, 0, 0, 0, 2, false, false, false, false, false);
+	PipelineShader *shader = GetProgram(0, false, 1, 1, 0, 0, 0, 2, false, false, false, false, false, false);
 	glcache.UseProgram(shader->program);
 
 	{
@@ -1208,7 +1249,7 @@ void DrawGunCrosshair(u8 port)
 	glcache.BlendFunc(GL_SRC_ALPHA, GL_ONE);
 
 	SetupMainVBO();
-	PipelineShader *shader = GetProgram(0, false, 1, 1, 0, 0, 0, 2, false, false, false, false, false);
+	PipelineShader *shader = GetProgram(0, false, 1, 1, 0, 0, 0, 2, false, false, false, false, false, false);
 	glcache.UseProgram(shader->program);
 
 	{

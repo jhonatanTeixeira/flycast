@@ -320,6 +320,10 @@ void rend_dump_split(const char *path)
 // game, the same as a 60Hz game's interval, and the comparison became a coin
 // flip (kofnw dropped 610 frames). Process + Render never waits on vsync.
 std::atomic<u32> g_rendWorkUsEma(0);
+// Custo da ULTIMA renderizacao (Process+Render, sem a espera). Usado pelo
+// orcamento por tempo do tier2/pacer (docs/frame_pacing_plan.md) para ajustar
+// o intervalo entre frames renderizados pela cauda do custo (TOC).
+u64 g_lastRendWorkUs;
 
 // Liberacao antecipada do slot da fila (docs/tech_debits.md 4.21/4.29).
 // A fila tem UM slot, e o contexto so saia dele depois do Render inteiro:
@@ -430,6 +434,7 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
    // spent waiting on re.Set() above is the emu thread's, not ours, and it's
    // not in here: t0..t2 is only this thread's own work.
    u64 work = t2 - t0;
+   g_lastRendWorkUs = work;
    if (work < 500000)
    {
       u32 ema = g_rendWorkUsEma.load(std::memory_order_relaxed);
@@ -450,7 +455,8 @@ bool rend_single_frame(void)
 			do
 			{
 #if !defined(TARGET_NO_THREADS)
-				if (settings.rend.ThreadedRendering)
+				extern int g_emuNeverWaits;
+				if (settings.rend.ThreadedRendering && !g_emuNeverWaits)
 				{
 					u64 tw = g_rendSplitEnabled ? rend_now_us() : 0;
 					bool got = rs.Wait(100);
@@ -469,6 +475,11 @@ bool rend_single_frame(void)
 				_pvrrc = DequeueRender();
 
 				if (!settings.rend.ThreadedRendering && _pvrrc == NULL)
+					return false;
+				// Modelo novo (docs/frame_pacing_plan.md): sem espera. Se nao ha
+				// frame pronto, devolve duplicado -- nao bloqueia a main thread
+				// (o gate da fila ja descartou o que nao caberia).
+				if (settings.rend.ThreadedRendering && g_emuNeverWaits && _pvrrc == NULL)
 					return false;
 			}
 			while (!_pvrrc);
@@ -707,7 +718,17 @@ void rend_end_render(void)
    if (pend_rend)
    {
 #if !defined(TARGET_NO_THREADS)
-	   if (settings.rend.ThreadedRendering)
+	   extern int g_emuNeverWaits, g_emuWaitRe;
+	   static int waitReInit = 0;
+	   if (waitReInit == 0)
+	   {
+		   waitReInit = 1;
+		   const char *e = getenv("FC_EMU_WAIT_RE");
+		   if (e != nullptr) g_emuWaitRe = atoi(e) != 0;
+	   }
+	   // Wait curto: bloqueia so ate o Process (upload de textura) terminar --
+	   // evita o render ler VRAM ja sobrescrita (glitch), sem esperar o draw.
+	   if (settings.rend.ThreadedRendering && (!g_emuNeverWaits || g_emuWaitRe))
 	   {
 		   u64 tw = g_rendSplitEnabled ? rend_now_us() : 0;
 		   re.Wait();

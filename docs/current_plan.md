@@ -6,6 +6,35 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-09-27, noite): untwiddle Morton na GPU + no-wait + wait-curto
+
+**done/medido nesta sessão** (detalhe em `history.md` 2026-09-27 e `tech_debits.md`):
+- **Self-heal do tier2** (4.86): MvC2/CvS2 descrascharam (bug do `decision` no
+  delay slot + bail genérico no 1º fault).
+- **Modelo no-wait** (`g_emuNeverWaits`): cauda `core_p99` 100ms → 11-39ms,
+  VEL ~100% em CvS2/DOA2. Custo: dupes.
+- **AICA→futex** (inv. 5 do `thread_separation_plan.md`): tirou o spin de ~20%.
+- **`FC_TEX_SKIP_UNCHANGED` default ON**: -15% `core_average` no MvC2.
+- **A — untwiddle Morton no fragment shader** (`FC_TEX_GPU_MORTON`, default off):
+  funciona no Mali-G31 (bug do `usampler2D`+`texelFetch` na mesma unidade
+  corrigido). Neutro no MvC2 (paletizada ~1%); medir no mslug6.
+- **Glitch de sprite** (corrida da VRAM exposta pelo no-wait) → **`re.Wait`
+  curto** (`g_emuWaitRe`, default 1): corrige custando ~5%, sem o wait cheio.
+- **4.87 (aberto):** nova abordagem pra serializar a VRAM sem o `re.Wait` curto.
+
+**próximo:** (1) A/B do Morton no **mslug6** (caso onde a conversão é ~40ms/frame)
+pra decidir se vira default; (2) fechar 4.87; (3) bateria dos 15 savestates.
+
+## Agora (2026-09-27): plano de topologia de threads (2 quentes + N parkeadas)
+
+**plano criado** — `docs/thread_separation_plan.md` (guarda-chuva da topologia):
+emu + main/GL quentes; tier2/AICA/CHD parkeados. Não é linha JIT→tier2→execução
+(o JIT por bloco é caminho crítico e fica fundido com a execução). **Primeiros
+passos:** (1) confirmar `flycast2026_threaded_rendering=enabled` no device
+(se off, GL inline na emu thread = maior alavanca isolada); (2) medir stall
+`re.Wait()`/frame; (3) contadores do pulmão do tier2 (`tier2_adaptive_plan.md`).
+Nada de código ainda.
+
 ## Agora (2026-09-26, noite 3): tier2 estilo Dolphin — plano e primeiro passo
 
 **feito agora:** (1) **renomeação dos padrões** para nomes genéricos (a forma,
