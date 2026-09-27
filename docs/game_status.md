@@ -466,3 +466,41 @@ esta bateria.
 #### Sonic Shuffle (Dreamcast) — VEL 100.0 / 15.7 fps
 ![sonicshfl_1](batery/sonicshfl_1.png) ![sonicshfl_2](batery/sonicshfl_2.png) ![sonicshfl_3](batery/sonicshfl_3.png) ![sonicshfl_4](batery/sonicshfl_4.png)
 
+
+## Bateria de 15 jogos — 2026-09-27, `flycast_test.so` (tier2 self-heal + no-wait + wait-curto)
+
+Build com: tier2 self-heal (4.86), modelo no-wait + `re.Wait` curto
+(`g_emuWaitRe`), AICA→futex, `FC_TEX_SKIP_UNCHANGED` default ON. Morton da
+textura **desligado** (`FC_TEX_GPU_MORTON` default off). `perfmax performance`,
+savestate automático, **12 s + 3 s de warmup**, 1 rodada por jogo.
+**15/15 com JSON, ZERO crash.** VEL% = `audio_frames / (duração × sample_rate)`.
+Tempos em ms.
+
+| jogo | sistema | VEL% | fps | média | p50 | p95 | p99 | und | dup |
+|---|---|---|---|---|---|---|---|---|---|
+| DOA2 | Dreamcast | 93.6 | 29.8 | 17.9 | 18.2 | 22.6 | 31.4 | 19 | 14 |
+| Grandia II | Dreamcast | 100.0 | 60.0 | 3.1 | 0.3 | 8.3 | 8.7 | 1 | 407 |
+| KOF Evolution | Dreamcast | 100.0 | 38.1 | 11.4 | 12.8 | 13.7 | 15.6 | 2 | 55 |
+| Le Mans | Dreamcast | 98.1 | 32.7 | 16.4 | 17.1 | 21.8 | 27.7 | 7 | 40 |
+| **MvC2** | Dreamcast | 100.0 | 53.0 | 6.4 | 8.1 | 11.0 | 14.4 | 0 | 186 |
+| Napple Tale | Dreamcast | 99.7 | 59.4 | 4.2 | 5.1 | 8.4 | 10.2 | 3 | 355 |
+| PSO v2 | Dreamcast | 70.1 | 59.9 | 1.7 | 0.3 | 12.5 | 12.7 | 73 | 613 |
+| Shenmue II | Dreamcast | 66.9 | 20.8 | 27.9 | 28.8 | 30.2 | 31.7 | 78 | 9 |
+| Shenmue | Dreamcast | 86.9 | 39.2 | 9.1 | 13.1 | 14.5 | 15.4 | 35 | 158 |
+| Soulcalibur | Dreamcast | 100.5 | 59.0 | 6.1 | 7.8 | 9.0 | 16.7 | 3 | 215 |
+| kofxi | Atomiswave | 99.9 | 59.9 | 3.4 | 4.5 | 7.1 | 8.2 | 2 | 261 |
+| mslug6 | Atomiswave | 69.1 | 23.9 | 32.9 | 37.6 | 42.2 | 46.4 | 80 | 38 |
+| samsptk | Atomiswave | 100.0 | 58.2 | 5.6 | 8.8 | 9.9 | 10.7 | 2 | 258 |
+| mbaa | Naomi | 100.0 | 59.9 | 1.8 | 2.3 | 3.8 | 5.5 | 2 | 254 |
+| **CvS2** | Dreamcast | 100.0 | 56.1 | 5.6 | 7.0 | 8.9 | 13.5 | 1 | 205 |
+
+**Leitura:**
+- **MvC2 e CvS2 descrascharam** e rodam a **VEL 100%** com cauda baixa
+  (`p99` 14,4 / 13,5ms — antes o hicup era 100ms).
+- **Cauda p99 baixa em todos** (≤~17ms, exceto os emu-bound: DOA2 31, mslug6 46).
+- **Dupes altos** (Grandia 407/720, PSO 613/720) = o custo do no-wait (a main
+  repete o último frame); a VEL fica 100% onde a emu aguenta.
+- **Emu-bound (VEL < 100%):** Shenmue II 66,9% / Shenmue 86,9 / DOA2 93,6 /
+  mslug6 69,1 / PSO 70,1 — o teto é o SH4/emulação, não o render.
+- **PSO v2:** antes travava em ~9,9 fps; agora 59,9 fps (VEL 70%, muitos dupes) —
+  melhorou, mas o 70% de VEL sugere limite emu-side. Rever depois.
