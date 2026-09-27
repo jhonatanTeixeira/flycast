@@ -3054,3 +3054,24 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   (snapshot/versionamento por página, wait por dependência, fence por textura).
 - **Estado:** tudo em `flycast_test.so`; `flycast2026` intocado. A/B do Morton
   no MvC2 = neutro (paletizada ~1%); falta o **mslug6** (caso grande).
+
+## 2026-09-27 20:15 — regressão do Shenmue II isolada: é o `re.Wait` curto
+
+- **Relato do usuário:** Shenmue II regrediu (a abertura chegou a rodar 100%/30 fps
+  numa build de manhã); e teve 2 crashes esporádicos. Napple Tale subiu de 30→60 fps.
+- **A/B (Shenmue II, savestate, mesma cena, `perfmax performance`, 2 rodadas/lado):**
+  | build/config | fps | VEL% | core_average | p99 |
+  |---|---|---|---|---|
+  | atual (wait-curto) | 21,0/21,4 | 67,5 | 27,5ms | 29,7 |
+  | `.bak-pre-nowait` (self-heal, wait cheio) | 20,8/20,7 | 69,1 | 27,9ms | 36,7 |
+  | `.bak-pre-mortongpu` (no-wait) | **25,6/26,2** | **72,8/73,2** | 20,7ms | 32,2 |
+  | atual + `FC_EMU_WAIT_RE=0` | **25,9/25,4** | **71,3** | 20,6ms | 29,9 |
+  | atual + `FC_TEX_SKIP_UNCHANGED=0` | 21,0/21,0 | 67,2 | 27,5ms | 30,0 |
+- **Conclusão:** a regressão do Shenmue II é o **`g_emuWaitRe`** (o `re.Wait` curto
+  que corrigiu o glitch do MvC2): esperar o `Process` (longo no Shenmue II) rouba
+  ~19% (25,9→21,0 fps). `SKIP_UNCHANGED` não afeta. **Isso reforça o 4.87** --
+  serializar a VRAM sem esperar o `Process` inteiro.
+- **Deploy:** `flycast2026` = `f7dd8dcae5f364d6cd6f3dfa755fb39a` (com o wait-curto,
+  ou seja COM a regressão do Shenmue II). Backup `.bak-pre-mortongpu` (= no-wait,
+  sem glitch-fix; 25,6 fps no Shenmue II). **Decisão pendente:** default do
+  `FC_EMU_WAIT_RE` (on = MvC2 limpo / Shenmue II lento; off = o contrário).
