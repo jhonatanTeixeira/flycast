@@ -21,6 +21,19 @@ u32 g_queueDrops, g_queueOk, g_queueWaits;	// QueueRender: frames dropped / queu
 u32 g_queueBusyDrops;	// descartados por render ainda ocupado apos liberacao antecipada
 u32 g_rendIntervalCyclesEma;	// game's render interval, emulated cycles (QueueRender)
 
+// Teto de frameskip (opcao do core, padrao 33%): quantos % dos frames o core
+// pode descartar para manter o jogo a 100% de velocidade. Acima do teto ele
+// para de descartar e espera o render -- a velocidade cai, mas a apresentacao
+// nao degrada mais. 0 = nunca descarta; 100 = sempre descarta (comportamento
+// antigo). Setado pela opcao do core; FC_SKIP_BUDGET sobrescreve para A/B.
+int g_frameskipBudgetPct = 33;
+void ta_set_frameskip_budget(int pct)
+{
+	if (pct < 0) pct = 0;
+	if (pct > 100) pct = 100;
+	g_frameskipBudgetPct = pct;
+}
+
 TA_context* ta_ctx;
 tad_context ta_tad;
 
@@ -121,12 +134,21 @@ bool QueueRender(TA_context* ctx)
 {
    verify(ctx != 0);
 
+   // Fracao de frames descartados, em media movel (constante ~32 frames). A
+   // decisao de esperar-ou-descartar abaixo usa esta media: enquanto estiver
+   // dentro do teto, descarta (velocidade primeiro); acima, espera o render.
+   static bool lastFrameDropped = false;
+   static float dropRateEma = 0.f;
+   dropRateEma = dropRateEma * (31.f / 32.f) + (lastFrameDropped ? 1.f : 0.f) * (1.f / 32.f);
+   lastFrameDropped = false;
+
    if (FrameSkipping && frameskip) {
  		frameskip=1-frameskip;
-		tactx_Recycle(ctx);
-		fskip++;
-		return false;
- 	}
+ 		tactx_Recycle(ctx);
+ 		fskip++;
+ 		lastFrameDropped = true;
+ 		return false;
+  	}
 
    if (settings.pvr.SynchronousRendering)
    {
@@ -211,8 +233,19 @@ bool QueueRender(TA_context* ctx)
             margin = 75;
       }
       bool renderKeepsUp = workCycles != 0 && workCycles * 100 <= (u64)g_rendIntervalCyclesEma * margin;
+      // Teto de frameskip: se a fracao descartada ja passou do teto, para de
+      // descartar e espera o render -- a velocidade cai, a apresentacao nao
+      // degrada mais. Dentro do teto, descarta como antes (velocidade primeiro).
+      static int budgetEnv = -2;
+      if (budgetEnv == -2)
+      {
+         const char *b = getenv("FC_SKIP_BUDGET");
+         budgetEnv = b != nullptr ? atoi(b) : -1;
+      }
+      const int budgetPct = budgetEnv >= 0 ? budgetEnv : g_frameskipBudgetPct;
+      const bool overBudget = dropRateEma * 100.f > (float)budgetPct;
       if (rqueue && settings.rend.ThreadedRendering
-            && (autoskip == 0 || (autoskip == 1 && SH4FastEnough && renderKeepsUp)))
+            && (autoskip == 0 || (autoskip == 1 && SH4FastEnough && (renderKeepsUp || overBudget))))
       {
          g_queueWaits++;
          frame_finished.Wait();
@@ -241,6 +274,7 @@ bool QueueRender(TA_context* ctx)
 			{
 				g_queueDrops++;
 				g_queueBusyDrops++;
+				lastFrameDropped = true;
 				tactx_Recycle(ctx);
 				return false;
 			}
@@ -252,6 +286,7 @@ bool QueueRender(TA_context* ctx)
 		// this one is thrown away. Counted because it's silent otherwise and
 		// only happens once emulation runs ahead of presentation.
 		g_queueDrops++;
+		lastFrameDropped = true;
 		tactx_Recycle(ctx);
 		return false;
 	}

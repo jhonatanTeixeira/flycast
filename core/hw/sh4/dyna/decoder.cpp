@@ -67,6 +67,13 @@ struct IdleFFSig
 	u16 ops[32];
 	u16 mask[32];
 	u8 ram_reg;		// 0 = sempre; n = so se r[n-1] aponta para a RAM principal
+	// So vale se a ULTIMA instrucao desviar para tras e apertado (ao inicio do
+	// bloco ou a instrucao imediatamente anterior). Uma assinatura de 4
+	// instrucoes que termina num `bt` tambem casa com o idioma generico
+	// "if (*p == 0) {...}" espalhado pelo codigo dos jogos (Shenmue: 22 blocos
+	// falsos, 100% VEL / 13 fps) -- so o desvio para tras e de fato um laco.
+	// O laco do BIOS Naomi (0C02F3A4) desvia para addr-2, nao para addr.
+	bool self_loop;
 };
 
 #define M_ 0xFFFF
@@ -82,7 +89,7 @@ static const IdleFFSig idle_ff_sigs[] = {
 	// all JIT host instructions. 8C023146 (+0x1E) is only reachable through
 	// the `bt` taken when cur >= 4, i.e. only on that self-yield; the ~2 real
 	// yields per frame (cur < 4) enter the block at +0x18 instead.
-	{ "coop-task-kernel-idle-yield", 0x1E, 26,
+	{ "coop-yield-self-idle-loop", 0x1E, 26,
 	  { 0x4F22, 0x7FF8, 0x64F3, 0x7404, 0xB000, 0x0009, 0xB000, 0x0009,
 	    0x2F02, 0xE304, 0x3033, 0x8902, 0x61F2, 0x7101, 0x2F12, 0x64F3,
 	    0x7404, 0xB000, 0x0009, 0x64F2, 0xB000, 0x0009, 0x7F08, 0x4F26,
@@ -99,7 +106,7 @@ static const IdleFFSig idle_ff_sigs[] = {
 	// descia ~17x menos que no hardware (690 ciclos cobrados por volta contra
 	// ~40 reais) sem efeito visivel; o avanco ate o proximo evento e a mesma
 	// distorcao, maior. Entrada = o proprio bloco do teste do flag.
-	{ "doa2-wait-flag-loop", 0x00, 8,
+	{ "wait-flag-cmp-loop", 0x00, 8,
 	  { 0x63F2, 0x6232, 0x72FF, 0x2322, 0x53F1, 0x6232, 0x32E0, 0x8B03 },
 	  { M_, M_, M_, M_, M_, M_, M_, M_ } },
 	// Laco de espera do Shenmue (0C03A1F8, docs/tech_debits.md 4.38):
@@ -108,7 +115,7 @@ static const IdleFFSig idle_ff_sigs[] = {
 	// zerado por interrupcao. ~50% do tempo emulado na cena pesada do save.
 	// Assinatura = bloco de comparacao (0C03A1E0) + 2 instrucoes que nao
 	// rodam no laco (mascara 0) + teste do flag; entrada no teste (+0x18).
-	{ "shenmue-wait-flag-loop", 0x18, 16,
+	{ "wait-flag-task-loop", 0x18, 16,
 	  { 0xD120, 0x6312, 0xD020, 0x6202, 0xD11B, 0x323C, 0x7201, 0x6312,
 	    0x3326, 0x8B01, 0x0000, 0x0000, 0xD318, 0x6232, 0x2228, 0x8BEB },
 	  { M_, M_, M_, M_, M_, M_, M_, M_,
@@ -118,7 +125,7 @@ static const IdleFFSig idle_ff_sigs[] = {
 	// (8C20F060: salva/restaura r14, rts), 8C209F4C compara contadores,
 	// 8C209F5A testa o flag. ~54% do trabalho do JIT e ~50% do tempo emulado
 	// na cena do save. Assinatura = comparacao + teste; entrada no teste.
-	{ "shenmue2-wait-flag-loop", 0x0E, 10,
+	{ "wait-flag-task-loop-v2", 0x0E, 10,
 	  { 0x528C, 0x518B, 0x321C, 0x7201, 0x519E, 0x3126, 0x89B2, 0x519F,
 	    0x2118, 0x8BF1 },
 	  { M_, M_, M_, M_, M_, M_, M_, M_, M_, M_ } },
@@ -130,13 +137,104 @@ static const IdleFFSig idle_ff_sigs[] = {
 	{ "poll-until-counter-r1-r4", 0x00, 3,
 	  { 0x6012, 0x3406, 0x89FC },
 	  { M_, M_, M_ }, 2 /* r1 na RAM */ },
+	// Laco de espera de flag do BIOS Naomi (gwing2/cvs2, 0C02F3A4):
+	//   L: mov.l @(disp,PC),r2 ; mov.l @r2,r3 ; tst r3,r3 ; bt L
+	// = while (*flag == 0); o flag (RAM, 0xa080005c) e setado por evento
+	// agendado (interrupcao/DMA/timer), entao avancar ate o proximo evento e
+	// exato. ~3M voltas no boot frio; o deslocamento do literal e do bf varia.
+	{ "bios-wait-flag-r2-r3", 0x00, 4,
+	  { 0xD200, 0x6322, 0x2338, 0x8900 },
+	  { 0xFF00, 0xFFFF, 0xFFFF, 0xFF00 }, 0, true },
+	// Le Mans 24h: laco de espera ENCADEADO (ciclo exato de 4 blocos,
+	// ~72 mil voltas/s no save da corrida):
+	//   8C01BF1E: r0=*(8C01C044); jsr @r0; r4=6   (chama o getter)
+	//   8C100340: *(float*)(0x8C2AB318 + r4*4)     (getter-folha)
+	//   8C01BF24: r0=*(r12+*(8C01C048)); ftrc f0; r0+=2; cmp/ge; bf
+	//   8C01BF6C: tst r13,r13; bt 8C01BF1E
+	// Nenhum bloco e laco proprio -> o detector por bloco nao ve (era o
+	// gargalo: o getter sozinho = 49,8% do trabalho). O trecho 8C01BF1E..
+	// 8C01BF30 e contiguo, entao a assinatura cobre tudo e marca o bloco
+	// 8C01BF1E para avanco ate o proximo evento (a espera e por contador
+	// externo). docs/tech_debits.md.
+	{ "chained-wait-loop-getter-cmp", 0x00, 10,
+	  { 0xD000, 0x400B, 0xE406, 0xD000, 0x00CE, 0xF03D, 0x7002, 0x0E5A, 0x3E03, 0x8B00 },
+	  { 0xFF00, 0xFFFF, 0xFFFF, 0xFF00, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFF00 }, 0 },
 };
 #undef M_
 #undef MB
 
+#if HOST_CPU == CPU_ARM64
+extern void tier2_disable_for_pattern(const char *name);
+extern void tier2_exclude_block(u32 va, const char *name);
+#endif
+
+// Biblioteca de threads cooperativas (kofxi, kofnw, MBAA, ...): o tier2 gera
+// estado diferente do JIT normal nela (state_compare, KOF XI 774/921 quadros
+// diferentes, MBAA 273/925). Detecta pelo mesmo codigo do yield() da
+// assinatura idle_ff_sigs[0], tanto na entrada da funcao (+0) quanto no
+// bloco da tarefa ociosa (+0x1E), e desliga o tier2 do jogo.
+static void coop_kernel_detect(u32 addr)
+{
+#if HOST_CPU == CPU_ARM64
+	const IdleFFSig& sig = idle_ff_sigs[0];
+	static const u32 entries[2] = { 0, sig.entry };
+	for (u32 e : entries)
+	{
+		if (addr < e)
+			continue;
+		const u16 *code = (const u16 *)GetMemPtr(addr - e, sig.count * 2);
+		if (code == nullptr)
+			continue;
+		u32 i = 0;
+		while (i < sig.count && (code[i] & sig.mask[i]) == sig.ops[i])
+			i++;
+		if (i == sig.count)
+		{
+			tier2_disable_for_pattern(sig.name);
+			return;
+		}
+	}
+#endif
+}
+
+// Padroes de codigo que o codegen de regiao do tier2 quebra. O nome descreve
+// a FORMA do padrao (nao o jogo) -- o mesmo padrao pode aparecer em varios
+// jogos. Ao casar, o bloco e EXCLUIDO das regioes (tier2 continua ligado nas
+// outras). docs/tech_debits.md 4.80.
+struct BadRegionSig { const char *name; u32 count; u16 ops[16]; u16 mask[16]; };
+static const BadRegionSig region_bad_sigs[] = {
+	// Metal Slug 6 (8C01255C): rajada de 7 stores `mov.l rX,@(0x18,r2)`
+	// seguidos (r9..r3) e um `bra`; a 4a regiao automatica que a contem deixa
+	// a tela estriada (metrica de gradiente 20-33 x 10,5 limpo).
+	{ "region-bad-store-burst", 7,
+	  { 0x2096, 0x2086, 0x2076, 0x2066, 0x2056, 0x2046, 0x2036 },
+	  { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF } },
+};
+
+static void region_bad_pattern(u32 addr)
+{
+#if HOST_CPU == CPU_ARM64
+	for (const BadRegionSig &s : region_bad_sigs)
+	{
+		const u16 *code = (const u16 *)GetMemPtr(addr, s.count * 2);
+		if (code == nullptr)
+			continue;
+		u32 i = 0;
+		while (i < s.count && (code[i] & s.mask[i]) == s.ops[i])
+			i++;
+		if (i == s.count)
+		{
+			tier2_exclude_block(addr, s.name);
+			return;
+		}
+	}
+#endif
+}
+
 static u8 idle_ff_last_ram_reg;
 static bool idle_ff_match(u32 addr)
 {
+	coop_kernel_detect(addr);
 	idle_ff_last_ram_reg = 0;
 	static int enabled = -1;
 	if (enabled == -1)
@@ -158,7 +256,31 @@ static bool idle_ff_match(u32 addr)
 			i++;
 		if (i == sig.count)
 		{
+			if (sig.self_loop)
+			{
+				// A ultima instrucao tem de desviar para tras, ao inicio do
+				// bloco ou a instrucao imediatamente anterior. Caso contrario
+				// a assinatura casou num idioma parecido que nao e espera.
+				const u16 bop = code[sig.count - 1];
+				s32 disp;
+				if ((bop & 0xFF00) == 0x8900 || (bop & 0xFF00) == 0x8B00)
+					disp = (s8)(bop & 0xFF);
+				else
+					disp = 0;
+				const u32 target = (u32)((s32)(addr + sig.count * 2) + disp * 2);
+				if (target != addr && target != addr - 2)
+				{
+					static const bool ffRej = getenv("FC_IDLE_LOG") != nullptr;
+					if (ffRej)
+						fprintf(stderr, "IDLEFF-REJ %s at %08X bt=%04X disp=%d target=%08X\n",
+							sig.name, addr, bop, disp, target);
+					continue;
+				}
+			}
 			INFO_LOG(DYNAREC, "Idle fast-forward: %s at %08X", sig.name, addr);
+			static const bool ffLog = getenv("FC_IDLE_LOG") != nullptr;
+			if (ffLog)
+				fprintf(stderr, "IDLEFF %s at %08X\n", sig.name, addr);
 			idle_ff_last_ram_reg = sig.ram_reg;
 			return true;
 		}
@@ -192,6 +314,65 @@ static bool delay_loop_match(u32 addr)
 			return false;
 	// bf.s em addr+10 com disp -7: alvo = addr+10+4-14 = addr (volta ao bloco)
 	INFO_LOG(DYNAREC, "Delay loop skip at %08X", addr);
+	return true;
+}
+
+// Laco de atraso por `dt` (auto-loop): `dt rn; nop...; bf` de volta ao inicio
+// = `while (--rn) ;`. Puro (so mexe em rn e T), entao o JIT pula as voltas ate
+// o proximo evento na entrada do bloco (sh4_dt_loop_skip). Aparece no boot do
+// BIOS Naomi (gwing2/cvs2): 0C03EE62/0C03EE58/0C03F460/0C03F46E, topo do custo
+// de boot.
+static bool dt_loop_match(u32 addr, u32 &regOut)
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_NO_DT_SKIP") != nullptr ? 0 : 1;
+	if (!enabled)
+		return false;
+	const u16 *code = (const u16 *)GetMemPtr(addr, 12);
+	if (code == nullptr)
+		return false;
+	if ((code[0] & 0xF0FF) != 0x4010)		// dt rn
+		return false;
+	int i = 1;
+	while (i < 5 && code[i] == 0x0009)		// nops
+		i++;
+	// bf de volta ao inicio: disp = -(i+2)
+	if (i < 1 || i > 5 || (code[i] & 0xFF00) != 0x8B00)
+		return false;
+	s32 disp = (s8)(code[i] & 0xFF);
+	u32 target = addr + (u32)(i * 2) + 4 + (u32)(disp * 2);
+	if (target != addr)
+		return false;
+	regOut = (code[0] >> 8) & 0xF;
+	INFO_LOG(DYNAREC, "dt delay loop at %08X (r%u, %d nops)", addr, regOut, i - 1);
+	return true;
+}
+
+// Laco de varredura do Sonic Shuffle (8C09373A/8C093740, 20% do custo na cena
+// pesada, dois blocos que pagam despacho completo a cada volta):
+//   B: mov.l @r4,r2 ; cmp/eq r6,r2 ; bf exit
+//   A: add #1,r5 ; add #4,r4 ; mov.w @(disp,PC),r0 ; mov.l @(r0,r14),r3 ;
+//      cmp/hs r3,r5 ; bf B
+// = enquanto v[i] == r6 e ++r5 < limite ([r14+off], relido a cada volta mas
+// invariante: o laco so le). O JIT pula m voltas completas na entrada de B
+// (sh4_scan_loop_skip) com o estado final exato e os ciclos cobrados.
+static bool scan_loop_match(u32 addr)
+{
+	static int enabled = -1;
+	if (enabled == -1)
+		enabled = getenv("FC_NO_SCAN_SKIP") != nullptr ? 0 : 1;
+	if (!enabled)
+		return false;
+	static const u16 ops[9]  = { 0x6242, 0x3260, 0x8B05, 0x7501, 0x7404, 0x9000, 0x03EE, 0x3532, 0x8BF6 };
+	static const u16 mask[9] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFF00, 0xFFFF, 0xFFFF, 0xFFFF };
+	const u16 *code = (const u16 *)GetMemPtr(addr, 18);
+	if (code == nullptr)
+		return false;
+	for (int i = 0; i < 9; i++)
+		if ((code[i] & mask[i]) != ops[i])
+			return false;
+	INFO_LOG(DYNAREC, "Scan loop skip at %08X", addr);
 	return true;
 }
 
@@ -1203,6 +1384,41 @@ bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles)
 	blk=rbi;
 	state_Setup(blk->vaddr, blk->fpu_cfg);
 	ngen_GetFeatures(&state.ngen);
+
+	// FC_MEM_READ=<hex addr>:<n halfwords> (diagnostico): dumpa uma vez a
+	// memoria do guest. Para conferir se um padrao de codigo existe no
+	// endereco esperado sem precisar de dump de bloco.
+	{
+		static const char *mr = getenv("FC_MEM_READ");
+		static const char *aw = getenv("FC_ADDR_WATCH");
+		static u32 memReadCount = 0;
+		if (mr != nullptr && (memReadCount++ % 2000) == 0)
+		{
+			u32 a = 0; int n = 32;
+			if (sscanf(mr, "%x:%d", &a, &n) >= 1 && n > 0 && n <= 256)
+			{
+				const u16 *c = (const u16 *)GetMemPtr(a, n * 2);
+				fprintf(stderr, "MEMREAD %08X:", a);
+				for (int i = 0; c != nullptr && i < n; i++)
+					fprintf(stderr, " %04X", c[i]);
+				fprintf(stderr, "\n");
+			}
+		}
+		// FC_ADDR_WATCH=<hex lo>-<hex hi>: loga cada bloco compilado nessa
+		// faixa (para ver onde o bloco realmente comeca).
+		if (aw != nullptr)
+		{
+			u32 lo = 0, hi = 0;
+			if (sscanf(aw, "%x-%x", &lo, &hi) == 2 && rbi->vaddr >= lo && rbi->vaddr <= hi)
+			{
+				const u16 *c = (const u16 *)GetMemPtr(rbi->vaddr, 16);
+				fprintf(stderr, "BLK %08X:", rbi->vaddr);
+				for (int i = 0; c != nullptr && i < 8; i++)
+					fprintf(stderr, " %04X", c[i]);
+				fprintf(stderr, "\n");
+			}
+		}
+	}
 	
 	blk->guest_opcodes=0;
 	// If full MMU, don't allow the block to extend past the end of the current 4K page
@@ -1311,6 +1527,10 @@ _end:
 #endif
 #endif
 
+	// Padroes que o codegen de regiao do tier2 quebra: exclui o bloco das
+	// regioes (tier2 continua ligado no resto). docs/tech_debits.md.
+	if (!mmu_enabled())
+		region_bad_pattern(blk->addr);
 	//cycle tricks
 	if (settings.dynarec.idleskip)
 	{
@@ -1321,6 +1541,16 @@ _end:
 		}
 		if (!mmu_enabled() && delay_loop_match(blk->addr))
 			blk->delay_skip = true;
+		if (!mmu_enabled() && scan_loop_match(blk->addr))
+			blk->scan_skip = true;
+		{
+			u32 dtreg = 0;
+			if (!mmu_enabled() && dt_loop_match(blk->addr, dtreg))
+			{
+				blk->dt_skip = true;
+				blk->dt_skip_reg = dtreg;
+			}
+		}
 
 		// FC_IDLE_LOG: registra cada bloco que um truque de ciclos marcou
 		// (docs/tech_debits.md 4.38) -- o hash le so metade do bloco, em bytes.

@@ -4,6 +4,7 @@
 #include "sh4_core.h"
 #include "sh4_sched.h"
 #include "sh4_mem.h"
+#include "dyna/blockmanager.h"
 #include <cstdlib>
 
 
@@ -129,6 +130,85 @@ void DYNACALL sh4_delay_loop_skip(u32 pc, u32 cyc)
 	Sh4cntx.sh4_sched_next -= (s32)(k * cyc);
 	g_delaySkipCalls++;
 	g_delaySkipIters += k;
+}
+
+// Pulo do laco de varredura (decoder.cpp scan_loop_match). Chamado na entrada
+// de B (pc), antes de qualquer registrador ser alocado. Pula m voltas
+// completas (B igual + A sem sair): r5 += m, r4 += 4m, r0/r3/r2 finais, T=0,
+// ciclos de B+A cobrados por volta. m limitado pela igualdade, pelo limite e
+// pelo proximo evento; a volta que sai fica para o JIT.
+u64 g_scanSkipCalls, g_scanSkipIters;
+static u32 *scan_ram_ptr(u32 a)
+{
+	if ((a >> 29) == 7 || ((a >> 26) & 7) != 3 || (a & 3))
+		return nullptr;
+	return (u32 *)GetMemPtr(a, 4);
+}
+void DYNACALL sh4_scan_loop_skip(u32 pc, u32 cycB)
+{
+	RuntimeBlockInfoPtr a = bm_GetBlock(pc + 6);
+	if (!a)
+		return;
+	const u32 cyc = cycB + a->guest_cycles;
+	const s32 avail = Sh4cntx.sh4_sched_next - 1;
+	if (cyc == 0 || avail < (s32)cyc)
+		return;
+	u32 m = (u32)avail / cyc;
+	const u32 p5 = r[5], p4 = r[4], v = r[6];
+	const u32 litpc = pc + 6 + 4;		// mov.w @(disp,PC),r0 do bloco A
+	const u32 lit = litpc + 4 + (ReadMem16(litpc) & 0xFF) * 2;
+	const s32 off = (s16)ReadMem16(lit);
+	const u32 *lp = scan_ram_ptr(r[14] + off);
+	const u32 *ep = scan_ram_ptr(p4);
+	if (lp == nullptr || ep == nullptr)
+		return;
+	const u32 lim = *lp;
+	if ((u64)p5 + 1 >= lim)
+		return;
+	if (m > lim - p5 - 1)
+		m = lim - p5 - 1;
+	const u32 maxElems = (RAM_MASK + 1 - (p4 & RAM_MASK)) / 4;
+	if (m > maxElems)
+		m = maxElems;
+	u32 n = 0;
+	while (n < m && ep[n] == v)
+		n++;
+	if (n == 0)
+		return;
+	r[5] = p5 + n;
+	r[4] = p4 + 4 * n;
+	r[0] = (u32)off;
+	r[3] = lim;
+	r[2] = v;
+	sr.T = 0;
+	Sh4cntx.sh4_sched_next -= (s32)(n * cyc);
+	g_scanSkipCalls++;
+	g_scanSkipIters += n;
+}
+
+// Pulo do laco de atraso por `dt` (decoder.cpp dt_loop_match). Chamado na
+// entrada do bloco: deixa >= 1 volta real (a ultima, que zera rn e sai) e
+// avanca os ciclos das voltas puladas, limitado ao proximo evento.
+u64 g_dtSkipCalls, g_dtSkipIters;
+void DYNACALL sh4_dt_loop_skip(u32 pc, u32 cyc, u32 reg)
+{
+	if (cyc == 0 || reg > 15)
+		return;
+	const u32 n = r[reg];
+	if (n <= 1)
+		return;
+	const s32 avail = Sh4cntx.sh4_sched_next - 1;
+	if (avail < (s32)cyc)
+		return;
+	u32 k = (u32)avail / cyc;
+	if (k > n - 1)
+		k = n - 1;
+	if (k == 0)
+		return;
+	r[reg] = n - k;
+	Sh4cntx.sh4_sched_next -= (s32)(k * cyc);
+	g_dtSkipCalls++;
+	g_dtSkipIters += k;
 }
 
 int sh4_sched_register(int tag, sh4_sched_callback* ssc)

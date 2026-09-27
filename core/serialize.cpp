@@ -602,6 +602,8 @@ bool dc_serialize(void **data, unsigned int *total_size)
 	return true ;
 }
 
+bool g_unserializeBad = false;
+
 bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_size)
 {
 	int i = 0;
@@ -613,6 +615,7 @@ bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_si
 	aica_mix_sync();
 
 	*total_size = 0 ;
+	g_unserializeBad = false;
 
 	LIBRETRO_US(version) ;
 
@@ -756,6 +759,12 @@ bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_si
 	}
 	else
 		mcfg_UnserializeDevices(data, total_size);
+
+	if (g_unserializeBad)
+	{
+		fprintf(stderr, "dc_unserialize: savestate incompativel -- load abortado\n");
+		return false;
+	}
 
 	if (version < V9)
 	{

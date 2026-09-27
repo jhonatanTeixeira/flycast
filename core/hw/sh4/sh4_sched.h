@@ -50,6 +50,8 @@ void sh4_sched_ffts();
 */
 void sh4_sched_idle_fastforward();
 void DYNACALL sh4_delay_loop_skip(u32 pc, u32 cyc);
+void DYNACALL sh4_scan_loop_skip(u32 pc, u32 cycB);
+void DYNACALL sh4_dt_loop_skip(u32 pc, u32 cyc, u32 reg);
 void DYNACALL sh4_sched_idle_fastforward_if_ram(u32 reg);
 extern u64 g_idleFFCalls, g_idleFFCycles;
 

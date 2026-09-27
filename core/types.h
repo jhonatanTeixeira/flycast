@@ -798,6 +798,9 @@ bool ra_serialize(const void *src, unsigned int src_size, void **dest, unsigned 
 bool ra_unserialize(void *src, unsigned int src_size, void **dest, unsigned int *total_size);
 bool dc_serialize(void **data, unsigned int *total_size);
 bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_size);
+// Um sub-unserialize detectou savestate incompativel (ex.: JVS com contador
+// lixo). dc_unserialize aborta sem dessincronizar o resto.
+extern bool g_unserializeBad;
 
 #define LIBRETRO_S(v) ra_serialize(&(v), sizeof(v), data, total_size)
 #define LIBRETRO_US(v) ra_unserialize(&(v), sizeof(v), data, total_size)

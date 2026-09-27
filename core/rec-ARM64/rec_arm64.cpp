@@ -287,6 +287,13 @@ bool jit_dump_cond_peek(const RuntimeBlockInfo *b, u32& taken, u32& next)
 }
 static void DYNACALL jit_dump_dyn(u32 pc, u32 kind, u32 ret)
 {
+	// FC_JIT_DUMP_NODYN: nao grava a sequencia dinamica (o dyn-*.bin cresce
+	// ~2MB/s e enche o disco em sessoes longas de repro de crash).
+	static int noDyn = -1;
+	if (noDyn < 0)
+		noDyn = getenv("FC_JIT_DUMP_NODYN") != nullptr ? 1 : 0;
+	if (noDyn)
+		return;
 	if ((kind & 7) == 2)		// BET_DynamicCall
 		shadow_push(ret);
 	else if ((kind & 7) == 4)	// BET_DynamicRet
@@ -901,18 +908,6 @@ public:
 			GenCallRuntime(jit_capture);
 		}
 
-		// Opt-in (FC_BLOCK_PROF): bump this block's run counter before anything
-		// else, so the count is exact even for blocks that bail out early on the
-		// cycle check below. Uses x9/x10, the backend's hardcoded scratch pair,
-		// before any allocated register is live.
-		if (BlockProfEnabled())
-		{
-			Mov(x9, reinterpret_cast<uintptr_t>(&block->runs));
-			Ldr(w10, MemOperand(x9));
-			Add(w10, w10, 1);
-			Str(w10, MemOperand(x9));
-		}
-
 		// scheduler
 		if (mmu_enabled())
 		{
@@ -931,6 +926,21 @@ public:
 				Mov(w1, block->guest_cycles);
 				GenCallRuntime(sh4_delay_loop_skip);
 			}
+			if (block->scan_skip)
+			{
+				// Laco de varredura (Sonic Shuffle): pula voltas ate o proximo evento.
+				Mov(w0, block->vaddr);
+				Mov(w1, block->guest_cycles);
+				GenCallRuntime(sh4_scan_loop_skip);
+			}
+			if (block->dt_skip)
+			{
+				// Laco de atraso `dt rn` (BIOS Naomi): pula voltas ate o proximo evento.
+				Mov(w0, block->vaddr);
+				Mov(w1, block->guest_cycles);
+				Mov(w2, block->dt_skip_reg);
+				GenCallRuntime(sh4_dt_loop_skip);
+			}
 			if (block->idle_fastforward)
 			{
 				// Proven idle (decoder.cpp signatures): jump time to just
@@ -947,6 +957,19 @@ public:
 				Mov(w27, 0);
 			}
 			Subs(w27, w27, block->guest_cycles);
+		}
+		// Opt-in (FC_BLOCK_PROF): bump this block's run counter. DEPOIS do
+		// `subs w27` de proposito: o tier2 exige que a 1a instrucao do bloco
+		// seja a checagem de ciclos para instalar a regiao (senao recusa
+		// "entrada nao comeca com a checagem de ciclos"). Conta a execucao
+		// normal; blocos que saem antes do `subs` (raro) nao contam. x9/x10
+		// sao o par scratch do backend, ainda livre aqui.
+		if (BlockProfEnabled())
+		{
+			Mov(x9, reinterpret_cast<uintptr_t>(&block->runs));
+			Ldr(w10, MemOperand(x9));
+			Add(w10, w10, 1);
+			Str(w10, MemOperand(x9));
 		}
 		Label cycles_remaining;
 		B(&cycles_remaining, pl);
@@ -2143,6 +2166,17 @@ public:
 								fprintf(f, "%zu: %s\n", j, block->oplist[j].dissasm().c_str());
 							fclose(f);
 						}
+						// Bytes crus do guest (SH4) do bloco, para montar
+						// assinaturas de padrao a partir de GetMemPtr.
+						snprintf(path, sizeof(path), "/tmp/block-%08X.raw", block->vaddr);
+						f = fopen(path, "w");
+						if (f != nullptr)
+						{
+							const u16 *code = (const u16 *)GetMemPtr(block->vaddr, block->sh4_code_size);
+							for (u32 j = 0; code != nullptr && j * 2 < block->sh4_code_size; j++)
+								fprintf(f, "%04X\n", code[j]);
+							fclose(f);
+						}
 					}
 				}
 			}
@@ -2199,7 +2233,10 @@ public:
 			else if (RAM_SIZE == 16 * 1024 * 1024)
 				Ubfx(w1, w29, 1, 23);	// 23+1 bits: 16 MB
 			else
+			{
+				fprintf(stderr, "rec_arm64: RAM_SIZE=%u (0x%x) nao suportado\n", (unsigned)RAM_SIZE, (unsigned)RAM_SIZE);
 				die("Unsupported RAM_SIZE");
+			}
 			Ldr(x0, MemOperand(x2, x1, LSL, 3));
 		}
 		else
@@ -3630,10 +3667,13 @@ static bool DecodeCompactMem(u32 op, bool& is_read, u32& size, u32& rt, u32& rm,
 // ele. host_pc nao muda: ao voltar do handler, a CPU executa o `b`.
 static bool RewriteCompactMem(unat host_pc, bool is_read, u32 size, u32 rt, u32 rm, void *target, bool is_unsigned = false, bool is_stub = false, bool is_sq = false, bool is_ocr = false)
 {
+	if (tier2_sampling())
 	{
 		// nivel 2: este bloco acessa fora da RAM (MMIO, SQ, OCRAM, pagina de
 		// codigo); regiao com ele leria por fastmem e daria fault
-		// (store na SQ nao conta: a regiao grava direto no sq_buffer)
+		// (store na SQ nao conta: a regiao grava direto no sq_buffer).
+		// So vale com o nivel 2 ligado: com ele desligado, o bm_GetBlock2
+		// (lookup + shared_ptr) em toda reescrita custava caro no boot.
 		RuntimeBlockInfo *b = is_sq ? nullptr : bm_GetBlock2((void *)host_pc).get();
 		if (b != nullptr)
 			tier2_note_slowmem(b->vaddr);

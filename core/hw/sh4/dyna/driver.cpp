@@ -171,6 +171,9 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	idle_fastforward = false;
 	idle_ff_ram_reg = 0;
 	delay_skip = false;
+	scan_skip = false;
+	dt_skip = false;
+	dt_skip_reg = 0;
 	
 	vaddr=rpc;
 #ifndef NO_MMU

@@ -376,6 +376,9 @@ void retro_deinit(void)
 
 static bool is_dupe = false;
 extern int GDROM_TICK;
+#if HOST_CPU == CPU_ARM64
+extern void tier2_set_core_option(bool on);
+#endif
 static bool rotate_screen = false;
 
 static void set_variable_visibility(void)
@@ -641,6 +644,25 @@ static void update_variables(bool first_startup)
             settings.dreamcast.sh4clock = 0.6;
       }
 
+#if HOST_CPU == CPU_ARM64
+   var.key = CORE_OPTION_NAME "_tier2";
+
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      tier2_set_core_option(!strcmp(var.value, "enabled"));
+   else
+      tier2_set_core_option(false);
+#endif
+
+   // Teto de frameskip (padrao 33%): quantos % dos frames o core pode
+   // descartar para manter o jogo a 100% de velocidade (ta_ctx.cpp).
+   {
+      extern void ta_set_frameskip_budget(int pct);
+      var.key = CORE_OPTION_NAME "_frameskip_budget";
+      int pct = 33;
+      if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+         pct = atoi(var.value);
+      ta_set_frameskip_budget(pct);
+   }
 
    var.key = CORE_OPTION_NAME "_cpu_mode";
 

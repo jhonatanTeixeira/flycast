@@ -2106,6 +2106,8 @@ sh4op(iNotImplemented)
 #ifndef NO_MMU
 	INFO_LOG(INTERPRETER, "iNimp %04X @ pc %08x", op, next_pc - 2);
 	fprintf(stderr, "iNimp %04X @ pc %08x (illegal instruction -- executing data or stale code?)\n", op, next_pc - 2);
+	fprintf(stderr, "iNimp ctx: pr=%08x spc=%08x ssr=%08x sr=%08x r15=%08x r0-7=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+		pr, spc, ssr, sh4_sr_GetFull(), r[15], r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
 	SH4ThrownException ex = { next_pc - 2, 0x180, 0x100 };
 	throw ex;
 #else

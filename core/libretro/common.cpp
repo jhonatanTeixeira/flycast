@@ -3,6 +3,9 @@
 bool tier2_fault(void *ucontext, u32 guest_addr);
 
 #include <errno.h>
+#if defined(__linux__) && !defined(TARGET_NO_EXCEPTIONS)
+#include <execinfo.h>
+#endif
 
 #ifdef __MACH__
 #define _XOPEN_SOURCE 1
@@ -477,6 +480,15 @@ static void signal_handler(int sn, siginfo_t * si, void *segfault_ctx)
     svcQueryMemory(&meminfo, &pageinfo, (u64)&__start__);
    	ERROR_LOG(COMMON, ".text base: %p", meminfo.addr);
 #endif // HAVE_LIBNX
+#if defined(__linux__) && !defined(TARGET_NO_EXCEPTIONS)
+	// Backtrace do fault fatal (deref quase-nulo em C++, dyna code 0):
+	// mostra a funcao C++ que estava rodando quando faltou.
+	{
+		void *bt[40];
+		int nb = backtrace(bt, 40);
+		backtrace_symbols_fd(bt, nb, 2);
+	}
+#endif
    	die("segfault");
    	signal(SIGSEGV, SIG_DFL);
    }

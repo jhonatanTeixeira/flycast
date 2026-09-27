@@ -57,6 +57,13 @@ struct RuntimeBlockInfo: RuntimeBlockInfo_Core
 	// Laco de atraso por contagem reconhecido (decoder.cpp, delay_loop_match):
 	// o JIT chama sh4_delay_loop_skip na entrada. docs/tech_debits.md 4.40.
 	bool delay_skip;
+	// Laco de varredura 'while (v[i] == r6 && ++r5 < lim)' (Sonic Shuffle,
+	// decoder.cpp scan_loop_match): o JIT chama sh4_scan_loop_skip na entrada.
+	bool scan_skip;
+	// Laco de atraso `dt rn; nop...; bf` (decoder.cpp dt_loop_match): o JIT
+	// chama sh4_dt_loop_skip na entrada.
+	bool dt_skip;
+	u32 dt_skip_reg;
 
 	u32 BranchBlock; /* if not 0xFFFFFFFF then jump target */
 	u32 NextBlock;   /* if not 0xFFFFFFFF then next block (by position) */

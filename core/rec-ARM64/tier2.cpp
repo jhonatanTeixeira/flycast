@@ -65,9 +65,30 @@ using namespace vixl::aarch64;
 #include "hw/sh4/dyna/blockmanager.h"
 #undef r		// macros do core (Sh4cntx.r, sh4rcb.do_sqw_nommu)
 #undef do_sqw_nommu
+// a autochecagem acessa campos de Sh4Context diretamente (a.sr, a.fpscr, ...)
+#undef r_bank
+#undef gbr
+#undef ssr
+#undef spc
+#undef sgr
+#undef dbr
+#undef vbr
+#undef mac
+#undef pr
+#undef fpul
+#undef next_pc
+#undef sr
+#undef fpscr
+#undef old_sr
+#undef old_fpscr
+#undef fr
+#undef xf
+#undef Sh4cntx
 
 extern void vmem_platform_flush_cache(void *icache_start, void *icache_end, void *dcache_start, void *dcache_end);
 extern "C" void *t2_no_update;		// rec_arm64.cpp: despachante
+extern "C" void tier2_check_entry(u32 id, u32 pc);
+extern "C" void tier2_check_exit(u32 id, u32 pc);
 extern u8 *CodeCache;
 extern u32 tier2_code_reserve;		// driver.cpp: cauda do cache reservada
 extern bool tier2_poll;		// sh4_interpreter.cpp: UpdateSystem chama tier2_safe_point
@@ -88,6 +109,9 @@ struct Region
 	std::vector<u32 *> bumps;
 	bool checked = false;
 	u32 id = 0;
+	u8 *codeBegin = nullptr, *codeEnd = nullptr;	// faixa de codigo da regiao (RW)
+	bool hasPref = false;		// regiao descarrega a SQ (nao entra na autochecagem)
+	bool hasWrite = false;		// regiao escreve memoria (idem: replay nao e seguro)
 };
 
 std::vector<Region> regions;
@@ -97,9 +121,38 @@ std::vector<u32> cfgEntries, cfgBlocks;
 u32 pollCount;
 bool gaveUp;
 bool autoMode;
+u32 maxRegions;	// FC_TIER2_MAXREG=N (diagnostico): instala no maximo N regioes
+bool patternOff;	// padrao de codigo que o tier2 quebra (tier2_disable_for_pattern)
+bool patternCleaned;
+bool optionAuto;	// core option flycast2026_tier2 (libretro.cpp -> tier2_set_core_option)
 u32 installed;
 std::set<u32> inRegion;		// blocos em regiao viva (fora da formacao)
 std::set<u32> badBlocks;		// recusados de vez (fora das proximas janelas)
+
+// FC_TIER2_SELFCHECK (diagnostico, docs/tech_debits.md): compara a execucao
+// de uma regiao com o interpretador, do MESMO estado de entrada, e desfaz a
+// regiao se divergir. Em amostragem: no ponto seguro, restaura o estado
+// capturado na entrada, roda o interpretador ate o PC de saida registrado,
+// compara os registradores/T/FPU e restaura o estado vivo. So vale para
+// regioes sem `pref` (sem descarga da SQ) e cuja execucao amostrada nao
+// tocou fora da RAM (fault emulada por tier2_fault) -- nesses casos o replay
+// so mexe em RAM+contexto, que sao salvos e restaurados.
+bool selfcheck;
+u32 scPeriod = 4096;
+u32 scCounter;
+u64 scLastUs;			// throttle: no maximo 1 amostra a cada 500 ms
+u32 scRegion;
+bool scArmed, scHasExit, scFaulted, scFaultedNow;
+u32 scExitPc;
+Sh4Context scEntryCtx, scExitCtx;
+std::vector<u8> scEntryRam, scLiveRam;
+u32 nextId;			// id reservado na submissao (o codigo da regiao cita)
+const char *stateDir;		// FC_TIER2_STATE=<dir>: dump periodico do estado
+// Regiao que acessou MMIO (fault): desfeita no proximo ponto seguro. O acesso
+// a registrador mapeado (ex.: TMU TCNT0, 0xFFD8000C) le um valor derivado do
+// tempo global, que dentro do laco interno da regiao nao avanca como avanca
+// por bloco no JIT -- o loop de espera do jogo nunca sai (SA2/ggxx).
+u32 scUnhookId;
 
 struct Reject
 {
@@ -172,6 +225,7 @@ bool block_ok(RuntimeBlockInfo *b);
 // destino (T) e retorno (R) de um bloco que termina chamando endereco constante
 bool call_target(RuntimeBlockInfo *rbi, u32 *T, u32 *R)
 {
+	static const bool litTarget = getenv("FC_TIER2_INLINE_LIT") != nullptr;
 	if (rbi->BlockType != BET_StaticCall && rbi->BlockType != BET_DynamicCall)
 		return false;
 	bool haveR = false;
@@ -207,6 +261,21 @@ bool call_target(RuntimeBlockInfo *rbi, u32 *T, u32 *R)
 		{
 			*T = o.rs1._imm + (j.rs2.is_imm() ? j.rs2._imm : 0);
 			return true;
+		}
+		// Dolphin-style (branch/call following): alvo carregado de um literal
+		// de PC (`mov.l @(disp,PC),rN` = readm de endereco constante). Le o
+		// ponteiro do guest no momento da compilacao da regiao, para poder
+		// embutir a folha (hoje o inlineLeaves so pega alvo constante, por
+		// isso "0 chamadas embutidas"). FC_TIER2_INLINE_LIT=0 desliga.
+		if (litTarget && o.op == shop_readm && o.rd.is_reg() && o.rd._reg == rn
+				&& o.rs1.is_imm() && o.rs2.is_null())
+		{
+			u32 ptr = ReadMem32(o.rs1._imm);
+			if (ptr != 0)
+			{
+				*T = ptr + (j.rs2.is_imm() ? j.rs2._imm : 0);
+				return true;
+			}
 		}
 		return false;
 	}
@@ -288,6 +357,9 @@ public:
 	Tier2Compiler(u8 *buf, size_t size) : MacroAssembler(buf, size) {}
 
 	std::map<u32, BlockIn> blk;
+	u32 id = 0;			// reservado na submissao; citado no codigo da regiao
+	bool hasPref = false;		// algum bloco tem `pref` (autochecagem recusa)
+	bool hasWrite = false;		// algum bloco escreve memoria (autochecagem recusa)
 	std::map<u32, u32> heatOf;		// calor (amostras) por bloco, para o layout
 	std::vector<u32> order, entries;
 	std::set<u32> latch;
@@ -349,7 +421,7 @@ public:
 		RuntimeBlockInfo *rbi = bm_GetBlock(va).get();
 		if (rbi == nullptr)
 			throw Reject{ "bloco nao compilado" };
-		if (!rbi->read_only || rbi->temp_block || rbi->idle_fastforward || rbi->delay_skip)
+		if (!rbi->read_only || rbi->temp_block || rbi->idle_fastforward || rbi->delay_skip || rbi->scan_skip || rbi->dt_skip)
 			throw Reject{ "bloco sem protecao de pagina, temporario ou com avanco" };
 		BlockIn b;
 		b.rbi = rbi;
@@ -896,6 +968,14 @@ public:
 				Mov(w1, tconst);
 				Str(w1, Ctx(reg_sr_T));
 			}
+			if (selfcheck)
+			{
+				// autochecagem: estado de saida (registradores ja no contexto)
+				Mov(w0, id);
+				Mov(w1, pc);
+				Mov(x16, (u64)(uintptr_t)&tier2_check_exit);
+				Blr(x16);
+			}
 			u32 rpc = realOf.count(pc) ? realOf[pc] : pc;
 			auto ec = entryCode.find(rpc);
 			if (ec != entryCode.end())
@@ -1249,6 +1329,15 @@ public:
 			Label *el = newLabel();
 			entryLabel[e] = el;
 			Bind(el);
+			if (selfcheck)
+			{
+				// autochecagem: amostra o estado na entrada (o id e o PC da
+				// entrada vao como imediatos; a funcao C decide se captura)
+				Mov(w0, id);
+				Mov(w1, e);
+				Mov(x16, (u64)(uintptr_t)&tier2_check_entry);
+				Blr(x16);
+			}
 			Add(x13, x28, sizeof(Sh4Context));
 			RegSet all = W | U;
 			for (int r = 0; r < sh4_reg_count; r++)
@@ -1368,8 +1457,21 @@ public:
 				u32 taken = b.takenOnT ? b.branch : b.next;	// destino quando a decisao == 1
 				u32 other = b.takenOnT ? b.next : b.branch;
 				int tc1 = tAfterJcond ? -1 : 1, tc0 = tAfterJcond ? -1 : 0;
-				Label *lt_ = blk.count(taken) ? blockLabel[taken] : exitStub(taken, tc1);
-				Label *lo_ = blk.count(other) ? blockLabel[other] : exitStub(other, tc0);
+				// FC_TIER2_NOLOOP (diagnostico): aresta de volta sai da regiao
+				static const bool noLoop = getenv("FC_TIER2_NOLOOP") != nullptr;
+				// Padrao: laco cujo bloco tem store no delay slot (Shenmue 1,
+				// 0C1DC912: memcpy de bytes com `mov.b r3,@-r7` no slot) NAO fica
+				// dentro da regiao -- a aresta de volta sai pelo bloco antigo a
+				// cada volta. Com o laco interno o jogo executa dados (aborto
+				// `iNimp FFFF` em handler de interrupcao aninhado); saindo a
+				// cada volta nao. Causa raiz em aberto (docs/tech_debits.md 4.74).
+				bool slotStore = false;
+				for (const shil_opcode &so : b.ir)
+					if (so.op == shop_writem && so.delay_slot)
+						slotStore = true;
+				auto inRgn = [&](u32 t2) { return blk.count(t2) && !((noLoop || slotStore) && t2 <= v); };
+				Label *lt_ = inRgn(taken) ? blockLabel[taken] : exitStub(taken, tc1);
+				Label *lo_ = inRgn(other) ? blockLabel[other] : exitStub(other, tc0);
 				if (other == nxt)
 					Cbnz(decision, lt_);
 				else if (taken == nxt)
@@ -1399,6 +1501,17 @@ public:
 void read_cfg()
 {
 	cfg_read = true;
+	if (const char *m = getenv("FC_TIER2_MAXREG"))
+		maxRegions = (u32)atoi(m);
+	{
+		stateDir = getenv("FC_TIER2_STATE");
+		const char *s = getenv("FC_TIER2_SELFCHECK");
+		selfcheck = s != nullptr && atoi(s) != 0;
+		if (const char *p = getenv("FC_TIER2_SELFCHECK_PERIOD"))
+			scPeriod = (u32)atoi(p);
+		if (scPeriod < 1)
+			scPeriod = 1;
+	}
 	const char *a = getenv("FC_TIER2_AUTO");
 	autoMode = a != nullptr && atoi(a) != 0;
 	const char *e = getenv("FC_TIER2_RT");
@@ -1424,7 +1537,7 @@ void read_cfg()
 		if (std::find(cfgBlocks.begin(), cfgBlocks.end(), en) == cfgBlocks.end())
 			cfgBlocks.insert(cfgBlocks.begin(), en);
 }
-bool enabled() { return autoMode || !cfgBlocks.empty(); }
+bool enabled() { return autoMode || optionAuto || !cfgBlocks.empty(); }
 
 u8 *area_begin() { return CodeCache + CODE_SIZE - T2_AREA; }
 u8 *area_end() { return CodeCache + CODE_SIZE; }
@@ -1494,6 +1607,7 @@ int submit(const std::vector<u32> &entryList, const std::vector<u32> &blockList,
 	if (room < 16 * 1024)
 		return 1;
 	Tier2Compiler *c = new Tier2Compiler(t2_ptr, room);
+	c->id = ++nextId;
 	for (u32 va : blockList)
 	{
 		auto it = heatMap.find(va);
@@ -1503,6 +1617,14 @@ int submit(const std::vector<u32> &entryList, const std::vector<u32> &blockList,
 	try
 	{
 		c->load(blockList, entryList);
+		for (auto &kv : c->blk)
+			for (const shil_opcode &o : kv.second.ir)
+			{
+				if (o.op == shop_pref)
+					c->hasPref = true;
+				if (o.op == shop_writem)
+					c->hasWrite = true;
+			}
 		// trecho sem laco vale se tiver ao menos 2 blocos ou chamada embutida;
 		// a calibracao (blocos por entrada) desfaz o que nao se paga
 		if (autoMode && blockList.size() < 2 && c->inlined == 0)
@@ -1558,7 +1680,7 @@ void finish()
 	jobDone.store(false, std::memory_order_relaxed);
 	inFlight = false;
 	Tier2Compiler *c = j->c;
-	bool stale = j->gen != generation;
+	bool stale = j->gen != generation || patternOff || (maxRegions && installed >= maxRegions);
 	if (!stale && j->ok)
 		for (u32 va : j->blocks)
 			if (bm_GetBlock(va).get() != c->rbiOf[va])
@@ -1605,7 +1727,22 @@ void finish()
 	reg.passes = (u32 *)(t2_ptr + c->cntPasses.GetLocation());
 	for (u32 off : c->bumpSites)
 		reg.bumps.push_back((u32 *)(t2_ptr + off));
-	reg.id = ++installed;
+	reg.id = c->id;
+	reg.codeBegin = t2_ptr;
+	reg.codeEnd = t2_ptr + size;
+	reg.hasPref = c->hasPref;
+	reg.hasWrite = c->hasWrite;
+	installed++;
+	if (const char *dd = getenv("FC_TIER2_DUMP"))	// diagnostico: bytes da regiao
+	{
+		char fn[256];
+		snprintf(fn, sizeof(fn), "%s/t2_region_%u.bin", dd, reg.id);
+		if (FILE *f = fopen(fn, "wb"))
+		{
+			fwrite(t2_ptr, 1, size, f);
+			fclose(f);
+		}
+	}
 	for (u32 va : j->blocks)
 		inRegion.insert(va);
 	fprintf(stderr, "tier2: regiao #%u: %zu blocos, %u chamadas embutidas, %u bytes, %zu entradas, emitida em %.2f ms na thread, guardas:",
@@ -1678,7 +1815,7 @@ bool block_ok(RuntimeBlockInfo *b)
 {
 	if (slowMem.count(b->vaddr))
 		return false;
-	if (!b->read_only || b->temp_block || b->idle_fastforward || b->delay_skip)
+	if (!b->read_only || b->temp_block || b->idle_fastforward || b->delay_skip || b->scan_skip || b->dt_skip)
 		return false;
 	switch (b->BlockType)
 	{
@@ -1722,6 +1859,51 @@ bool stores_are_sq(const std::vector<u32> &blocks)
 			if (o.op == shop_writem && (!o.rs1.is_reg() || !prefBase.count(o.rs1._reg)))
 				return false;
 	return true;
+}
+
+// Padrao "laco de verdade" (DOA2/Shenmue: volta pra dentro do proprio
+// grupo) x "trecho sem retorno interno" (Sonic Shuffle: grupo de blocos
+// vizinhos que so eh atravessado uma vez por entrada -- a autochecagem de
+// check_regions() ja descartava esses depois de instalar, pagando o custo
+// de emissao + ate 4000 entradas rodando com guarda extra a toa). Cicla se
+// algum membro alcanca outro membro que ja esta na pilha de recursao,
+// usando so as mesmas arestas estaticas que form_regions() uniu.
+bool group_has_loop(const std::vector<u32> &members, const std::map<u32, RuntimeBlockInfo *> &rb)
+{
+	std::set<u32> inGroup(members.begin(), members.end());
+	std::map<u32, int> state;	// 0=nao visitado, 1=na pilha, 2=pronto
+	std::function<bool(u32)> dfs = [&](u32 v) -> bool
+	{
+		state[v] = 1;
+		auto it = rb.find(v);
+		if (it != rb.end())
+		{
+			RuntimeBlockInfo *b = it->second;
+			u32 T, R;
+			std::vector<u32> callee;
+			if (call_target(b, &T, &R) && inGroup.count(R) && leaf_blocks(T, &callee))
+			{
+				if (state[R] == 1) return true;
+				if (state[R] == 0 && dfs(R)) return true;
+			}
+			u32 t[2] = { b->BranchBlock, b->NextBlock };
+			bool cond = b->BlockType == BET_Cond_0 || b->BlockType == BET_Cond_1;
+			bool stat = b->BlockType == BET_StaticJump || b->BlockType == BET_StaticCall;
+			for (int k = 0; k < 2; k++)
+			{
+				if (!(cond || (stat && k == 0)) || !inGroup.count(t[k]))
+					continue;
+				if (state[t[k]] == 1) return true;
+				if (state[t[k]] == 0 && dfs(t[k])) return true;
+			}
+		}
+		state[v] = 2;
+		return false;
+	};
+	for (u32 v : members)
+		if (state[v] == 0 && dfs(v))
+			return true;
+	return false;
 }
 
 void form_regions()
@@ -1789,7 +1971,15 @@ void form_regions()
 		u64 hsum = 0;
 		for (u32 v : kv.second)
 			hsum += heat[v];
-		if (hsum * 200 >= total)	// >= 0,5% das amostras
+		// grupo com laco de verdade (volta pro proprio grupo): limiar de
+		// sempre (0,5% -- o que ja valeu para DOA2/Shenmue). Sem laco
+		// interno (so passagem, tipo do achado 4.68 do Sonic Shuffle): 4x
+		// mais quente exigido (2%), porque so paga a instalacao se for
+		// chamado de MUITOS lugares -- sem isso, check_regions() so ia
+		// descobrir depois de ate 4000 entradas rodando com guarda extra.
+		bool cyclic = group_has_loop(kv.second, rb);
+		u64 minHsum = cyclic ? (total + 199) / 200 : (total + 49) / 50;
+		if (hsum >= minHsum)
 			cand.push_back({ hsum, kv.second });
 	}
 	std::sort(cand.rbegin(), cand.rend());
@@ -1902,8 +2092,229 @@ void drain_samples()
 
 } // namespace
 
+// ------------------------------------------------------------- autochecagem
+// FC_TIER2_SELFCHECK (ver topo do arquivo): a regiao amostra o estado na
+// entrada e na saida; no ponto seguro o interpretador reexecuta o trecho do
+// mesmo estado de entrada e o resultado e comparado. Divergiu -> regiao
+// desfeita e logada.
+static Region *scFindRegion(u32 id)
+{
+	for (Region &r : regions)
+		if (r.alive && r.id == id)
+			return &r;
+	return nullptr;
+}
+
+// So os campos que o SH4 define (fora pc/jdyn/CpuRunning/scheduler, que sao
+// rascunho do despachante e nao do programa).
+static bool scCtxEqual(const Sh4Context &a, const Sh4Context &b)
+{
+	if (memcmp(a.xffr, b.xffr, sizeof(a.xffr)) != 0)
+		return false;
+	if (memcmp(a.r, b.r, sizeof(a.r)) != 0)
+		return false;
+	if (a.mac.full != b.mac.full)
+		return false;
+	if (memcmp(a.r_bank, b.r_bank, sizeof(a.r_bank)) != 0)
+		return false;
+	if (a.gbr != b.gbr || a.ssr != b.ssr || a.spc != b.spc || a.sgr != b.sgr
+			|| a.dbr != b.dbr || a.vbr != b.vbr || a.pr != b.pr || a.fpul != b.fpul)
+		return false;
+	if (a.sr.status != b.sr.status || a.sr.T != b.sr.T)
+		return false;
+	if (a.fpscr.full != b.fpscr.full)
+		return false;
+	return true;
+}
+
+// FC_TIER2_STATE=<dir>: a cada 1s grava o estado do tier2 (contadores de cada
+// regiao viva + contexto SH4) em <dir>/tier2-state.txt e o contexto cru em
+// <dir>/tier2-ctx.bin. Se o jogo travar, o ultimo arquivo mostra em que regiao
+// ele estava girando.
+void tier2_dump_state()
+{
+	if (stateDir == nullptr)
+		return;
+	static u64 last;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	u64 now = (u64)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+	if (now - last < 1000)
+		return;
+	last = now;
+	char path[512];
+	snprintf(path, sizeof(path), "%s/tier2-state.txt", stateDir);
+	FILE *f = fopen(path, "w");
+	if (f == nullptr)
+		return;
+	const Sh4Context &c = p_sh4rcb->cntx;
+	fprintf(f, "pc=%08X pr=%08X fpul=%08X sr=%08X T=%u fpscr=%08X sched_next=%d intpend=%08X\n",
+			c.pc, c.pr, c.fpul, c.sr.status, c.sr.T, c.fpscr.full, c.sh4_sched_next, c.interrupt_pend);
+	fprintf(f, "r0-15:");
+	for (int i = 0; i < 16; i++)
+		fprintf(f, " %08X", c.r[i]);
+	fprintf(f, "\n");
+	fprintf(f, "regioes vivas:\n");
+	for (Region &r : regions)
+	{
+		if (!r.alive)
+			continue;
+		u32 en = r.entries != nullptr ? *r.entries : 0;
+		u32 pa = r.passes != nullptr ? *r.passes : 0;
+		fprintf(f, "R #%u entradas=%u blocos_exec=%u nblocos=%zu pref=%d write=%d checked=%d |",
+				r.id, en, pa, r.blocks.size(), (int)r.hasPref, (int)r.hasWrite, (int)r.checked);
+		for (u32 va : r.blocks)
+			fprintf(f, " %08X", va);
+		fprintf(f, "\n");
+	}
+	fclose(f);
+	snprintf(path, sizeof(path), "%s/tier2-ctx.bin", stateDir);
+	f = fopen(path, "wb");
+	if (f != nullptr)
+	{
+		fwrite(&c, 1, sizeof(Sh4Context), f);
+		fclose(f);
+	}
+}
+
+extern "C" void tier2_check_entry(u32 id, u32 pc)
+{
+	if (!selfcheck || scArmed || scHasExit || patternOff)
+		return;
+	if (++scCounter < scPeriod)
+		return;
+	scCounter = 0;
+	{
+		struct timespec ts;
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		u64 now = (u64)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+		if (now - scLastUs < 500000)
+			return;
+		scLastUs = now;
+	}
+	Region *r = scFindRegion(id);
+	if (r == nullptr || r->hasPref || r->hasWrite)
+		return;		// replay so e seguro em regiao de leitura pura
+	if (scEntryRam.size() != mem_b.size)
+	{
+		scEntryRam.resize(mem_b.size);
+		scLiveRam.resize(mem_b.size);
+	}
+	scEntryCtx = p_sh4rcb->cntx;
+	scEntryCtx.pc = pc;		// o interpretador comeca daqui
+	memcpy(scEntryRam.data(), mem_b.data, mem_b.size);
+	scRegion = id;
+	scFaulted = false;
+	scArmed = true;
+}
+
+extern "C" void tier2_check_exit(u32 id, u32 pc)
+{
+	if (!scArmed || id != scRegion)
+		return;
+	scArmed = false;
+	scExitCtx = p_sh4rcb->cntx;
+	scExitPc = pc;
+	scFaultedNow = scFaulted;
+	scHasExit = true;
+}
+
+// Ponto seguro: replay com o interpretador + comparacao. So reexecuta quando
+// a execucao amostrada nao tocou fora da RAM (nenhum tier2_fault): nesse caso
+// o unico estado mutado e RAM+contexto, que sao salvos e restaurados.
+void tier2_selfcheck()
+{
+	if (!scHasExit)
+		return;
+	scHasExit = false;
+	if (scFaultedNow || scExitPc == 0xFFFFFFFF)
+		return;
+	Region *r = scFindRegion(scRegion);
+	if (r == nullptr)
+		return;
+	Sh4Context liveCtx = p_sh4rcb->cntx;
+	memcpy(scLiveRam.data(), mem_b.data, mem_b.size);
+	p_sh4rcb->cntx = scEntryCtx;
+	p_sh4rcb->cntx.CpuRunning = 0;	// Sh4_int_Step exige a CPU parada
+	memcpy(mem_b.data, scEntryRam.data(), mem_b.size);
+	bool reached = false;
+	u32 steps = 0;
+	try
+	{
+		while (steps < 200000)
+		{
+			if (p_sh4rcb->cntx.pc == scExitPc)
+			{
+				reached = true;
+				break;
+			}
+			Sh4_int_Step();
+			steps++;
+		}
+	}
+	catch (...)
+	{
+		reached = false;
+	}
+	Sh4Context refCtx = p_sh4rcb->cntx;
+	p_sh4rcb->cntx = liveCtx;
+	RestoreHostRoundingMode();
+	memcpy(mem_b.data, scLiveRam.data(), mem_b.size);
+	if (!reached)
+		return;
+	static u32 scChecks, scDiverged;
+	scChecks++;
+	if ((scChecks & 63) == 1)
+		fprintf(stderr, "tier2: autochecagem: %u checagens, %u divergencias (regiao #%u, entrada %08X saida %08X, %u passos)\n",
+				scChecks, scDiverged, r->id, scEntryCtx.pc, scExitPc, steps);
+	if (!scCtxEqual(refCtx, scExitCtx))
+	{
+		scDiverged++;
+		fprintf(stderr, "tier2: AUTOCHECAGEM regiao #%u DIVERGIU do interpretador (entrada %08X saida %08X, %u passos) -- regiao desfeita\n",
+				r->id, scEntryCtx.pc, scExitPc, steps);
+		unhook(*r);
+		for (u32 va : r->blocks)
+			badBlocks.insert(va);
+	}
+}
+
+// Chamado de libretro.cpp (update_variables) com o valor da opcao do core
+// flycast2026_tier2. Independente de FC_TIER2_AUTO (env var de dev, ainda
+// funciona); os dois se somam por OR em enabled().
+// Chamado de decoder.cpp quando um padrao de codigo conhecido como
+// incompativel aparece (ex.: biblioteca de threads cooperativas: KOF XI, MBAA,
+// diverge do JIT normal com o tier2). Desliga o tier2 do jogo todo; as regioes
+// vivas sao desfeitas no proximo ponto seguro.
+void tier2_disable_for_pattern(const char *name)
+{
+	if (patternOff)
+		return;
+	patternOff = true;
+	fprintf(stderr, "tier2: desligado pelo padrao '%s'\n", name);
+}
+
+void tier2_set_core_option(bool on)
+{
+	if (!cfg_read)
+		read_cfg();
+	optionAuto = on;
+}
+
+// Exclui um bloco (padrao de codigo) das regioes do tier2, sem desligar o
+// tier2 do jogo. Chamado de decoder.cpp quando um padrao que o codegen de
+// regiao quebra aparece (ex.: rajada de stores, Metal Slug 6 8C01255C). O
+// bloco e compilado antes de ser amostrado como quente, entao badBlocks e
+// setado a tempo de a formacao de regiao (thread do tier2) pula-lo.
+void tier2_exclude_block(u32 va, const char *name)
+{
+	if (badBlocks.insert(va).second)
+		fprintf(stderr, "tier2: bloco %08X excluido pelo padrao '%s'\n", va, name);
+}
+
 void tier2_init()
 {
+	patternOff = false;
+	patternCleaned = false;
 	if (!cfg_read)
 		read_cfg();
 	tier2_code_reserve = enabled() ? T2_AREA : 0;
@@ -1919,7 +2330,9 @@ void tier2_reset()
 	generation++;		// resultado em voo na thread fica velho
 	t2_ptr = area_begin();
 	gaveUp = false;
-	tier2_poll = enabled() && !mmu_enabled();
+	tier2_poll = enabled() && !mmu_enabled() && !patternOff;
+	scArmed = scHasExit = false;	// autochecagem: descarta amostra pendente
+	scCounter = 0;
 }
 
 uintptr_t t2_last_pc;
@@ -1927,12 +2340,46 @@ bool tier2_sampling()
 {
 	if (!cfg_read)
 		read_cfg();
-	return autoMode;
+	return (autoMode || optionAuto) && !patternOff;
 }
 
+void tier2_selfcheck();
+void tier2_dump_state();
 void tier2_safe_point()
 {
-	if (autoMode)
+	if (stateDir != nullptr)
+		tier2_dump_state();
+	if (selfcheck)
+		tier2_selfcheck();
+	if (scUnhookId != 0)
+	{
+		u32 id = scUnhookId;
+		scUnhookId = 0;
+		for (Region &r : regions)
+			if (r.alive && r.id == id)
+			{
+				fprintf(stderr, "tier2: regiao #%u acessou MMIO -- desfeita (blocos marcados como lentos)\n", id);
+				unhook(r);
+				for (u32 va : r.blocks)
+					slowMem.insert(va);
+				break;
+			}
+	}
+	if (patternOff)
+	{
+		if (!patternCleaned)
+		{
+			patternCleaned = true;
+			if (inFlight)
+				finish();		// descartado: patternOff => stale
+			for (Region &r : regions)
+				if (r.alive)
+					unhook(r);
+		}
+		tier2_poll = false;
+		return;
+	}
+	if (autoMode || optionAuto)
 	{
 		// 1 amostra a cada 64 fatias (~7 mil/s): cada uma custa uma busca
 		// no mapa de blocos, cara no A53 (todas as fatias = -12% no DOA2)
@@ -1988,7 +2435,7 @@ void tier2_on_discard(RuntimeBlockInfo *block)
 		if (!r.alive || std::find(r.blocks.begin(), r.blocks.end(), block->vaddr) == r.blocks.end())
 			continue;
 		unhook(r);
-		tier2_poll = enabled();
+		tier2_poll = enabled() && !patternOff;
 	}
 }
 
@@ -2008,6 +2455,19 @@ bool tier2_fault(void *ucv, u32 guest)
 	uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
 	if (!tier2_owns_pc(pc))
 		return false;
+	scFaulted = true;		// autochecagem: nao reexecuta esse trecho
+	// Acesso a MMIO dentro de regiao: a emulacao aqui nao reproduz o
+	// escalonamento por bloco do JIT (tempo global parado dentro do laco), o
+	// que trava jogos que fazem polling de timer. Marca a regiao pra desfazer.
+	{
+		u8 *pcw = (u8 *)CC_RX2RW((void *)pc);
+		for (const Region &r : regions)
+			if (r.alive && pcw >= r.codeBegin && pcw < r.codeEnd)
+			{
+				scUnhookId = r.id;
+				break;
+			}
+	}
 	u32 insn = *(u32 *)CC_RX2RW((void *)pc);
 	struct fpsimd_context *fp = nullptr;
 	for (u8 *p = (u8 *)uc->uc_mcontext.__reserved; p < (u8 *)uc->uc_mcontext.__reserved + sizeof(uc->uc_mcontext.__reserved);)

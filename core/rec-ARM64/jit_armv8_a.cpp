@@ -915,6 +915,23 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 		CallRuntime((void *)sh4_delay_loop_skip);
 		LoadPinned();
 	}
+	if (blk->scan_skip)
+	{
+		StorePinned();
+		Mov(w0, blk->vaddr);
+		Mov(w1, blk->guest_cycles);
+		CallRuntime((void *)sh4_scan_loop_skip);
+		LoadPinned();
+	}
+	if (blk->dt_skip)
+	{
+		StorePinned();
+		Mov(w0, blk->vaddr);
+		Mov(w1, blk->guest_cycles);
+		Mov(w2, blk->dt_skip_reg);
+		CallRuntime((void *)sh4_dt_loop_skip);
+		LoadPinned();
+	}
 	if (blk->idle_fastforward)
 	{
 		if (blk->idle_ff_ram_reg != 0)

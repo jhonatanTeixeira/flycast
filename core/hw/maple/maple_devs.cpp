@@ -7,6 +7,7 @@
 #include "hw/naomi/naomi_cart.h"
 #include <math.h>
 #include <time.h>
+#include <cstdio>
 
 #include "deps/zlib/zlib.h"
 #include "deps/xxhash/xxhash.h"
@@ -2637,6 +2638,17 @@ struct maple_naomi_jamma : maple_sega_controller
 	   create_io_boards();
 	   size_t board_count;
 	   LIBRETRO_US(board_count);
+	   // Savestate antigo/incompativel: o contador pode vir lixo. Indexar
+	   // io_boards[i] fora dos limites derruba o core (deref quase-nulo em
+	   // jvs_io_board::maple_unserialize). Recusa o load em vez de crashar.
+	   fprintf(stderr, "maple: JVS unserialize board_count=%zu io_boards=%zu\n",
+			   board_count, io_boards.size());
+	   if (board_count > io_boards.size())
+	   {
+		   fprintf(stderr, "maple: JVS board_count fora dos limites (savestate antigo) -- load abortado\n");
+		   g_unserializeBad = true;
+		   return false;
+	   }
 	   for (int i = 0; i < board_count; i++)
 		  io_boards[i]->maple_unserialize(data, total_size);
 
