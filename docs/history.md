@@ -3089,3 +3089,16 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Resultado:** Shenmue II 21,0 → **24,7/24,0 fps**; **MvC2 sem glitch** (12
   frames limpos). Resolve os dois lados do tradeoff.
 - **Ainda em A/B:** kofevo (a outra "regressão" citada pelo usuário) -- a checar.
+
+## 2026-09-27 22:15 — as "2 regressões" eram leitura de cena (kofevo/Shenmue II)
+
+- **kofevo A/B (mesma savestate, `perfmax`, 2 rodadas/lado):** pré-self-heal
+  35,1/35,9 fps (p99 25,8/15,8, 0 dup) × atual 37,5/37,3 (p99 14,9/14,6, ~40 dup).
+  A build **atual é mais rápida**, não regrediu — o 57,7 fps da bateria de
+  2026-09-26 era outra cena/condição.
+- **Shenmue II:** idem (ver 20:15 e 22:05) — boot 59,5 × 29,9 fps, gameplay
+  emu-bound ~21 nas duas; a "regressão de 30→?" era abertura (teto 30fps da
+  cena) vs. gameplay pesado.
+- **Conclusão:** nenhuma das duas "regressões" citadas é regressão de código.
+  O único custo real do no-wait (o `re.Wait` cego) foi **eliminado** no 4.87
+  (wait por página). **Napple Tale 30→60 fps** foi ganho real do no-wait.
