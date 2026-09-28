@@ -3075,3 +3075,17 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   ou seja COM a regressão do Shenmue II). Backup `.bak-pre-mortongpu` (= no-wait,
   sem glitch-fix; 25,6 fps no Shenmue II). **Decisão pendente:** default do
   `FC_EMU_WAIT_RE` (on = MvC2 limpo / Shenmue II lento; off = o contrário).
+
+## 2026-09-27 22:05 — 4.87 RESOLVIDO: wait por página de VRAM (sem o re.Wait cego)
+
+- **Medição que decidiu:** instrumentados contadores de concorrência real (emu
+  escrevendo na VRAM DURANTE a leitura de textura pelo render): **0,6% no
+  Shenmue II** (1 de 172) × **17% no MvC2** (473 de 2729). O `re.Wait` cego
+  esperava o `Process` inteiro (7,76ms; só ~0,95ms de leitura real) → desperdício
+  no Shenmue II (a regressão de 19%).
+- **Fix:** `TexReadScope` marca as páginas de VRAM em leitura durante o `Update()`;
+  `VramLockedWriteOffset` só espera se o emu for escrever numa página em leitura
+  agora (spin de µs). `g_emuWaitRe` default 0 (o cego virou A/B).
+- **Resultado:** Shenmue II 21,0 → **24,7/24,0 fps**; **MvC2 sem glitch** (12
+  frames limpos). Resolve os dois lados do tradeoff.
+- **Ainda em A/B:** kofevo (a outra "regressão" citada pelo usuário) -- a checar.

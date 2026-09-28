@@ -263,10 +263,28 @@ Medir antes de codar (regra do projeto): contador de "frame enfileirado cuja
 VRAM foi escrita antes do render consumir" dimensiona o problema e decide entre
 (1)-(4).
 
-**Custo do paliativo medido (2026-09-27, Shenmue II, savestate):** o `re.Wait`
-curto **regride o Shenmue II de 25,9 → 21,0 fps** (VEL 71,3 → 67,2%, `core_average`
-20,6 → 27,5ms) -- porque o `Process` do Shenmue II é longo e esperá-lo rouba
-~19%. `FC_EMU_WAIT_RE=0` recupera. `FC_TEX_SKIP_UNCHANGED` não tem efeito aqui.
-Ou seja: o paliativo é aceitável no MvC2 (~5%) mas caro no Shenmue II -- mais um
-motivo pra fechar o 4.87 (serializar sem esperar o `Process` inteiro). **Regressão
-a resolver na próxima implementação do tier2/render.**
+**Custo do paliativo medido (2026-09-27):** no **gameplay emu-bound** do Shenmue
+II (savestate), o `re.Wait` curto custa ~19% (com `FC_EMU_WAIT_RE=1` 21,0 fps ×
+`=0` 25,9). **Mas no boot/abertura não regride:** build com wait-curto 59,5 fps /
+p99 4ms × pré-self-heal (wait longo) 29,9 fps / p99 100ms.
+
+## 4.87 — RESOLVIDO (2026-09-27): `re.Wait` cego → wait por PÁGINA de VRAM
+
+**Medição que decidiu o desenho** (contadores novos): concorrência real -- emu
+escrevendo na VRAM **durante** a leitura de textura pelo render -- é de apenas
+**0,6% no Shenmue II** (1 de 172 escritas) contra **17% no MvC2** (473 de 2729
+durante a leitura). O `re.Wait` cego esperava o `Process` inteiro (~7,76ms no
+Shenmue II, dos quais só ~0,95ms eram leitura de VRAM) -- puro desperdício quando
+não há colisão (daí a regressão de 19% no Shenmue II).
+
+**Implementação:** `TexReadScope` (TexCache.cpp) marca as **páginas de VRAM** que
+cada textura cobre enquanto o `Update()` (conversão/upload, render thread) as lê;
+`VramLockedWriteOffset` (fault de escrita do emu) **só espera** (spin curto,
+~µs até a leitura terminar) se for escrever numa **página em leitura agora** --
+fora disso, zero espera. `g_emuWaitRe` passou a **default 0** (o wait cego virou
+opt-in de A/B).
+
+**Resultado (mesma savestate):** Shenmue II **21,0 → 24,7/24,0 fps** (recupera
+~90% do que o wait cego custava; no-wait puro = 25,9); **MvC2 sem glitch** (12
+frames dumpados limpos, mesmo score de alta-frequência do wait-curto antigo).
+**Elimina o tradeoff:** glitch do MvC2 resolvido sem a regressão do Shenmue II.
