@@ -54,12 +54,11 @@ static u64 lastRenderUs = 0;
 // slot; se o render ainda esta no frame anterior, o novo e ignorado).
 // FC_EMU_WAIT=1 restaura o comportamento antigo (espera) para A/B.
 int g_emuNeverWaits = 1;
-// FC_EMU_WAIT_RE (default 1): mesmo no modelo no-wait, a emu espera o re.Set()
-// do rend_end_render. Esse re e sinalizado logo apos o Process (upload de
-// textura), nao depois do draw -- e o unico ponto que precisa serializar para a
-// VRAM nao ser sobrescrita enquanto o render ainda le as texturas (glitch de
-// sprite). Custa o Process, nao o frame inteiro.
-int g_emuWaitRe = 1;
+// FC_EMU_WAIT_RE (default 0 desde 4.87): o wait cego do re.Set() (que esperava o
+// Process inteiro) foi substituido pelo wait por PAGINA de VRAM em
+// VramLockedWriteOffset (TexCache.cpp): so espera se o emu escrever numa pagina
+// que o render esta lendo agora. FC_EMU_WAIT_RE=1 forca o wait antigo (A/B).
+int g_emuWaitRe = 0;
 
 int g_frameskipBudgetPct = 33;
 void ta_set_frameskip_budget(int pct)

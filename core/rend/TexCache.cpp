@@ -337,6 +337,31 @@ void libCore_vramlock_Lock(u32 start_offset64, u32 end_offset64, BaseTextureCach
 	}
 }
 
+// Contador de leitura POR PAGINA de VRAM: >0 enquanto uma textura que cobre
+// aquela pagina esta sendo lida (conversao/upload) pelo render thread. O fault
+// de escrita do emu espera SO nessa pagina, em vez do re.Wait cego que esperava
+// o Process inteiro (~7,76ms no Shenmue II, sendo ~0,95ms de leitura real).
+// Medido: concorrencia real 0,6% (Shenmue II) x 17% (MvC2). Ver tech_debits 4.87.
+static const u32 VRAM_PAGES = VRAM_SIZE_MAX / PAGE_SIZE;
+static std::atomic<uint16_t> g_texReadPage[VRAM_PAGES];
+u64 g_vramWritesDuringRead = 0, g_vramWritesOutsideRead = 0;
+struct TexReadScope
+{
+	u32 p0, p1;
+	TexReadScope(u32 sa_tex, u32 size)
+	{
+		p0 = sa_tex / PAGE_SIZE;
+		p1 = (size > 0) ? (sa_tex + size - 1) / PAGE_SIZE : p0;
+		if (p1 >= VRAM_PAGES) p1 = VRAM_PAGES - 1;
+		if (p0 >= VRAM_PAGES) p0 = VRAM_PAGES - 1;
+		for (u32 p = p0; p <= p1; p++) g_texReadPage[p].fetch_add(1, std::memory_order_relaxed);
+	}
+	~TexReadScope()
+	{
+		for (u32 p = p0; p <= p1; p++) g_texReadPage[p].fetch_sub(1, std::memory_order_relaxed);
+	}
+};
+
 bool VramLockedWriteOffset(size_t offset)
 {
 	if (offset >= VRAM_SIZE)
@@ -346,6 +371,22 @@ bool VramLockedWriteOffset(size_t offset)
 	std::vector<vram_block *>& list = VramLocks[addr_hash];
 
 	{
+		// Wait por dependencia (4.87): so bloqueia se ESTA pagina esta sendo
+		// lida agora pelo render. Substitui o re.Wait cego (que esperava o
+		// Process inteiro). Espera ativa curtissima (conversao de uma textura
+		// ~us); fora disso, zero espera -> emu roda 100%.
+		extern std::atomic<uint16_t> g_texReadPage[];
+		extern u64 g_vramWritesDuringRead, g_vramWritesOutsideRead;
+		if (addr_hash < VRAM_PAGES && g_texReadPage[addr_hash].load(std::memory_order_relaxed) != 0)
+		{
+			g_vramWritesDuringRead++;
+			int guard = 0;
+			while (g_texReadPage[addr_hash].load(std::memory_order_relaxed) != 0 && ++guard < 100000)
+				;	// spin curto; a leitura termina em us
+		}
+		else
+			g_vramWritesOutsideRead++;
+
 		std::lock_guard<cMutex> lockguard(vramlist_lock);
 
 		g_vramWriteFaults++;
@@ -727,6 +768,7 @@ void BaseTextureCacheData::ComputeHash()
 
 void BaseTextureCacheData::Update()
 {
+	TexReadScope _readScope(sa_tex, size);
 	//texture state tracking stuff
 	Updates++;
 	dirty=0;
