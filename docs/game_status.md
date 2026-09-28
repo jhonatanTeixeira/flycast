@@ -504,3 +504,43 @@ Tempos em ms.
   mslug6 69,1 / PSO 70,1 — o teto é o SH4/emulação, não o render.
 - **PSO v2:** antes travava em ~9,9 fps; agora 59,9 fps (VEL 70%, muitos dupes) —
   melhorou, mas o 70% de VEL sugere limite emu-side. Rever depois.
+
+## Bateria Naomi — 2026-09-28, COLD BOOT (sem savestate)
+
+Política nova (pedido do usuário): **cold boot** (não usar `retrorun_auto_load`),
+**30 s + 5 s de warmup**, 1 rodada por jogo, core `flycast2026` =
+`efbe5529e1b0d7abaced0078ee418b11` (wait-curto). **Captura de 6 frames por jogo**
+(`FC_FB_DUMP`) para inspeção visual — sem isso alguns números enganam. 20 ROMs de
+`/roms2/naomi/*.zip`, todos com o jogo em cold boot.
+
+**Resultado: 20/20 com JSON, ZERO erro/crash.** Vários ficam na tela de boot do
+Naomi (logo NAOMI) → `~0,27 ms/frame` (60 fps), que é boot parado, não crash.
+
+| jogo | fps | VEL% | avg ms | p95 | p99 | frames |
+|---|---|---|---|---|---|---|
+| asndynmt | 59,5 | 64,8 | 0,65 | 1,33 | 1,43 | 1786 |
+| azumanga | 60,0 | 100,0 | 0,27 | 0,33 | 0,43 | 1801 |
+| capsnk | 58,8 | 93,4 | 1,42 | 1,77 | 2,24 | 1764 |
+| cspike | 60,0 | 100,0 | 0,30 | 0,33 | 0,57 | 1801 |
+| cvs2 | 58,5 | 96,2 | 1,68 | 2,45 | 2,69 | 1754 |
+| cvsgd | 59,2 | 99,8 | 1,56 | 2,03 | 2,58 | 1776 |
+| ggisuka | 58,6 | 95,6 | 1,74 | 2,06 | 9,43 | 1759 |
+| ggxxac | 60,0 | 100,0 | 0,27 | 0,32 | 0,37 | 1801 |
+| ggxxsla | 60,0 | 100,0 | 0,28 | 0,35 | 0,48 | 1801 |
+| ggxx | 60,0 | 100,0 | 0,26 | 0,30 | 0,32 | 1801 |
+| ggx | 60,0 | 99,9 | 0,28 | 0,33 | 0,45 | 1801 |
+| gwing2 | 59,1 | 90,4 | 1,24 | 1,61 | 1,69 | 1775 |
+| ikaruga | 59,5 | 45,8 | 0,60 | 1,40 | 1,56 | 1787 |
+| mbaa | 60,0 | 100,0 | 0,27 | 0,32 | 0,42 | 1801 |
+| meltybld | 60,0 | 100,0 | 0,26 | 0,28 | 0,30 | 1801 |
+| meltyb | 60,0 | 100,0 | 0,27 | 0,33 | 0,47 | 1801 |
+| sfz3ugd | 60,0 | 100,0 | 0,28 | 0,32 | 0,33 | 1801 |
+| slashout | 60,0 | 100,0 | 0,28 | 0,34 | 0,51 | 1801 |
+| spawn | 60,0 | 100,0 | 0,27 | 0,31 | 0,33 | 1801 |
+| zombrvn | 60,0 | 100,0 | 0,27 | 0,35 | 0,41 | 1801 |
+
+**Nota de método:** a rodada anterior (mesma política, sem captura de frames, 20 s)
+deu `capsnk`, `cspike`, `cvsgd` com `exit=1` / `core_frames=0` — parecia "não
+boota", mas era **intermitente/inconclusivo**. Com 30 s + captura de frames, os 20
+bootam (frames mostram a logo NAOMI). Lição: **cold boot precisa de mais tempo de
+warmup e de captura visual** — o JSON sozinho engana.

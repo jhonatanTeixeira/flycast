@@ -1652,9 +1652,6 @@ void retro_run (void)
                  fprintf(f, "pacer_skips\t%u\n", g_pacerSkips);
                  extern u64 g_renderBudgetUs;
                  fprintf(f, "render_budget_ms\t%.2f\n", g_renderBudgetUs / 1000.0);
-                 extern u64 g_vramWritesDuringRead, g_vramWritesOutsideRead;
-                 fprintf(f, "vram_writes_during_texread\t%llu\n", (unsigned long long)g_vramWritesDuringRead);
-                 fprintf(f, "vram_writes_outside_texread\t%llu\n", (unsigned long long)g_vramWritesOutsideRead);
 #if HOST_CPU == CPU_ARM64
                 extern u64 g_tier2EmuUs;
                 fprintf(f, "tier2_emu_us_total\t%llu\n", (unsigned long long)g_tier2EmuUs);
