@@ -372,6 +372,15 @@ void* DYNACALL rdv_LinkBlock(u8* code,u32 dpc)
 
 	DynarecCodeEntryPtr rv = rdv_FindOrCompile();  // Returns rx ptr
 
+	// Se a compilacao do alvo falhou, normalmente foi porque Do_Exception foi
+	// chamado durante o decode (ex.: instrucao de FPU com FD=1, ver
+	// decoder.cpp) e sobrescreveu o next_pc global com o vetor do handler.
+	// Nesse caso a execucao tem de continuar NO HANDLER (next_pc ja aponta
+	// pra ele) -- nao seguir com o link do bloco atual, que usaria o next_pc
+	// clobberado (0C000100) e cairia num bm_GetBlock() NULL.
+	if (rv == NULL)
+		return (void*)rdv_FailedToFindBlock(next_pc);
+
 	if (!mmu_enabled() && !stale_block)
 	{
 		if (bcls == BET_CLS_Dynamic)
@@ -387,19 +396,23 @@ void* DYNACALL rdv_LinkBlock(u8* code,u32 dpc)
 			else if (rbi->relink_data == 0)
 			{
 				rbi->pBranchBlock = bm_GetBlock(next_pc).get();
-				rbi->pBranchBlock->AddRef(rbi);
+				if (rbi->pBranchBlock != NULL)
+					rbi->pBranchBlock->AddRef(rbi);
 			}
 		}
 		else
 		{
 			RuntimeBlockInfo* nxt = bm_GetBlock(next_pc).get();
 
-			if (rbi->BranchBlock == next_pc)
-				rbi->pBranchBlock = nxt;
-			if (rbi->NextBlock == next_pc)
-				rbi->pNextBlock = nxt;
+			if (nxt != NULL)
+			{
+				if (rbi->BranchBlock == next_pc)
+					rbi->pBranchBlock = nxt;
+				if (rbi->NextBlock == next_pc)
+					rbi->pNextBlock = nxt;
 
-			nxt->AddRef(rbi);
+				nxt->AddRef(rbi);
+			}
 		}
 		u32 ncs = rbi->relink_offset + rbi->Relink();
 		verify(rbi->host_code_size >= ncs);

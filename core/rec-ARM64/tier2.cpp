@@ -150,6 +150,20 @@ volatile u32 tier2BailFlag = 0;
 // e thread-safe). Declarado cedo porque a formacao (acima) usa.
 std::map<u32, RuntimeBlockInfoPtr> workerBlocks;
 std::map<void *, RuntimeBlockInfoPtr> workerByCode;
+// Fim de boot da BIOS (ver tier2_on_block_added_impl): tier2 so liga depois.
+std::atomic<bool> gameStarted{false};
+// Fim de boot por RENDER (1o quadro PVR = logo da SEGA / inicio do jogo).
+// Setado de rend_frame (thread do render); a marcacao de gameStarted e a
+// reserva do code cache sao aplicadas na proxima compilacao de bloco (emu
+// thread), onde tier2_code_reserve e seguro de escrever.
+std::atomic<bool> renderSeen{false};
+// Detector de corrida (FC_TIER2_RACE=1): carimba a geracao em cada entrada do
+// mapa do worker. Se o worker usa uma entrada de geracao anterior ao reset do
+// cache de codigo, o bloco pode ter sido liberado/recompilado pela emu thread
+// (corrida) -> loga e devolve null (nao usa o bloco velho).
+bool raceDetect = false;
+std::map<u32, u32> workerBlocksGen;
+std::map<void *, u32> workerByCodeGen;
 bool fullThreadEnabled();
 RuntimeBlockInfoPtr t2GetBlock(u32 va);
 RuntimeBlockInfoPtr t2MapPc(void *pc);
@@ -1563,6 +1577,10 @@ void read_cfg()
 	cfg_read = true;
 	T2_AREA = t2AreaInit();
 	{
+		const char *r = getenv("FC_TIER2_RACE");
+		raceDetect = r != nullptr && atoi(r) != 0;
+	}
+	{
 		// Chamar o safe_point a cada (mask+1) fatias. Default 63 = 1/64: o call
 		// por fatia custava ~0,9 fps no Shenmue (4.85); a amostragem interna
 		// compensa (amostra toda chamada, drena a cada 64).
@@ -1605,7 +1623,7 @@ void read_cfg()
 		if (std::find(cfgBlocks.begin(), cfgBlocks.end(), en) == cfgBlocks.end())
 			cfgBlocks.insert(cfgBlocks.begin(), en);
 }
-bool enabled() { return autoMode || optionAuto || !cfgBlocks.empty(); }
+bool enabled() { return (autoMode || optionAuto || !cfgBlocks.empty()) && gameStarted.load(std::memory_order_relaxed); }
 
 u8 *area_begin() { return CodeCache + CODE_SIZE - T2_AREA; }
 u8 *area_end() { return CodeCache + CODE_SIZE; }
@@ -1661,7 +1679,17 @@ RuntimeBlockInfoPtr t2GetBlock(u32 va)
 	if (fullThreadEnabled())
 	{
 		auto it = workerBlocks.find(va);
-		return it == workerBlocks.end() ? nullptr : it->second;
+		if (it == workerBlocks.end())
+			return nullptr;
+		if (raceDetect && workerBlocksGen[va] != generation)
+		{
+			static int n = 0;
+			if (n++ < 40)
+				fprintf(stderr, "tier2 RACE: worker usa bloco %08X de geracao %u (atual %u)\n",
+						va, workerBlocksGen[va], generation);
+			return nullptr;
+		}
+		return it->second;
 	}
 	return bm_GetBlock(va);
 }
@@ -1675,6 +1703,14 @@ RuntimeBlockInfoPtr t2MapPc(void *pc)
 		if (it == workerByCode.begin())
 			return nullptr;
 		it--;
+		if (raceDetect && workerByCodeGen[it->first] != generation)
+		{
+			static int n = 0;
+			if (n++ < 40)
+				fprintf(stderr, "tier2 RACE: worker mapeia pc %p para bloco de geracao %u (atual %u)\n",
+						pc, workerByCodeGen[it->first], generation);
+			return nullptr;
+		}
 		RuntimeBlockInfo *b = it->second.get();
 		if ((u8 *)b->code + b->host_code_size < (u8 *)pcrw)
 			return nullptr;
@@ -1687,9 +1723,29 @@ RuntimeBlockInfoPtr t2MapPc(void *pc)
 // Implementacao interna; o simbolo externo (fora do namespace anonimo) e
 // tier2_on_block_added, mais abaixo.
 void worker_loop();
+// "Jogo iniciou": a BIOS (regiao 0xAC000000) roda o boot e ENTREGA o controle
+// ao jogo carregado em RAM na regiao 0x0C020000+. Achado no JIT trace do
+// asndynmt (FC_JIT_TRACE_BOOT + FC_JIT_TRACE_FIRST): a sequencia termina em
+// AC001E16 -> 0C000620 (stub de boot na RAM baixa) -> 0C020000 (codigo do
+// jogo). O bloco 0x1B16 e so um callback PERIODICO da BIOS que roda ANTES do
+// handover -- ligar o tier2 ali quebrava o cold boot do asndynmt (tela preta).
+// O tier2 so liga no handover (primeiro bloco na regiao de codigo do jogo);
+// durante o boot ele mudava a temporizacao (os carts que esperam o timer TMU
+// nao saiam do loop).
 void tier2_on_block_added_impl(const RuntimeBlockInfoPtr &b)
 {
-	if (!fullThreadEnabled() || patternOff)
+	// Handover BIOS->jogo: primeiro bloco na area de codigo do jogo em RAM
+	// (0x0C020000-0x0C03FFFF). O stub de boot fica abaixo disso (0x0C000xxx).
+	const u32 v = b->vaddr & 0x00FFFFFFu;
+	const bool inGameRam = (b->vaddr & 0xFF000000u) == 0x0C000000u
+			&& v >= 0x00020000u && v < 0x00040000u;
+	if (inGameRam && !gameStarted.load(std::memory_order_relaxed))
+	{
+		fprintf(stderr, "tier2: handover BIOS->jogo (bloco %08X)\n", b->vaddr);
+		gameStarted.store(true, std::memory_order_relaxed);
+		tier2_code_reserve = T2_AREA;	// agora reserva a cauda do code cache
+	}
+	if (!fullThreadEnabled() || patternOff || !gameStarted.load(std::memory_order_relaxed))
 		return;
 	if (!workerStarted)
 	{
@@ -1724,6 +1780,11 @@ void workerDrainBlocks()
 		{
 			workerBlocks[b->vaddr] = b;
 			workerByCode[(void *)b->code] = b;
+			if (raceDetect)
+			{
+				workerBlocksGen[b->vaddr] = generation;
+				workerByCodeGen[(void *)b->code] = generation;
+			}
 		}
 	}
 	t2QTail.store(t, std::memory_order_release);
@@ -2388,6 +2449,16 @@ void tier2_on_block_added(const RuntimeBlockInfoPtr &b)
 	tier2_on_block_added_impl(b);
 }
 
+// design 1: fim de boot por RENDER. rend_frame chama isto no PRIMEIRO quadro
+// PVR (o logo da SEGA / inicio do jogo). Jogos que bootam sem passar pelo
+// bloco 0x1B16 (asndynmt) ganham o tier2 a partir daqui. So marca o flag
+// atomico; gameStarted + reserva do code cache sao aplicados na proxima
+// compilacao de bloco (emu thread), onde tier2_code_reserve e seguro.
+void tier2_mark_game_started()
+{
+	renderSeen.store(true, std::memory_order_relaxed);
+}
+
 // ------------------------------------------------------------- autochecagem
 // FC_TIER2_SELFCHECK (ver topo do arquivo): a regiao amostra o estado na
 // entrada e na saida; no ponto seguro o interpretador reexecuta o trecho do
@@ -2632,11 +2703,34 @@ void tier2_reset()
 }
 
 uintptr_t t2_last_pc;
+// FC_TIER2_DELAY_MS: adia a ativacao do tier2 em N ms (opt-in, 0 = desligado).
+// O tier2 muda QUANDO blocos sao compilados; no boot isso podia disparar a
+// excecao de FPU desabilitada (cvs2). Os ganhos vem do gameplay, entao adiar
+// nao custa ganho relevante. Ver 4.92.
+bool tier2AfterBoot()
+{
+	// Gatilho padrao: o PC saiu da area de boot da BIOS (gameStarted, setado
+	// quando um bloco fora dos primeiros ~10 KB da RAM e compilado).
+	// FC_TIER2_DELAY_MS=N (opt-in): forca atraso por tempo em vez do gatilho.
+	static int delayMs = -2;
+	if (delayMs == -2)
+	{
+		const char *e = getenv("FC_TIER2_DELAY_MS");
+		delayMs = e != nullptr ? atoi(e) : -1;
+	}
+	if (delayMs < 0)
+		return gameStarted.load(std::memory_order_relaxed);
+	if (delayMs == 0)
+		return true;
+	static std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - t0).count() >= delayMs;
+}
 bool tier2_sampling()
 {
 	if (!cfg_read)
 		read_cfg();
-	return (autoMode || optionAuto) && !patternOff;
+	return (autoMode || optionAuto) && !patternOff && tier2AfterBoot();
 }
 
 void tier2_selfcheck();
@@ -2689,7 +2783,7 @@ void tier2_safe_point()
 		tier2_poll = false;
 		return;
 	}
-	if (autoMode || optionAuto)
+	if ((autoMode || optionAuto) && tier2AfterBoot())
 	{
 		// O call ja vem gateado (1/64 fatias via tier2_poll_mask): amostra toda
 		// chamada (= 1/64 fatias) e drena a cada 64 chamadas (= 1/4096 fatias).

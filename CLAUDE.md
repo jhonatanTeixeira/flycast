@@ -59,7 +59,15 @@ dois é uma ferramenta de investigação legítima.
   investigação estava furada (o fim de bloco forçado do FPSCR já existia desde
   2015, então a "nova" implementação só trocava o destino da chamada em vez de
   eliminá-la) — a resposta certa ali era corrigir pra eliminar a chamada de
-  verdade, não desfazer.
+   verdade, não desfazer.
+- **Commitar o progresso a cada marco validado — o trabalho NÃO pode ficar só no
+  working tree.** Assim que um build for validado (bootou, mediu, o usuário
+  confirmou), **commite** o código + os docs daquele marco antes de seguir para o
+  próximo. Sem isso o "estado bom" não é recuperável por `git` — já custou caro: o
+  fix do boot do `asndynmt` ficou só no working tree e não havia commit pra dar
+  checkout quando ele regrediu. Commits pequenos e descritivos por marco; não
+  espere o fim da sessão. (Isso muda a regra antiga de "nunca commitar sem o
+  usuário pedir": aqui o pedido é permanente, commite a cada marco.)
 - **Meça antes de otimizar, sempre.** Toda hipótese levantada só de olhar código
   (mesmo as "óbvias") precisa ser validada com medição real no device antes de
   virar uma mudança de código. Neste projeto, hipóteses razoáveis já cairam por

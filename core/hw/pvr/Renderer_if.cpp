@@ -370,6 +370,11 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
 		 rend_term_renderer();
 	  rend_create_renderer();
 	  rend_init_renderer();
+	  // FC_TIER2: o primeiro quadro PVR e o logo da SEGA / inicio do jogo --
+	  // marca o fim do boot para o tier2 (ver tier2_mark_game_started).
+	  extern void tier2_mark_game_started() __attribute__((weak));
+	  if (tier2_mark_game_started != nullptr)
+		 tier2_mark_game_started();
    }
    u64 t0 = rend_now_us();
    bool proc = renderer->Process(ctx);

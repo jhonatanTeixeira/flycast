@@ -1003,8 +1003,10 @@ static inline u64 rf_now_us()
 			std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+u32 g_dbgFrame = 0;	// contador de frames (diagnostico: trace do JIT + dumps)
 static bool RenderFrame(void)
 {
+	g_dbgFrame++;
 	u64 rfT0 = g_rendSplitEnabled ? rf_now_us() : 0;
 	int vmu_screen_number = 0 ;
 	int lightgun_port = 0 ;

@@ -6,6 +6,39 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-09-28, fim): asndynmt bootou; gatilho = handover BIOS→jogo
+
+Ordem pedida pelo usuário: **(1) não bootam → (2) bootam mas congelam → (3) rever
+os de performance, `mbaa` primeiro.** Resultado visual completo e categorias em
+`docs/game_status.md` ("Inspeção visual um-a-um"); achados em `tech_debits.md`
+4.88-4.93.
+
+- **Carts que não bootavam (`asndynmt`, `gwing2`, `zombrvn`) — corrigido (4.88/4.92):**
+  o "laço de boot eterno (152 blocos)" era **artefato do cap de 2M linhas do
+  `FC_JIT_TRACE`**. O que prendia os carts era o **tier2 ligado durante o boot**.
+  O gatilho agora é o **handover BIOS→jogo**: o primeiro bloco na região de código
+  do jogo em RAM (`0x0C020000+`), achado no JIT trace (`AC001E16` → `0C000620` →
+  `0C020000`). O `0x1B16` (callback **periódico** da BIOS, roda antes do handover)
+  e o 1º render **quebravam o cold boot** (tela preta) — removidos.
+  `asndynmt` boota até a atração/jogo com tier2 ligado.
+- **GD-ROM (`cvs2`, `meltyb`, `sfz3ugd`) — corrigido (4.89/4.91):** lazy loading por
+  segmentos (boot 22 s → ~1 s). `cvs2` 60 fps cravados, menor suavidade.
+  **`meltyb`/`sfz3ugd` pendentes de re-validar** com o lazy loading.
+- **`asndynmt` — triângulo laranja: parked (4.93 revertido).** A correção (padrão
+  `region-bad-ftrv-delayslot`) ficou no mesmo edit da mudança de exceção de FPU do
+  decode (4.92) e foi revertida junto; **reaplicar depois** (a exceção de FPU volta
+  a ser tomada no decode, o padrão `ftrv` volta a ser adicionado). Restam também
+  listras brancas/triângulos prateados em outra cena (parked).
+- **Bootam mas congelam:** `azumanga`, `ggx`, `ggxx`, `ggxxsla` — 4.90 (telas de
+  aviso/região que pedem input; próximo foco).
+- **Perf (depois):** `mbaa` e `cvs2` (menor suavidade), referência `meltybld`.
+
+**Deploy:** `flycast2026_libretro.so` = `4c46a0cae79a7e85e1fd5a6eb01abd07` (backup
+do anterior em `flycast2026_libretro.so.bak-pre-handover`).
+
+**Próximo passo:** retomar a bateria Naomi cold boot (parou no `asndynmt`); depois
+atacar os freezes pós-boot (4.90) — `ggx` tem savestate criado.
+
 ## Agora (2026-09-27, noite): untwiddle Morton na GPU + no-wait + wait-curto
 
 **done/medido nesta sessão** (detalhe em `history.md` 2026-09-27 e `tech_debits.md`):

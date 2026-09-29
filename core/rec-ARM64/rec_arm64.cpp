@@ -106,6 +106,7 @@ void DumpIfbCounts()
 #include "hw/sh4/dyna/ngen.h"
 #include "hw/sh4/sh4_mem.h"
 #include <unordered_map>
+#include <unordered_set>
 #include "hw/sh4/sh4_rom.h"
 #include "hw/sh4/sh4_sched.h"
 #include "hw/mem/vmem32.h"
@@ -440,6 +441,7 @@ static bool JitTraceEnabled()
 }
 static FILE *jitTraceFile;
 static u64 jitTraceCount;
+static u64 jitTraceMax = [] { const char *e = getenv("FC_JIT_TRACE_MAX"); return e != nullptr ? strtoull(e, nullptr, 0) : (u64)(2u << 20); }();
 static bool jitTraceActive;
 bool jit_trace_enabled() { return JitTraceEnabled(); }
 // Chamado no load do savestate: so traca a partir dai (o boot antes da carga
@@ -464,7 +466,7 @@ void DYNACALL jit_trace_block(u32 vaddr, u32 phase)
 	}
 	if (jitTraceFile == nullptr)
 		return;
-	if (jitTraceCount >= (2u << 20))
+	if (jitTraceCount >= (jitTraceMax))
 		return;
 	jitTraceCount++;
 	// Ignora os campos volateis/derivados (pc de despacho, contadores do
@@ -517,13 +519,23 @@ void DYNACALL jit_trace_block(u32 vaddr, u32 phase)
 	}
 	// So grava quando a RAM 0x00-0x100 muda (escrita nessa regiao), para o
 	// arquivo nao explodir no boot. FC_JIT_TRACE_ALL=1 grava todo bloco.
+	// FC_JIT_TRACE_FIRST=1 grava so a PRIMEIRA execucao de cada bloco (com o
+	// frame) -- timeline da descoberta de codigo, sem estourar o cap.
 	static u64 lastRh = 1;
 	static bool traceAll = getenv("FC_JIT_TRACE_ALL") != nullptr;
-	if (traceAll || rh != lastRh)
+	static bool traceFirst = getenv("FC_JIT_TRACE_FIRST") != nullptr;
+	static std::unordered_set<u32> traceSeen;
+	if (traceFirst)
+	{
+		if (phase != 0 || !traceSeen.insert(vaddr).second)
+			return;
+	}
+	if (traceAll || traceFirst || rh != lastRh)
 	{
 		lastRh = rh;
-		fprintf(jitTraceFile, "%08X %u %016llx %016llx\n", vaddr, phase, (unsigned long long)h, (unsigned long long)rh);
-		if ((jitTraceCount & 0xFFFF) == 0)
+		extern u32 g_dbgFrame;
+		fprintf(jitTraceFile, "%08X %u %016llx %016llx %u\n", vaddr, phase, (unsigned long long)h, (unsigned long long)rh, g_dbgFrame);
+		if (traceFirst || (jitTraceCount & 0xFFFF) == 0)
 			fflush(jitTraceFile);
 	}
 }
@@ -3443,7 +3455,12 @@ private:
 
 		Bind(&blockcheck_success);
 
-		if (mmu_enabled() && block->has_fpu_op)
+		// Checagem de FPU desabilitada em RUNTIME (ver 4.92): o bloco e
+		// compilado mesmo com SR.FD==1 e, na entrada, testa-se SR.FD. Antes
+		// isso so valia para MMU; sem MMU a excecao era levantada no decode,
+		// o que era fragil (o tier2 mudava quando o bloco era compilado e a
+		// excecao espuria travava a BIOS -- cvs2).
+		if (block->has_fpu_op)
 		{
 			Label fpu_enabled;
 			Ldr(w10, sh4_context_mem_operand(&sr));
