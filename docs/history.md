@@ -3296,3 +3296,20 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Notas de percepção (não-tier2):** suavização de movimentação (`capsnk`,
   `cvs2`) — cache de paletas + wait-curto; `meltybld` sem underruns nas
   transições (antes extremos); barras de life do `meltybld` ainda erradas.
+
+## 2026-09-29 — benchmark com janela rolante (retrorun) + VMU por jogo no Dreamcast
+
+- **Benchmark — janela rolante (pedido do usuário):** `RETRORUN_BENCHMARK_ROLLING=1`
+  no `retrorun3` (repo `dreams/retrorun`, commit `98fdae9`): o benchmark guarda só os
+  **últimos 40s** de amostras (descarta o dado antigo; cada frame registra timestamp +
+  snapshot dos contadores cumulativos) e **reporta ao fechar** o jogo (não fecha
+  sozinha). Motivo: o bench dos primeiros 40s não pegava cenas pesadas tardias
+  (`gwing2` 45 fps, `slashout` 27-32 depois do cap — 4.96). Testado: `cspike` rodou
+  100s, JSON no fechamento com `duration=40.2s`, `core_avg` 7,9ms (contra 4,3ms dos
+  primeiros 40s). Antes dele, o `RETRORUN_BENCHMARK_KEEP_RUNNING=1` (`966a093`) já
+  gravava aos 40s sem fechar. Cross-compilado local (aarch64 + sysroot do device),
+  instalado com backup (`retrorun3.bak-pre-rolling`).
+- **Dreamcast — memory card por jogo:** `flycast2026_per_content_vmus = VMU A1` nos
+  cfgs `~/.config/retrorun.cfg`, `r_t2off.cfg` e `r_noload.cfg` (backups
+  `*.bak-pre-vmu`). Antes o padrão era VMU compartilhado entre todos os jogos.
+- **Próximo:** bateria Dreamcast com tier2 OFF (janela rolante).

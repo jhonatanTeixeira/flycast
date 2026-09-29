@@ -37,7 +37,7 @@ Sistema → pasta de ROMs: `naomi` → `/roms2/naomi`, `dreamcast` → `/roms2/d
 ```bash
 timeout 30 sshpass -p ark ssh -o StrictHostKeyChecking=no ark@192.168.0.14 \
   'cd /home/ark; export SDL_VIDEO_EGL_DRIVER=libEGL.so; export DEVICE_NAME=RG351MP; \
-   export RETRORUN_BENCHMARK_KEEP_RUNNING=1; \
+   export RETRORUN_BENCHMARK_ROLLING=1; \
    sudo perfmax performance x >/dev/null 2>&1; \
    nohup retrorun3 -c /home/ark/r_noload.cfg --triggers -s /roms2/<sistema> -d /roms2/bios \
      --benchmark 40 --benchmark-warmup 5 --benchmark-json /home/ark/bench_<jogo>.json \
@@ -50,13 +50,14 @@ timeout 30 sshpass -p ark ssh -o StrictHostKeyChecking=no ark@192.168.0.14 \
   core** rodou a bateria — os números só valem para aquele binário.
 - `r_noload.cfg` = cold boot (sem savestate). Para A/B de tier2 use `r_t2off.cfg`
   (mesma config com `flycast2026_tier2 = disabled`).
-- `RETRORUN_BENCHMARK_KEEP_RUNNING=1` = o benchmark grava o relatório/JSON no fim da
-  janela (40s) mas **NÃO fecha o jogo** — ele continua rodando até o usuário fechar.
-  Requer o `retrorun3` com o patch de 2026-09-29 (env lida em `benchmark.cpp`; sem ela
-  o comportamento antigo, de fechar no tempo, permanece). **É o padrão da bateria:**
-  dá os números e ainda deixa jogar/observar crash/glitch.
-- `--benchmark 40 --benchmark-warmup 5`: 40s de medição após 5s de warmup. Ajuste se o
-  jogo for muito lento pra bootar.
+- `RETRORUN_BENCHMARK_ROLLING=1` = **janela rolante**: o benchmark guarda só os
+  **últimos 40s** (descarta o dado antigo) e **não fecha o jogo** — reporta o JSON no
+  fechamento (requer o `retrorun3` de 2026-09-29+). É o padrão da bateria: pega a cena
+  no fim da sessão (cenas pesadas tardias) e você fecha quando quiser. (Sem ela,
+  `RETRORUN_BENCHMARK_KEEP_RUNNING=1` grava aos 40s e não fecha, mas o JSON é dos
+  **primeiros** 40s.)
+- `--benchmark 40 --benchmark-warmup 5`: 40s de medição após 5s de warmup (é o tamanho
+  da janela rolante). Ajuste se o jogo for muito lento pra bootar.
 
 Poll para saber quando fechou:
 
