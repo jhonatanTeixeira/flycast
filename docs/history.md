@@ -3269,3 +3269,30 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   (`0x1B16`/`render`) foi removido.
 - **Deploy:** `flycast2026_libretro.so` = `4c46a0cae79a7e85e1fd5a6eb01abd07`;
   backup do anterior em `flycast2026_libretro.so.bak-pre-handover`.
+
+## 2026-09-28 (continuação 6) — bateria Naomi com TIER2 DESLIGADO: o tier2 é perda líquida no Naomi
+
+- **Pedido do usuário:** bateria completa com `flycast2026_tier2 = disabled`
+  (`r_t2off.cfg`) "pra ver no que esse cara que é tão caro vale a pena".
+- **`retrorun3` ganhou uma opção:** `RETRORUN_BENCHMARK_KEEP_RUNNING=1` (commit
+  `966a093` no repo `dreams/retrorun`, branch `threaded-present`) — quando a
+  janela do benchmark termina, grava o relatório/JSON mas **não fecha o jogo**;
+  continua rodando até o usuário fechar. Motivo: o auto-fechar aos 40s cortava a
+  jogabilidade e fez parecer "crash" (`azumanga`). Cross-compilado localmente
+  (aarch64 + sysroot extraído do device), instalado com backup
+  (`retrorun3.bak-pre-keeprunning`). Skill da bateria atualizada.
+- **Resultado (19/20; `cvsgd` pulado — sem o GD):** **17 de 19 jogáveis/perfeitos.**
+  Só 2 bugs, ambos **com tier2 OFF**: `asndynmt` crasha no character select
+  (4.94) e `meltyb` trava quando a luta começa (4.95).
+- **Contra a bateria tier2 ON:** com o tier2 ligado quase todos quebravam —
+  tela preta (`asndynmt`, `azumanga`, `ggxx`), freeze em tela de aviso (`ggx`),
+  crash no disclaimer (`ggxxsla`), **iluminação destruída** (`cspike`), não boota
+  (`meltyb`, `sfz3ugd`, `gwing2`, `zombrvn`). **Conclusão: no Naomi o tier2 é
+  perda líquida** (ele foi feito pros 3D do Dreamcast).
+- **Métricas:** as VEL% do JSON saíram conservadoras em vários jogos que o
+  usuário sentiu 100% (`mbaa` 80%, `ggxxac` 92%) — ver 4.96 (o bench de 40s
+  também não pega cenas pesadas tardias: `gwing2` 45 fps e `slashout` 27-32
+  depois do cap).
+- **Notas de percepção (não-tier2):** suavização de movimentação (`capsnk`,
+  `cvs2`) — cache de paletas + wait-curto; `meltybld` sem underruns nas
+  transições (antes extremos); barras de life do `meltybld` ainda erradas.

@@ -6,6 +6,25 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-09-28, fim): bateria Naomi TIER2 OFF — o tier2 é perda líquida no Naomi
+
+**done** — bateria completa (19/20; `cvsgd` sem o GD) com `r_t2off.cfg` +
+`RETRORUN_BENCHMARK_KEEP_RUNNING=1` (novo no `retrorun3`: grava o JSON mas não
+fecha o jogo). Detalhe em `game_status.md` ("Bateria … TIER2 OFF") e `history.md`
+cont. 6.
+
+- **17 de 19 jogáveis/perfeitos** com tier2 OFF. Só 2 bugs, ambos sem tier2:
+  `asndynmt` (crash no character select — 4.94) e `meltyb` (trava quando a luta
+  começa — 4.95).
+- **Com tier2 ON quase todos quebravam** (tela preta, freeze, crash, iluminação
+  destruída, não boota). **Decisão: no Naomi o tier2 não vale a pena** — é perda
+  líquida. (O tier2 mira os 3D do Dreamcast.)
+- **Pendências:** (1) investigar 4.94/4.95 (tier2 OFF); (2) suavização de
+  movimentação (`capsnk`/`cvs2`, cache de paletas + wait-curto); (3) 4.96 —
+  benchmark mais longo/pegar a cena pesada.
+- **Possível próximo:** decidir se desliga o tier2 por padrão no Naomi (system
+  gate) ou se mantém só no Dreamcast.
+
 ## Agora (2026-09-28, fim): asndynmt bootou; gatilho = handover BIOS→jogo
 
 Ordem pedida pelo usuário: **(1) não bootam → (2) bootam mas congelam → (3) rever

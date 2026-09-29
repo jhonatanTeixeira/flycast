@@ -605,3 +605,59 @@ um-a-um (abre o jogo, usuário observa e fecha, pergunta sim/não), core
   outros GD-ROM (`meltyb`, `sfz3ugd`).
 - **Games têm diretórios com `.chd`** (`/roms2/naomi/<jogo>/gdl-*.chd`) para os
   títulos GD-ROM; os cartuchos usam o `.zip` MAME (chips `315-*`).
+
+## Bateria Naomi cold boot — 2026-09-28 (pós-handover, em andamento)
+
+Core `flycast2026` = `4c46a0cae79a7e85e1fd5a6eb01abd07` (gatilho do tier2 = handover
+BIOS→jogo; cold boot `r_noload.cfg`, sem `FC_TIER2_DELAY_MS`), `--benchmark 40
+--benchmark-warmup 5`. Números + impressão do usuário na tela.
+
+| jogo | fps | VEL% | core avg | p50 | p95 | p99 | und | obs (usuário) |
+|---|---|---|---|---|---|---|---|---|
+| asndynmt | 59,9 | 72,8 | 0,400 | 0,27 | 1,18 | 1,23 | 6 | bootou; **tem glitch, mas passa**; não deu pra entrar no gameplay (ficou na atração) |
+
+## Bateria Naomi cold boot — 2026-09-28 (TIER2 OFF, em andamento)
+
+Core `flycast2026` = `4c46a0cae79a7e85e1fd5a6eb01abd07` com `r_t2off.cfg`
+(`flycast2026_tier2 = disabled`), cold boot, `--benchmark 40 --benchmark-warmup 5`.
+Objetivo: medir se o tier2 vale a pena (comparar com a bateria tier2 ON).
+
+| jogo | fps | VEL% | core avg | p50 | p95 | p99 | und | obs (usuário) |
+|---|---|---|---|---|---|---|---|---|
+| asndynmt | 57,6 | 60,7 | 1,521 | 0,34 | 4,69 | 7,86 | 50 | velocidade **lisa** até o character select, **crashou depois de selecionar o personagem** (tech debit) |
+| azumanga | 59,7 | 96,1 | 1,303 | 1,32 | 1,61 | 2,45 | 0 | **jogo perfeito** — era um dos piores casos no upstream (com tier2 ligado trava em tela preta) |
+| capsnk | 57,9 | 93,8 | 1,985 | 1,12 | 5,23 | 14,79 | 0 | **perfeito**; rever cache de paletas + wait-curto p/ suavizar movimentação |
+| cspike | 51,8 | 95,5 | 4,352 | 1,24 | 16,07 | 19,10 | 0 | **completamente jogável**; com tier2 dava 60 fps mas o tier2 **destruía a iluminação** |
+| cvs2 | 59,3 | 93,3 | 1,451 | 1,13 | 3,12 | 4,70 | 0 | **perfeito**; só a suavização (cache + wait) |
+| ggisuka | 59,3 | 95,0 | 2,721 | 1,25 | 9,30 | 14,94 | 0 | **perfeito** (é Atomiswave — movido pra `/roms2/atomiswave/`) |
+| ggxxac | 59,8 | 92,1 | 1,359 | 1,18 | 2,25 | 3,04 | 0 | **100%**, liso; com tier2 o tier2 estava **destruindo** (mais um) |
+| ggxxsla | 59,7 | 92,1 | 1,415 | 1,31 | 2,28 | 2,88 | 0 | **perfeito** (com tier2 crashava no disclaimer de região) |
+| ggxx | 59,7 | 92,3 | 1,870 | 1,43 | 3,71 | 10,27 | 0 | **perfeito** |
+| ggx | 59,1 | 94,4 | 2,766 | 0,34 | 11,16 | 17,38 | 0 | **perfeito** (com tier2 travava na tela de parental advisory) |
+| gwing2 | 59,6 | 92,2 | 1,268 | 1,20 | 3,38 | 4,01 | 0 | jogável; slowdown com **tiros massivos** na tela (não perde jogabilidade); depois dos 40s do bench chegou a **45 fps** (o bench não pegou a cena pesada) |
+| ikaruga | 51,9 | 93,7 | 4,806 | 1,60 | 14,22 | 27,63 | 0 | gráficos/jogabilidade decentes; **controles invertidos + aspect ratio errado** (formato arcade) |
+| mbaa | 59,7 | 80,1 | 1,126 | 1,16 | 1,97 | 2,58 | 0 | **perfeito** (VEL 80% mas a percepção é 100% — métrica conservadora) |
+| meltybld | 59,6 | 94,0 | 1,766 | 1,31 | 3,15 | 6,42 | 0 | **perfeito**; underruns só nas transições entre batalhas (reduziu ~80%); **barras de life ainda não exibem direito** |
+| meltyb | 58,2 | 94,8 | 3,155 | 1,21 | 13,62 | 15,65 | 0 | tela preta → transição de batalha (antes hiccups extremos, **agora 0**), mas **trava (tela preta) quando a luta vai começar** — tech debit (tier2 OFF) |
+| sfz3ugd | 59,6 | 95,0 | 1,680 | 1,30 | 4,33 | 5,73 | 0 | **perfeito** (com tier2 demorava muito e não bootava) |
+| slashout | 59,2 | 91,4 | 1,235 | 0,36 | 2,72 | 3,94 | 0 | jogável; cauda mais fixa, **fps fica em 27-32** (o bench de 40s não pegou a cena) — tech debit do benchmark curto |
+| spawn | 57,9 | 87,8 | 2,224 | 1,21 | 6,31 | 11,73 | 0 | jogável; **controlabilidade pouco responsiva** |
+| zombrvn | 53,7 | 96,8 | 5,181 | 1,52 | 15,24 | 18,33 | 0 | jogável; 40-55 fps no gameplay (como spawn), mas **sensação de jogabilidade boa** (com tier2 não bootava) |
+
+### Resumo da bateria tier2 OFF (2026-09-28)
+
+**19/20 testados** (`cvsgd` pulado: sem o GD). Core `4c46a0ca` + `r_t2off.cfg`.
+Com `RETRORUN_BENCHMARK_KEEP_RUNNING=1` (o jogo não fecha no fim da janela).
+
+- **Jogáveis/perfeitos: 17 de 19.** `asndynmt` e `meltyb` têm bug com tier2 OFF
+  (crash no character select — 4.94; hang quando a luta começa — 4.95).
+- **Contra a bateria tier2 ON:** com o tier2 ligado, **quase todos** esses jogos
+  quebravam — tela preta (`asndynmt`, `azumanga`, `ggxx`), freeze em tela de
+  aviso (`ggx`), crash no disclaimer (`ggxxsla`), **iluminação destruída**
+  (`cspike`), não boota (`meltyb`, `sfz3ugd`, `gwing2`, `zombrvn`), etc.
+- **Conclusão:** no **Naomi**, o tier2 é **perda líquida** — ele quebra muito mais
+  do que ajuda. A hipótese do usuário ("ver no que esse cara que é tão caro vale
+  a pena") se confirmou: **não vale para Naomi**. (O tier2 foi feito para os 3D
+  do Dreamcast: DOA2/Shenmue II.)
+- **Ainda a revisar (percepção, não tier2):** suavização de movimentação
+  (`capsnk`, `cvs2`) — cache de paletas + wait-curto.
