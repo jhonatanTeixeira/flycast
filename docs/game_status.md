@@ -544,3 +544,64 @@ deu `capsnk`, `cspike`, `cvsgd` com `exit=1` / `core_frames=0` — parecia "não
 boota", mas era **intermitente/inconclusivo**. Com 30 s + captura de frames, os 20
 bootam (frames mostram a logo NAOMI). Lição: **cold boot precisa de mais tempo de
 warmup e de captura visual** — o JSON sozinho engana.
+
+### Inspeção visual um-a-um (cold boot) — 2026-09-28 (usuário, na tela)
+
+O JSON/frames **não bastam**: quase tudo "boota" no JSON (tela NAOMI parada a
+0,27ms/frame), mas o usuário viu na tela que vários nunca entram no jogo. Rodada
+um-a-um (abre o jogo, usuário observa e fecha, pergunta sim/não), core
+`flycast2026` = `efbe5529e1b0d7abaced0078ee418b11` (wait-curto), `r_noload.cfg`
+(cold boot).
+
+| jogo | resultado visual |
+|---|---|
+| asndynmt | **bootou** (gatilho = handover BIOS→jogo, 4.92) — com tier2 ligado; triângulo laranja + listras/prateados parked |
+| azumanga | passou a logo NAOMI e **congelou em tela preta** a 61 fps |
+| capsnk | bootou |
+| cspike | bootou — VEL 100%, 57 fps, sem hicup/underrun |
+| cvs2 | **bootou** (após fix do lazy loading; antes travava/lentidão) — 60 fps cravados, mas **menor suavidade** |
+| cvsgd | boota, mas o usuário **não tem o GD** |
+| ggisuka | bootou — é **Atomiswave** (mover pra pasta atomiswave) |
+| ggx | bootou, mas **freeze na tela de parental advisory** a 61 fps (savestate criado) |
+| ggxx | bootou, mas **freeze em tela preta** logo depois, 61 fps |
+| ggxxac | bootou — demora muito pra iniciar; 60 fps no contador mas **hicups/underruns** |
+| ggxxsla | boota, mas **crasha na tela de disclaimer de região** |
+| gwing2 | **não bootou** |
+| ikaruga | **não boota** — **bug do retrorun** (inicia "deitado" e sem controles); versão DC pendente |
+| mbaa | boota, 60 fps constante, mas **perdeu suavidade com o wait curto** (cache?) |
+| meltyb | **demora muito para iniciar e não boota** |
+| meltybld | boota, 60 fps, **suavidade máxima** — referência pra revisar o mbaa |
+| sfz3ugd | **demora muito para iniciar e não boota** |
+| slashout | boota (savestate criado pra avaliar performance) |
+| spawn | bootou |
+| zombrvn | **não boota** |
+
+**Categorias (ordem de ataque pedida pelo usuário):**
+1. **Carts que não bootavam — corrigido (4.88/4.92):** `asndynmt`, `gwing2`,
+   `zombrvn` — o gatilho do tier2 agora é o **handover BIOS→jogo** (primeiro bloco
+   em `0x0C020000+`); o gatilho antigo (`0x1B16`/1º render) quebrava o cold boot.
+   `asndynmt` boota com tier2; triângulo laranja/listras parked (4.93 revertido).
+2. **GD-ROM:** `cvs2` bootou (lazy loading, 4.89); `meltyb`/`sfz3ugd` **pendente
+   de re-validar** com o lazy loading (o boot de 22-60 s era a leitura do ROM.BIN).
+   (`ikaruga` = bug do retrorun, fora; `cvsgd` = falta o GD, fora.)
+3. **Bootam mas dão freeze/crash:** `azumanga`, `ggx`, `ggxx`, `ggxxsla` — 4.90.
+4. **Bootam, anotação de performance (rever; `mbaa` primeiro):** `mbaa`,
+   `cvs2` (60 fps cravados, **menor suavidade** — mesmo padrão do mbaa),
+   `meltybld` (referência), `ggxxac`, `slashout`; `cspike`/`capsnk`/`ggisuka`/
+   `spawn` limpos.
+
+**Achados de boot (2026-09-28):**
+- **`asndynmt` (cart)**: o "gira pra sempre em **152 blocos de boot**" era
+  **artefato do cap de 2M linhas do `FC_JIT_TRACE`**. O que prendia era o **tier2
+  ligado durante o boot**. O trace (`FC_JIT_TRACE_BOOT`+`FC_JIT_TRACE_FIRST`)
+  mostrou o **handover**: `AC001E16` → `0C000620` → **`0C020000`** (código do
+  jogo). O gatilho do tier2 passou a ser esse handover (primeiro bloco em
+  `0x0C020000+`) — **bootou até a atração/jogo**. Triângulo laranja + listras
+  prateadas: parked (o fix do laranja, 4.93, foi revertido junto com a mudança de
+  exceção de FPU do decode).
+- **`cvs2` (GD-ROM)**: **chega ao jogo**, mas depois de **~60 s** descomprimindo o
+  CHD (`/roms2/naomi/cvs2/gdl-0007a.chd`+`gdl-0008.chd`; ~65k setores lidos,
+  87,4% de hit). O "não boota" pode ser só a espera longa. Verificar o mesmo nos
+  outros GD-ROM (`meltyb`, `sfz3ugd`).
+- **Games têm diretórios com `.chd`** (`/roms2/naomi/<jogo>/gdl-*.chd`) para os
+  títulos GD-ROM; os cartuchos usam o `.zip` MAME (chips `315-*`).

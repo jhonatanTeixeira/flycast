@@ -3102,3 +3102,170 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Conclusão:** nenhuma das duas "regressões" citadas é regressão de código.
   O único custo real do no-wait (o `re.Wait` cego) foi **eliminado** no 4.87
   (wait por página). **Napple Tale 30→60 fps** foi ganho real do no-wait.
+
+## 2026-09-28 — bateria Naomi cold boot: inspeção visual um-a-um + início do ataque aos que não bootam
+
+- **Contexto:** a bateria JSON de 20 jogos Naomi (cold boot, `FC_FB_DUMP`) marcou
+  "20/20 bootam", mas o JSON sozinho engana (tela NAOMI parada a ~0,27ms/frame).
+  O usuário inspecionou **um a um na tela** (abre, observa, fecha, pergunta sim/não).
+- **Resultado (20/20, core `efbe5529e1b0d7abaced0078ee418b11`, wait-curto, cold
+  boot):** ver tabela e categorias em `docs/game_status.md` (seção "Inspeção visual
+  um-a-um"). Resumo:
+  - **Não bootam:** `asndynmt`, `cvs2`, `gwing2`, `meltyb`, `sfz3ugd`, `zombrvn`.
+  - **Bootam mas freeze/crash:** `azumanga` (tela preta), `ggx` (parental advisory),
+    `ggxx` (tela preta), `ggxxsla` (crash no disclaimer de região).
+  - **Bootam (perf):** `mbaa` (perdeu suavidade c/ wait curto), `meltybld`
+    (referência de suavidade), `ggxxac` (hicups), `slashout` (savestate p/ perf);
+    `cspike`/`capsnk`/`ggisuka`/`spawn` limpos. `ikaruga` = bug do retrorun
+    (deitado/sem controle); `cvsgd` = falta o GD.
+- **Ataque aos que não bootam — achados iniciais (sem mudar código):**
+  - **`asndynmt` (cart):** detecta `NAOMI GAME ID` e entra no render loop, mas o SH4
+    **gira pra sempre em 152 blocos de boot** (offsets baixos da RAM: `8C0000E8`
+    memcpy, `AC001AEE` memcpy, `AC0023C2` delay, `AC00265E` poll) e **nunca chega ao
+    código do jogo**. Traçado com `FC_JIT_TRACE_ALL=1 FC_JIT_TRACE_BOOT=1` (2M
+    linhas, cap) + `FC_DUMP_BLOCK`. Não é crash: é laço de espera/cópia que não sai.
+  - **`cvs2` (GD-ROM):** **chega ao jogo**, mas após **~60 s** descomprimindo o CHD
+    (`/roms2/naomi/cvs2/gdl-0007a.chd`+`gdl-0008.chd`; 65k setores lidos, 87,4%
+    hit, 8190 esperas pela thread). O "não boota" do usuário pode ser a espera.
+  - **Descoberta:** os títulos GD-ROM têm diretório próprio com `.chd`
+    (`/roms2/naomi/<jogo>/gdl-*.chd`); os cartuchos usam o `.zip` MAME (`315-*`).
+- **Próximo:** confirmar se `meltyb`/`sfz3ugd` (GD-ROM) também só são lentos ou se
+  travam de fato; atacar o laço de boot do `asndynmt`/`gwing2`/`zombrvn` (cart).
+
+## 2026-09-28 (continuação) — boot lento do GD-ROM Naomi: lazy loading do ROM.BIN (fix)
+
+- **Diagnóstico:** o "não boota" do `cvs2`/`meltyb`/`sfz3ugd` era o
+  `GDCartridge::device_start` lendo e descriptografando (DES) o **ROM.BIN inteiro**
+  do GD-ROM antes do jogo iniciar — ~134 MB no cvs2, ~22 s até o `GAME ID` (mais
+  nos maiores). **Não era o CHD prefetch (4.62):** `FC_CHD_PREFETCH=0` deu o mesmo
+  tempo. O upstream carrega **por segmentos de 16 KB, sob demanda**.
+- **Correção (portada do upstream):** `loadSegments()` lê+descriptografa por
+  segmento, chamado de `GetDmaPtr`/`Read`; `device_start` só monta
+  `loadedSegments`, gera as subchaves e carrega o 1º segmento (pro `GetGameId`);
+  o `Disc *gdrom` virou membro. **Medido:** `cvs2` `GAME ID` **22 s → ~1 s**.
+- **Usuário na tela:** `cvs2` bootou rápido, **60 fps cravados**, mas com **menor
+  suavidade** (mesmo padrão do mbaa) — registrado em `game_status.md` na categoria
+  de performance.
+- **Efeito colateral:** com o boot rápido + **tier2 ligado**, o `cvs2` dá SIGSEGV
+  ~5 s após o renderer, em `RuntimeBlockInfo::AddRef` (shared_ptr do blockmanager)
+  — **4.91**, a investigar (suspeita de corrida do tier2 design 1). Com tier2
+  desligado roda normal. Teste num `.so` separado (`/home/ark/flycast_lazygd.so`);
+  o core oficial `flycast2026` no device **não foi tocado**.
+
+## 2026-09-28 (continuação 2) — crash do cvs2 com tier2: exceção de FPU clobbera o `next_pc` no `rdv_LinkBlock`
+
+- **Contexto:** depois do fix 4.89 (boot 22 s → 1 s), o `cvs2` passou a crashar ~5 s
+  pós-boot **só com tier2 ligado** (`RuntimeBlockInfo::AddRef`, `si_addr 0xa8`).
+- **Isolamento:** `FC_TIER2_FULL_THREAD=0` (worker off) → 0 NULL em 4/4; com worker
+  → 2/3. É o worker do tier2.
+- **Detector de corrida opt-in (`FC_TIER2_RACE`):** carimba a geração nos mapas do
+  worker (`workerBlocks`/`workerByCode`) e loga se o worker usa bloco de geração
+  anterior. **Não disparou** → não é bloco obsoleto pós-reset. (Opt-in, custo zero
+  desligado — não tira ganho de nenhum jogo.)
+- **Causa raiz:** com `FC_EXC_LOG=1`, `EXC: epc=0C02EE20 evn=800 vect=100
+  next=0C000100 sr=60008001` — exceção de **FPU desabilitada** (`sr.FD=1`) tomada
+  **durante o decode** de um bloco (`decoder.cpp` → `Do_Exception(next_pc, 0x800,
+  0x100); return false`). O `Do_Exception` grava `next_pc = 0C000100` (vetor).
+  `Setup` devolve false → `rdv_CompilePC` NULL. O `rdv_LinkBlock` seguia usando o
+  **`next_pc` global clobberado** em `bm_GetBlock(next_pc)` → NULL → `AddRef` em
+  NULL. Dump da RAM em `0C000100` mostrou código válido (handler já escrito) — a
+  falha era o `next_pc` errado, não a RAM.
+- **Correção:** em `rdv_LinkBlock`, se `rv == NULL` após `rdv_FindOrCompile()`,
+  continuar no handler: `return rdv_FailedToFindBlock(next_pc)`. Blindei os
+  `bm_GetBlock(next_pc)` contra NULL (defensivo). Diagnósticos ficaram opt-in
+  (`FC_EXC_LOG`, `FC_TIER2_RACE`).
+- **Medido:** `cvs2` 5/5 rodadas com tier2 ligado, **0 NULL / 0 SIGSEGV**; a
+  exceção de FPU continua (legítima) e o handler roda. Deploy num `.so` de teste
+  (`/home/ark/flycast_lazygd.so`); o `flycast2026` no device não foi tocado.
+
+## 2026-09-28 (continuação 3) — asndynmt boota: fim de boot do tier2 (bloco 1B16) e triângulo laranja (região de vértices, padrão `ftrv`-delayslot)
+
+- **Correção do achado 4.88 (o "laço de boot eterno" era artefato de medição):**
+  o "gira pra sempre em 152 blocos e nunca chega ao jogo" era **cap do trace** —
+  o `FC_JIT_TRACE` corta em 2M linhas (e só gravava quando a RAM baixa mudava).
+  Com `FC_JIT_TRACE_MAX` maior, `asndynmt` e `gwing2` **chegam ao bloco físico
+  `AC001B16`** (offset `0x1B16`), o mesmo despachante de callback da BIOS que
+  todos os carts que bootam atravessam (comparado com o trace de
+  capsnk/cspike/spawn). O que prendia os carts era o **tier2 ligado durante o
+  boot**: ele muda *quando* os blocos são compilados e a temporização, e os
+  carts que esperam o timer TMU nunca saíam do laço.
+- **Fim de boot do tier2 (4.92):** o tier2 agora só liga depois do boot
+  (`gameStarted`), disparado pelo bloco `0x1B16` **ou** pelo primeiro quadro PVR
+  (`renderSeen`, hook em `rend_frame`, para jogos que bootam sem passar por ele).
+  Log: `tier2: fim de boot por bloco 1B16 (bloco AC001B16)`. A reserva da cauda
+  do code cache é aplicada na emu thread (próxima compilação de bloco), não na
+  thread do render. Ainda no mesmo item: a exceção de FPU desabilitada saiu do
+  **decode** (era frágil, dependia de *quando* o bloco era compilado — o tier2
+  mudava isso e a exceção espúria travava a BIOS do `cvs2`) para uma **checagem
+  de `SR.FD` em runtime** na entrada do bloco gerado (`rec_arm64.cpp`); o
+  `Do_Exception` limpa `FD` ao entrar no handler de FPU (o stub da BIOS acessa a
+  FPU para salvar o contexto e, com `FD=1`, re-disparava a exceção em
+  tempestade).
+- **Triângulo laranja do asndynmt (4.93):** com o tier2 ligado e o jogo
+  bootando, a atração/3D mostrava um **triângulo laranja gigante** + listras
+  brancas e triângulos prateados (vértices errados). Isolado com
+  `FC_TIER2_MAXREG` (região #4) + `FC_TIER2_EXCLUDE`: a região automática #4
+  (9 blocos: `8C114A9A 8C1149F6 8C114AC6 8C114A90 8C114ACE 8C114A9C 8C1149E6
+  8C114AD6 8C114ADE`, 2,7 blocos/entrada) é a culpada. Bisseção: excluir
+  `8C1149F6` (bloco do `ftrv`) → limpo; excluir `8C114A9A` → limpo; excluir
+  `8C114A9C` → piora. Novo padrão de **forma** (não de jogo)
+  `region-bad-ftrv-delayslot` (11 opcodes; bloco curto de transformação de
+  vértice terminando com `ftrv` no slot de atraso de um `bf`) casa em
+  `8C1149F6` e `8C114B08`; com o `8C1149F6` fora, a região #4 cai para 5 blocos
+  e é removida por baixo reúso. **Triângulo laranja eliminado** (10 frames
+  dumpados limpos; `live_pattern.log`/`live_pattern2.log`).
+- **Fica bugado por enquanto (decisão do usuário):** ainda há **listras
+  brancas** e **triângulos prateados** (outros vértices errados) na cena; não
+  reproduziram nos 24 frames dumpados de `pattern2` (a atração até agora saiu
+  limpa), então o culpado pode estar em outra cena/fase da câmera. Parked.
+- **Deploy:** o core com os fixes foi para o **oficial do device**
+  (`~/.config/retroarch/cores/flycast2026_libretro.so` =
+  `2ccd8fc365859bb3538752eedc2c26c6`); backup do anterior
+  (`efbe5529e1b0d7abaced0078ee418b11`) em `flycast2026_libretro.so.bak-pre-orange`.
+
+## 2026-09-28 (continuação 4) — REVERTIDO o fix do laranja: ele quebrava o cold boot do asndynmt
+
+- **Regressão achada na bateria cold boot:** `asndynmt` com o core deployado
+  (`2ccd8fc`) **não mostrava nem o logo NAOMI — tela preta e travava**. Com o
+  **tier2 desligado** o jogo boota normal (logo + atração + jogo).
+- **A build boa era a de antes do fix do laranja** (a que destravou o boot e
+  deixou o usuário fazer o savestate, ~20:56): `decoder.cpp` no HEAD (exceção de
+  FPU desabilitada ainda tomada no **decode**) + gatilho de fim-de-boot no
+  `tier2.cpp`. A build do fix do laranja (`decoder.cpp` de 23:05) juntou, na
+  mesma edição, a remoção da exceção do decode (4.92) **e** o padrão
+  `region-bad-ftrv-delayslot` (4.93) — e o cold boot do asndynmt com tier2 passou
+  a preto/travado.
+- **Ação (a pedido do usuário):** revertido `decoder.cpp` para o HEAD
+  (`git checkout HEAD -- core/hw/sh4/dyna/decoder.cpp`): volta a exceção de FPU no
+  decode e **some o padrão `ftrv`**. O gatilho de fim-de-boot do `tier2.cpp` foi
+  mantido (é o fix do boot). O triângulo laranja do asndynmt volta, mas o jogo
+  boota — aceito como "bugado por enquanto".
+- **Deploy:** `flycast2026_libretro.so` = `3c9d97a354640748d14503e0f7d5d1fa`
+  (pré-laranja); backup do build do laranja (`2ccd8fc...`) em
+  `flycast2026_libretro.so.bak-orange-1B16`.
+- **Pendência registrada:** reaplicar o fix do triângulo laranja **sem** mexer na
+  exceção de FPU do decode (os dois ficaram no mesmo commit por acidente); o
+  padrão `region-bad-ftrv-delayslot` e o `FC_TIER2_EXCLUDE` ficam no histórico
+  (4.93) para reaplicar depois.
+
+## 2026-09-28 (continuação 5) — cold boot do asndynmt RESOLVIDO: gatilho = handover BIOS→jogo
+
+- **Correção da continuação 4:** a build "pré-laranja" (`0x1B16` + exceção de FPU
+  no decode) **também** travava na tela preta. O problema **não** era o fix do
+  laranja nem a exceção de FPU — era o **gatilho de fim-de-boot**.
+- **O que o trace mostrou** (`FC_JIT_TRACE_BOOT=1 FC_JIT_TRACE_FIRST=1`, tier2
+  desligado): a descoberta de blocos termina a BIOS (`AC0011xx` → `AC001B16` →
+  `AC001E16`) e **entrega o controle ao jogo em `0C020000`** (`AC001E16` →
+  `0C000620`, stub na RAM baixa → `0C020000`, código do jogo). O `0x1B16` é um
+  callback **periódico** da BIOS que roda **antes** do handover — ligar o tier2
+  ali quebrava o cold boot.
+- **Fix:** o gatilho agora é o **handover**: o primeiro bloco na região de código
+  do jogo em RAM (`0x0C020000-0x0C03FFFF`). Log: `tier2: handover BIOS->jogo
+  (bloco 0C020000)`.
+- **Resultado:** `asndynmt` **boota até a atração/jogo com o tier2 ligado**
+  (confirmado por dump de frames: logo NAOMI → cena do ringue com legenda).
+- **Estado:** `decoder.cpp` segue no HEAD (exceção de FPU no decode, **sem** o
+  padrão `ftrv` → o triângulo laranja volta, parked). O gatilho antigo
+  (`0x1B16`/`render`) foi removido.
+- **Deploy:** `flycast2026_libretro.so` = `4c46a0cae79a7e85e1fd5a6eb01abd07`;
+  backup do anterior em `flycast2026_libretro.so.bak-pre-handover`.

@@ -155,6 +155,20 @@ bool Do_Interrupt(u32 intEvn)
 bool Do_Exception(u32 epc, u32 expEvn, u32 CallVect)
 {
 	verify(sr.BL == 0);
+	// FC_EXC_LOG: diagnostico (opt-in). Loga as excecoes SH4 para achar a
+	// origem de um salto espurio ao vetor (ex.: 0C000100 no cvs2 com tier2).
+	{
+		static int excLog = -1;
+		if (excLog == -1)
+			excLog = getenv("FC_EXC_LOG") != nullptr ? 1 : 0;
+		if (excLog)
+		{
+			static int n = 0;
+			if (n++ < 80)
+				fprintf(stderr, "EXC: epc=%08X evn=%03X vect=%03X next=%08X spc_prev=%08X sr=%08X r15=%08X\n",
+						epc, expEvn, CallVect, vbr + CallVect, spc, sh4_sr_GetFull(), r[15]);
+		}
+	}
 	CCN_EXPEVT = expEvn;
 
 	ssr = sh4_sr_GetFull();
@@ -163,7 +177,26 @@ bool Do_Exception(u32 epc, u32 expEvn, u32 CallVect)
 	sr.BL = 1;
 	sr.MD = 1;
 	sr.RB = 1;
+	// EXPERIMENTO: no SH4, o handler de FPU desabilitada precisa acessar a FPU
+	// (salvar o contexto) -- o stub de entrada da BIOS salva f0-f14. Se FD
+	// continuar 1, esses acessos disparam a excecao de novo (tempestade).
+	// Limpa FD ao entrar no handler de FPU.
+	if (expEvn == 0x800)
+		sr.FD = 0;
 	UpdateSR();
+
+	// FC_EXC_LOG: começa o JIT trace NA excecao (FC_JIT_TRACE, sem
+	// FC_JIT_TRACE_BOOT) para ver o caminho do handler ate o loop.
+	{
+		static int excTrace = -1;
+		if (excTrace == -1)
+			excTrace = getenv("FC_EXC_TRACE") != nullptr ? 1 : 0;
+		if (excTrace)
+		{
+			extern void jit_trace_start();
+			jit_trace_start();
+		}
+	}
 
 	next_pc = vbr + CallVect;
 	//printf("RaiseException: from %08X , pc errh %08X, %08X vect\n", spc, epc, next_pc);
