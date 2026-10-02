@@ -3346,3 +3346,21 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   Rodada C `FC_EMU_WAIT=1`: 24,2 fps, 0 dup, VEL 80,9% (A: 74,8%) — o giro custa ~6
   pts; a cena segue <100% mesmo com a espera. Som grave = reamostragem do retrorun
   (fork, `daf93bc`, 2026-09-24, `RETRORUN_AUDIO_RATE_CONTROL`). Detalhes em 4.97/4.98.
+
+## 2026-10-01 (noite) — tier2 de volta no DC, dumper leve e a 1ª função do jogo reescrita em nativo
+
+- **tier2 no DC (4.99):** estava desligado em silêncio desde 09-28 (handover só
+  casava o endereço do Naomi; poll não religava depois da carga de savestate;
+  stub sem a store da amostra). Corrigido; opção do core só liga no DC.
+- **Dumper leve (4.100):** `FC_JIT_DUMP_LITE=1` + perf + `tools/jit_lite_report.py`;
+  custo ~2,4 pts de VEL (o completo tirava 51). `tools/sh4dis.py` desmonta o SH4.
+- **Mudança de método (pedido do usuário):** ler o código que o JIT gera (análise
+  estática) e reescrever em nativo o que está ruim, em vez de profiling em volta
+  do tier2 — como o DOA2/Shenmue do começo.
+- **`lightxf` do Napple em nativo (4.101):** transformação + iluminação; a máscara
+  de luzes era varrida a cada vértice em blocos de 1-3 instruções. Versão nativa
+  com resultado bit a bit idêntico (hash de estado em todo frame) e mesma
+  contabilidade de ciclos. VEL +4,5 pts no ambiente do ES (67,7 → 72,2%,
+  20,3 → 21,6 fps). Core de teste: `/home/ark/flycast_hle.so` (md5 `1e9c212a`).
+- **Device:** limpeza do cache de build-id do perf (`~/.debug`, builds superados de
+  hoje) — o `/` tinha chegado a 39 MB livres.

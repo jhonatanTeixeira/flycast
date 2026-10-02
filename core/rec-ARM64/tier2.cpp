@@ -102,6 +102,16 @@ static u32 t2AreaInit()
 	return e != nullptr ? (u32)atoi(e) : (1024 * 1024);
 }
 
+// Segundos de CLOCK_MONOTONIC nos eventos do tier2 no stderr: casa com o
+// `perf record -k mono` e com as linhas 't' do FC_JIT_DUMP (linha do tempo
+// das regioes x glitch reportado). clock_gettime e async-signal-safe.
+static double t2mono()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
 namespace {
 
 typedef std::bitset<sh4_reg_count> RegSet;
@@ -134,6 +144,9 @@ u32 maxRegions;	// FC_TIER2_MAXREG=N (diagnostico): instala no maximo N regioes
 bool patternOff;	// padrao de codigo que o tier2 quebra (tier2_disable_for_pattern)
 bool patternCleaned;
 bool optionAuto;	// core option flycast2026_tier2 (libretro.cpp -> tier2_set_core_option)
+// A opcao do core so liga o tier2 no Dreamcast: no Naomi ele foi perda liquida
+// (bateria de 2026-09-28). FC_TIER2_AUTO=1 continua forcando em qualquer sistema.
+bool optionOn() { return optionAuto && settings.System == DC_PLATFORM_DREAMCAST; }
 u32 installed;
 std::set<u32> inRegion;		// blocos em regiao viva (fora da formacao)
 std::set<u32> badBlocks;		// recusados de vez (fora das proximas janelas)
@@ -1623,7 +1636,7 @@ void read_cfg()
 		if (std::find(cfgBlocks.begin(), cfgBlocks.end(), en) == cfgBlocks.end())
 			cfgBlocks.insert(cfgBlocks.begin(), en);
 }
-bool enabled() { return (autoMode || optionAuto || !cfgBlocks.empty()) && gameStarted.load(std::memory_order_relaxed); }
+bool enabled() { return (autoMode || optionOn() || !cfgBlocks.empty()) && gameStarted.load(std::memory_order_relaxed); }
 
 u8 *area_begin() { return CodeCache + CODE_SIZE - T2_AREA; }
 u8 *area_end() { return CodeCache + CODE_SIZE; }
@@ -1736,14 +1749,24 @@ void tier2_on_block_added_impl(const RuntimeBlockInfoPtr &b)
 {
 	// Handover BIOS->jogo: primeiro bloco na area de codigo do jogo em RAM
 	// (0x0C020000-0x0C03FFFF). O stub de boot fica abaixo disso (0x0C000xxx).
+	// Dreamcast: o jogo roda em P1 (0x8C......): IP.BIN em 0x8C008000 e o
+	// 1ST_READ.BIN carregado em 0x8C010000. Sem este caso o gatilho do Naomi
+	// nunca casava no DC e o tier2 ficava desligado em silencio (4.99).
 	const u32 v = b->vaddr & 0x00FFFFFFu;
-	const bool inGameRam = (b->vaddr & 0xFF000000u) == 0x0C000000u
-			&& v >= 0x00020000u && v < 0x00040000u;
+	const u32 phys = b->vaddr & 0x1FFFFFFFu;
+	const bool inGameRam = settings.System == DC_PLATFORM_DREAMCAST
+			? phys >= 0x0C010000u && phys < 0x0D000000u
+			: (b->vaddr & 0xFF000000u) == 0x0C000000u
+				&& v >= 0x00020000u && v < 0x00040000u;
 	if (inGameRam && !gameStarted.load(std::memory_order_relaxed))
 	{
-		fprintf(stderr, "tier2: handover BIOS->jogo (bloco %08X)\n", b->vaddr);
+		fprintf(stderr, "tier2: [%.3f] handover BIOS->jogo (bloco %08X)\n", t2mono(), b->vaddr);
 		gameStarted.store(true, std::memory_order_relaxed);
 		tier2_code_reserve = T2_AREA;	// agora reserva a cauda do code cache
+		// O tier2_poll so era recalculado no tier2_reset (limpeza do cache).
+		// Se a ultima limpeza veio ANTES do handover (carga de savestate:
+		// limpa -> compila o 1o bloco -> handover), a amostragem nunca ligava.
+		tier2_poll = enabled() && !mmu_enabled() && !patternOff;
 	}
 	if (!fullThreadEnabled() || patternOff || !gameStarted.load(std::memory_order_relaxed))
 		return;
@@ -1950,7 +1973,7 @@ void finish()
 	{
 		if (!j->ok)
 		{
-			fprintf(stderr, "tier2: emissao recusada: %s\n", j->why.c_str());
+			fprintf(stderr, "tier2: [%.3f] emissao recusada: %s\n", t2mono(), j->why.c_str());
 			for (u32 va : j->blocks)
 				badBlocks.insert(va);
 		}
@@ -2005,7 +2028,7 @@ void finish()
 	}
 	for (u32 va : j->blocks)
 		inRegion.insert(va);
-	fprintf(stderr, "tier2: regiao #%u: %zu blocos, %u chamadas embutidas, %u bytes, %zu entradas, emitida em %.2f ms na thread, guardas:",
+	fprintf(stderr, "tier2: [%.3f] regiao #%u: %zu blocos, %u chamadas embutidas, %u bytes, %zu entradas, emitida em %.2f ms na thread, guardas:", t2mono(),
 			reg.id, j->blocks.size(), c->inlined, size, c->entries.size(), j->ms);
 	for (u32 l : c->latch)
 		fprintf(stderr, " volta@%08X=%u", l, c->guard[l]);
@@ -2051,10 +2074,10 @@ void check_regions()
 			unhook(r);
 			for (u32 va : r.blocks)
 				badBlocks.insert(va);
-			fprintf(stderr, "tier2: regiao #%u removida: %.2f blocos por entrada (%u entradas)\n", r.id, bpe, en);
+			fprintf(stderr, "tier2: [%.3f] regiao #%u removida: %.2f blocos por entrada (%u entradas)\n", t2mono(), r.id, bpe, en);
 		}
 		else
-			fprintf(stderr, "tier2: regiao #%u ok: %.1f blocos por entrada\n", r.id, bpe);
+			fprintf(stderr, "tier2: [%.3f] regiao #%u ok: %.1f blocos por entrada\n", t2mono(), r.id, bpe);
 		// contagens viram salto por cima (4 instrucoes -> 1)
 		for (u32 *site : r.bumps)
 		{
@@ -2376,7 +2399,7 @@ void next_candidate()
 				break;
 			}
 			if (attempt == 0)
-				fprintf(stderr, "tier2: grupo de %zu blocos (cabeca %08X) recusado: %s\n", blocks.size(), blocks[0], why.c_str());
+				fprintf(stderr, "tier2: [%.3f] grupo de %zu blocos (cabeca %08X) recusado: %s\n", t2mono(), blocks.size(), blocks[0], why.c_str());
 			if (why == "trecho de 1 bloco")
 				break;
 			if (why.find("writem") != std::string::npos)
@@ -2405,7 +2428,7 @@ void next_candidate()
 	}
 	if (rejected != lastRejected)
 	{
-		fprintf(stderr, "tier2: %u grupos recusados ate agora (%zu blocos fora)\n", rejected, badBlocks.size());
+		fprintf(stderr, "tier2: [%.3f] %u grupos recusados ate agora (%zu blocos fora)\n", t2mono(), rejected, badBlocks.size());
 		lastRejected = rejected;
 	}
 }
@@ -2632,12 +2655,12 @@ void tier2_selfcheck()
 	static u32 scChecks, scDiverged;
 	scChecks++;
 	if ((scChecks & 63) == 1)
-		fprintf(stderr, "tier2: autochecagem: %u checagens, %u divergencias (regiao #%u, entrada %08X saida %08X, %u passos)\n",
+		fprintf(stderr, "tier2: [%.3f] autochecagem: %u checagens, %u divergencias (regiao #%u, entrada %08X saida %08X, %u passos)\n", t2mono(),
 				scChecks, scDiverged, r->id, scEntryCtx.pc, scExitPc, steps);
 	if (!scCtxEqual(refCtx, scExitCtx))
 	{
 		scDiverged++;
-		fprintf(stderr, "tier2: AUTOCHECAGEM regiao #%u DIVERGIU do interpretador (entrada %08X saida %08X, %u passos) -- regiao desfeita\n",
+		fprintf(stderr, "tier2: [%.3f] AUTOCHECAGEM regiao #%u DIVERGIU do interpretador (entrada %08X saida %08X, %u passos) -- regiao desfeita\n", t2mono(),
 				r->id, scEntryCtx.pc, scExitPc, steps);
 		unhook(*r);
 		for (u32 va : r->blocks)
@@ -2657,7 +2680,7 @@ void tier2_disable_for_pattern(const char *name)
 	if (patternOff)
 		return;
 	patternOff = true;
-	fprintf(stderr, "tier2: desligado pelo padrao '%s'\n", name);
+	fprintf(stderr, "tier2: [%.3f] desligado pelo padrao '%s'\n", t2mono(), name);
 }
 
 void tier2_set_core_option(bool on)
@@ -2675,7 +2698,7 @@ void tier2_set_core_option(bool on)
 void tier2_exclude_block(u32 va, const char *name)
 {
 	if (badBlocks.insert(va).second)
-		fprintf(stderr, "tier2: bloco %08X excluido pelo padrao '%s'\n", va, name);
+		fprintf(stderr, "tier2: [%.3f] bloco %08X excluido pelo padrao '%s'\n", t2mono(), va, name);
 }
 
 void tier2_init()
@@ -2730,7 +2753,17 @@ bool tier2_sampling()
 {
 	if (!cfg_read)
 		read_cfg();
-	return (autoMode || optionAuto) && !patternOff && tier2AfterBoot();
+	return (autoMode || optionOn()) && !patternOff && tier2AfterBoot();
+}
+// Para o codegen do laco principal: a store da amostra (t2_last_pc) tem de
+// existir mesmo se o stub for gerado ANTES do handover (limpeza do cache na
+// carga de savestate). Antes do handover o tier2_poll esta desligado e
+// ninguem le a amostra.
+bool tier2_configured()
+{
+	if (!cfg_read)
+		read_cfg();
+	return (autoMode || optionOn()) && !patternOff;
 }
 
 void tier2_selfcheck();
@@ -2762,7 +2795,7 @@ void tier2_safe_point()
 		for (Region &r : regions)
 			if (r.alive && r.id == id)
 			{
-				fprintf(stderr, "tier2: regiao #%u acessou MMIO -- bail + desfeita (blocos marcados como lentos)\n", id);
+				fprintf(stderr, "tier2: [%.3f] regiao #%u acessou MMIO -- bail + desfeita (blocos marcados como lentos)\n", t2mono(), id);
 				unhook(r);
 				for (u32 va : r.blocks)
 					slowMem.insert(va);
@@ -2783,7 +2816,7 @@ void tier2_safe_point()
 		tier2_poll = false;
 		return;
 	}
-	if ((autoMode || optionAuto) && tier2AfterBoot())
+	if ((autoMode || optionOn()) && tier2AfterBoot())
 	{
 		// O call ja vem gateado (1/64 fatias via tier2_poll_mask): amostra toda
 		// chamada (= 1/64 fatias) e drena a cada 64 chamadas (= 1/4096 fatias).
@@ -2841,7 +2874,7 @@ void tier2_safe_point()
 	int r = submit(cfgEntries, cfgBlocks, heat, &why);
 	if (r == 2)
 	{
-		fprintf(stderr, "tier2: regiao recusada: %s\n", why.c_str());
+		fprintf(stderr, "tier2: [%.3f] regiao recusada: %s\n", t2mono(), why.c_str());
 		gaveUp = true;
 		tier2_poll = false;
 	}
@@ -2902,7 +2935,7 @@ bool tier2_fault(void *ucv, u32 guest)
 				{
 					static int nBail;
 					if (nBail++ < 8)
-						fprintf(stderr, "tier2: BAIL regiao #%u pc=%zx guest=%08X -> bloco %08X\n",
+						fprintf(stderr, "tier2: [%.3f] BAIL regiao #%u pc=%zx guest=%08X -> bloco %08X\n", t2mono(),
 								r.id, (size_t)pc, guest, va);
 					tier2BailFlag = 1;
 					p_sh4rcb->cntx.pc = va;
@@ -2929,7 +2962,7 @@ bool tier2_fault(void *ucv, u32 guest)
 	u32 t = insn & 31;
 	static int logged;
 	if (logged++ < 8)
-		fprintf(stderr, "tier2: leitura fora da RAM na regiao (pc=%zx endereco=%08X), emulada\n", (size_t)pc, guest);
+		fprintf(stderr, "tier2: [%.3f] leitura fora da RAM na regiao (pc=%zx endereco=%08X), emulada\n", t2mono(), (size_t)pc, guest);
 	auto gpr = [uc](u32 r) -> u64 { return r == 31 ? 0 : uc->uc_mcontext.regs[r]; };
 	auto fpr = [fp](u32 r) -> u32 { return fp != nullptr ? (u32)fp->vregs[r] : 0; };
 	// escrita: pagina de codigo protegida pelo caminho do JIT antigo, resto por WriteMem
