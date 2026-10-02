@@ -1017,6 +1017,8 @@ static void upload_vertex_indices()
 }
 
 static void fc_dump_framebuffer();
+bool ctrl_socket_shot_wanted();
+void ctrl_socket_shot_deliver(const u8 *px, int w, int h);
 
 extern u64 g_rsUs[12];
 extern u32 g_rsShaders;
@@ -1333,6 +1335,14 @@ static bool RenderFrame(void)
 			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		}
 		fc_dump_framebuffer();
+		// FC_CTRL_PORT: o socket pediu a tela (ctrl_socket.cpp)
+		if (ctrl_socket_shot_wanted() && screen_width > 0 && screen_height > 0)
+		{
+			std::vector<u8> px((size_t)screen_width * screen_height * 4);
+			glPixelStorei(GL_PACK_ALIGNMENT, 1);
+			glReadPixels(0, 0, screen_width, screen_height, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+			ctrl_socket_shot_deliver(px.data(), screen_width, screen_height);
+		}
 	}
 
 	// Tell the driver we're done with depth/stencil for whichever framebuffer
