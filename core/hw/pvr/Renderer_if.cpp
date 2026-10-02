@@ -633,11 +633,50 @@ bool rend_single_frame(void)
 
 				if (!settings.rend.ThreadedRendering && _pvrrc == NULL)
 					return false;
-				// Modelo novo (docs/frame_pacing_plan.md): sem espera. Se nao ha
-				// frame pronto, devolve duplicado -- nao bloqueia a main thread
-				// (o gate da fila ja descartou o que nao caberia).
+				// Modelo novo (docs/frame_pacing_plan.md): a emu nunca espera a
+				// main. Mas a MAIN, sem frame pronto, espera o proximo com prazo
+				// curto (FC_FRAME_WAIT_MS, padrao 20 ms, como o upstream) em vez
+				// de devolver duplicado na hora. Devolver na hora fazia o frontend
+				// reapresentar o repetido: em FIFO os repetidos enchiam a fila do
+				// apresentador e cada retro_run() ficava ~13 ms preso no vblank,
+				// perdendo 33-42% dos frames do jogo (docs/sync_emu_render.md
+				// 9.4); em mailbox o laco girava a 300+/s (Napple, 4.97). O rs.Set
+				// do QueueRender acorda esta espera. 0 = comportamento antigo.
 				if (settings.rend.ThreadedRendering && g_emuNeverWaits && _pvrrc == NULL)
-					return false;
+				{
+					static int frameWaitMs = -1;
+					if (frameWaitMs < 0)
+					{
+						const char *e = getenv("FC_FRAME_WAIT_MS");
+						frameWaitMs = e != nullptr ? std::max(0, atoi(e)) : 20;
+					}
+					// Ate um PRAZO: o rs fica sinalizado quando a main pega um
+					// frame sem ter esperado por ele; esse sinal velho fazia o
+					// Wait voltar na hora sem frame -> repetido -> a fila do
+					// apresentador continuava cheia. Repete a espera ate o prazo.
+					if (frameWaitMs > 0)
+					{
+						const u64 deadline = rend_now_us() + (u64)frameWaitMs * 1000;
+						for (;;)
+						{
+							const u64 now = rend_now_us();
+							if (now >= deadline)
+								break;
+							const u32 leftMs = (u32)((deadline - now + 999) / 1000);
+							if (!rs.Wait(leftMs))
+								break;
+							_pvrrc = DequeueRender();
+							if (_pvrrc != NULL)
+							{
+								if (g_syncStats == 1)
+									sync_frame_dequeued();
+								break;
+							}
+						}
+					}
+					if (_pvrrc == NULL)
+						return false;
+				}
 			}
 			while (!_pvrrc);
 		}

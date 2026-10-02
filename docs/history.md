@@ -3396,3 +3396,10 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   descartados (a main ainda ocupada com o anterior) — é isso que tira a suavidade;
   o wait curto custa 2,5-4 ms/frame à emu, quase tudo esperando a main pegar o frame;
   ~10 páginas de VRAM escritas por frame no MvC2, ~0 no MBAA (4.104).
+
+## 2026-10-02 — fase 3: espera com prazo + fila de 2 no retrorun
+
+- Os ~13 ms do `video_cb` eram o `submit` esperando o vblank com a fila do
+  apresentador cheia de frames repetidos. Core: a main espera o próximo frame até
+  20 ms (`FC_FRAME_WAIT_MS`); retrorun: `RETRORUN_PRESENT_DEPTH=2`. MBAA p95 entre
+  frames novos 50 → 33 ms; MvC2 34 → 39 novos/s. Usuário: "já muito bons" (4.105).
