@@ -30,6 +30,11 @@
 extern uintptr_t t2_last_pc;
 extern float g_lutSh4Clock;
 extern void *ta_sq_stub;
+bool hle_gpu_enabled();
+bool hle_gpu_lightxf(const float *src, u32 n, const float *m16, const float *scr4,
+		int nl, const float *ldir4, const float *lcol4, float *out);
+#include <chrono>
+#include <vector>
 
 namespace {
 
@@ -95,6 +100,10 @@ inline u32 f2u(f32 f) { u32 v; memcpy(&v, &f, 4); return v; }
 inline f32 u2f(u32 u) { f32 v; memcpy(&v, &u, 4); return v; }
 
 struct Stats { u64 calls, bails; } lightxf_stats;
+// FC_HLE_GPU (experimento 4.102): tempo da ida e volta na GPU x tempo da versao
+// nativa, por chamada, e quanto o resultado da GPU difere do da CPU
+struct GpuStats { u64 calls, gpuNs, cpuNs, verts, vertsDiff; u32 maxUlp; } gpuStats;
+std::vector<float> gpuRec, cpuRec, gpuIn;
 
 u64 lightxf_decline(u32 entry, const char *why)
 {
@@ -274,6 +283,46 @@ u64 lightxf_run(s32 c, u32 entry)
 #define BAIL(addr) do { lightxf_stats.bails++; next = addr; goto out_bail; } while (0)
 
 	RELOAD();
+	bool gpuCmp = false;
+	u32 gpuN = 0, vi = 0;
+	std::chrono::steady_clock::time_point tCpu0;
+	if (entry == 0 && hle_gpu_enabled())
+	{
+		const auto t0 = std::chrono::steady_clock::now();
+		const u32 a = r4, n = RD32(a), src = RD32(a + 4);
+		const u32 lbase = RD32(lit);
+		build_plan(RD32(lbase));
+		if (planOk && planAct <= 16)
+		{
+			gpuIn.resize((size_t)n * 6);
+			for (u32 k = 0; k < n * 6; k++)
+				gpuIn[k] = RDF(src + k * 4);
+			float m16[16], scr4[4], ld[16 * 4], lc[16 * 4];
+			memcpy(m16, xf, sizeof(m16));
+			for (int k = 0; k < 4; k++)
+				scr4[k] = RDF(a + 16 + k * 4);
+			for (int k = 0; k < planAct; k++)
+			{
+				const u32 b = lbase + 16 + planActOff[k];
+				for (int j = 0; j < 3; j++)
+				{
+					ld[k * 4 + j] = RDF(b + j * 4);
+					lc[k * 4 + j] = RDF(b + 20 + j * 4);
+				}
+				ld[k * 4 + 3] = lc[k * 4 + 3] = 0.f;
+			}
+			gpuRec.resize((size_t)n * 8);
+			if (hle_gpu_lightxf(gpuIn.data(), n, m16, scr4, planAct, ld, lc, gpuRec.data()))
+			{
+				gpuCmp = true;
+				gpuN = n;
+				cpuRec.resize((size_t)n * 8);
+				gpuStats.gpuNs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+						std::chrono::steady_clock::now() - t0).count();
+			}
+		}
+		tCpu0 = std::chrono::steady_clock::now();
+	}
 	if (entry == 1)
 		goto vertex;
 
@@ -459,6 +508,8 @@ finish_body:
 	T = r3 == 0;
 	r7 -= 4; SQW(r7, f14);
 	r6 += 32;		// ocbi @r6: nada no JIT
+	if (gpuCmp && vi < gpuN)
+		memcpy(&cpuRec[(size_t)vi++ * 8], sq + (r7 & 0x20), 32);
 	{	// pref @r7 (r7 na area da SQ, conferido na entrada)
 		sqw_fp *fn = do_sqw_nommu;			// macro: sh4rcb.do_sqw_nommu
 		if ((void *)fn == ta_sq_stub)		// stub ARM64 do JIT (convencao propria): caminho C equivalente
@@ -480,6 +531,34 @@ finish_body:
 	f15 = u2f(ReadMem32(r15)); r15 += 4;
 	FLUSH();
 	next_pc = next;
+	if (gpuCmp && vi == gpuN)
+	{
+		gpuStats.cpuNs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - tCpu0).count();
+		gpuStats.calls++;
+		for (u32 v = 0; v < gpuN; v++)
+		{
+			bool diff = false;
+			for (int w = 0; w < 8; w++)
+			{
+				s32 x = (s32)f2u(cpuRec[v * 8 + w]), y = (s32)f2u(gpuRec[v * 8 + w]);
+				if (x != y)
+				{
+					diff = true;
+					u32 d = (u32)std::abs(x - y);
+					if (d > gpuStats.maxUlp && d < 0x01000000)
+						gpuStats.maxUlp = d;
+				}
+			}
+			gpuStats.verts++;
+			gpuStats.vertsDiff += diff;
+		}
+		if ((gpuStats.calls & 1023) == 1)
+			fprintf(stderr, "hle-gpu: %llu chamadas | GPU (envia+dispatch+espera+le) %.1f us/chamada | CPU nativa %.1f us/chamada | %.1f vertices/chamada | vertices com resultado diferente da CPU: %.1f%% (max %u ulp)\n",
+					(unsigned long long)gpuStats.calls, gpuStats.gpuNs / 1e3 / gpuStats.calls,
+					gpuStats.cpuNs / 1e3 / gpuStats.calls, (double)gpuStats.verts / gpuStats.calls,
+					100.0 * gpuStats.vertsDiff / std::max<u64>(1, gpuStats.verts), gpuStats.maxUlp);
+	}
 	return (1ull << 32) | (u32)c;
 
 out_bail:

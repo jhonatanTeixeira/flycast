@@ -1326,6 +1326,15 @@ static void update_variables(bool first_startup)
 void retro_run (void)
 {
    auto frameStart = std::chrono::steady_clock::now();
+#if HOST_CPU == CPU_ARM64
+   {
+      // FC_HLE_GPU (experimento, hle_gpu.cpp): display EGL do frontend
+      extern bool hle_gpu_enabled();
+      extern void hle_gpu_capture_display();
+      if (hle_gpu_enabled())
+         hle_gpu_capture_display();
+   }
+#endif
    bool updated     = false;
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
