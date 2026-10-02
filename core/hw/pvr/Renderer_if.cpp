@@ -378,7 +378,7 @@ static void rend_fix_overrun_ptrs(rend_context& r)
 int g_syncStats = -1;
 int g_syncPages = -1;
 static std::mutex g_syncMtx;
-static std::vector<u32> g_syncLat, g_syncProc, g_syncEmuWait, g_syncNewInt, g_syncPagesW, g_syncPagesTex;
+static std::vector<u32> g_syncLat, g_syncProc, g_syncEmuWait, g_syncNewInt, g_syncPagesW, g_syncPagesTex, g_syncRender, g_syncPresent;
 static std::atomic<u64> g_syncQueueUs{0};
 static std::atomic<u32> g_syncSeq{0};
 static u32 g_syncSeqSeen;		// main thread
@@ -447,11 +447,12 @@ static void sync_epoch_closed(u64 waitUs)
 		sync_add(g_syncPagesTex, g_syncPagesTexCount);
 	}
 }
-// main thread, retro_run apresentou um frame novo
-void sync_new_frame_presented()
+// main thread, retro_run apresentou um frame novo (presentUs = duracao do video_cb)
+void sync_new_frame_presented(u64 presentUs)
 {
 	if (!sync_stats_on())
 		return;
+	sync_add(g_syncPresent, presentUs);
 	u64 now = rend_now_us();
 	if (g_syncT0 == 0)
 		g_syncT0 = now;
@@ -479,10 +480,11 @@ void sync_dump_stats(const char *path)
 {
 	if (!sync_stats_on())
 		return;
-	std::vector<u32> lat, proc, ew, ni, pw, pt;
+	std::vector<u32> lat, proc, ew, ni, pw, pt, rd, pr;
 	{
 		std::lock_guard<std::mutex> lk(g_syncMtx);
 		lat = g_syncLat; proc = g_syncProc; ew = g_syncEmuWait; ni = g_syncNewInt; pw = g_syncPagesW; pt = g_syncPagesTex;
+		rd = g_syncRender; pr = g_syncPresent;
 	}
 	FILE *f = fopen(path, "w");
 	if (f == nullptr)
@@ -494,6 +496,8 @@ void sync_dump_stats(const char *path)
 	fprintf(f, "new_frames\t%u\tsecs\t%.1f\tnew_fps\t%.2f\n", g_syncNewFrames, secs, secs > 0 ? g_syncNewFrames / secs : 0);
 	sync_dist(f, "latency_queue_to_dequeue", lat, 0.001, "ms");
 	sync_dist(f, "process_dequeue_to_reset", proc, 0.001, "ms");
+	sync_dist(f, "render", rd, 0.001, "ms");
+	sync_dist(f, "present_video_cb", pr, 0.001, "ms");
 	sync_dist(f, "emu_rewait", ew, 0.001, "ms");
 	sync_dist(f, "new_frame_interval", ni, 0.001, "ms");
 	sync_dist(f, "vram_pages_written_per_epoch", pw, 1, "pages");
@@ -561,6 +565,8 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
    u64 t1 = rend_now_us();
    bool do_swp = proc && renderer->Render();
    u64 t2 = rend_now_us();
+   if (g_syncStats == 1 && proc)
+      sync_add(g_syncRender, t2 - t1);
    g_rendBusyUntilUs.store(0, std::memory_order_relaxed);
    if (t2 - t1 < 500000)
       g_rendRenderUsEma = g_rendRenderUsEma == 0 ? (u32)(t2 - t1) : (u32)(((u64)g_rendRenderUsEma * 15 + (t2 - t1)) / 16);

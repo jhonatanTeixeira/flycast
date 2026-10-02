@@ -1380,8 +1380,9 @@ void retro_run (void)
       video_cb(is_dupe ? 0 : RETRO_HW_FRAME_BUFFER_VALID, screen_width, screen_height, 0);
       if (!is_dupe)
       {
-         extern void sync_new_frame_presented();
-         sync_new_frame_presented();
+         extern void sync_new_frame_presented(u64 presentUs);
+         sync_new_frame_presented((u64)std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - p0).count());
       }
       g_lastPresentUs = (u64)std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - p0).count();

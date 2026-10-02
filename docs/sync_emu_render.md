@@ -931,3 +931,22 @@ página saiu em `ea0414f3c`, sem registro) — fazer junto do commit deste docum
   barata (~10 páginas ≈ 40 KB/frame no MvC2). Hipótese a medir: o ciclo da main
   (`Process` + `Render` ~7-11 ms + a espera do `video_cb` pelo apresentador FIFO do
   retrorun) passa de 16,7 ms.
+- **Ciclo da main thread (2026-10-02, `FC_SYNC_STATS` com `render` e `present_video_cb`,
+  sem `FC_SYNC_PAGES`):**
+
+  | por frame novo | MBAA | MvC2 DC |
+  |---|---|---|
+  | `Process` | 0,66 ms | 5,2 ms |
+  | `Render` | 2,5 ms | 6,3 ms |
+  | **`video_cb`** | **13,1 ms** (p50 13,3) | **5,6 ms** (p95 9,0) |
+  | frames novos/s | 39,2 (33% descartados) | 34,2 (42%) |
+  | wait curto da emu | 2,4 ms | 4,9 ms |
+
+  **Causa da perda de suavidade:** com vsync, a apresentação em thread do retrorun em
+  FIFO faz o `video_cb` esperar o apresentador pegar o frame (no vblank). A main fica
+  ~13 ms por frame parada ali no MBAA; com `Process`+`Render` o ciclo passa de 16,7 ms
+  e ela pega um frame, perde o próximo (cadência 16/33/50 ms). O wait curto da emu é
+  quase todo essa mesma espera. É o espelho do giro do Napple (mailbox: não bloqueia
+  nada). **Fase 3 refeita:** (1) retrorun: em FIFO, bloquear o `video_cb` só com 2
+  frames pendentes no apresentador (triple buffering); (2) core: sem frame novo,
+  esperar com prazo curto em vez de girar.
