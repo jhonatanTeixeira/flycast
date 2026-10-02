@@ -155,6 +155,13 @@ std::set<u32> badBlocks;		// recusados de vez (fora das proximas janelas)
 // desviam pro JIT normal (tier1) -- nenhuma regiao executa ate o ponto seguro
 // desfazer a culpada e zerar a flag. Ver docs/tier2_selfhealing_plan.md.
 volatile u32 tier2BailFlag = 0;
+// Bail preciso: o handler emula o acesso fora da RAM e tira T2_BAIL_CYC de w27,
+// o que faz a proxima guarda de laco sair da regiao por um exitStub (fronteira
+// de bloco, estado exato). Cada exitStub devolve o desconto a w27. Retomar no
+// inicio do bloco que deu fault repetia efeitos parciais (post-increment,
+// stores, leitura de TMU) e derrubava Grandia II e Macross M3 (4.108).
+u32 tier2BailCycles = 0;
+constexpr u32 T2_BAIL_CYC = 0x10000000;
 
 // ---- design 1 (FC_TIER2_FULL_THREAD): tier2 inteiro na thread -------------
 // A emu thread entrega os blocos (shared_ptr) numa fila SPSC e so INSTALA o
@@ -1015,6 +1022,16 @@ public:
 		Label *l = newLabel();
 		cold.push_back([this, l, pc, tconst]() {
 			Bind(l);
+			{
+				// devolve o desconto do bail preciso (tier2_fault), se houver
+				Label noBail;
+				Mov(x16, (u64)(uintptr_t)&tier2BailCycles);
+				Ldr(w0, MemOperand(x16));
+				Cbz(w0, &noBail);
+				Add(w27, w27, w0);
+				Str(wzr, MemOperand(x16));
+				Bind(&noBail);
+			}
 			for (int r = 0; r < sh4_reg_count; r++)
 			{
 				if (!W.test(r) || r == reg_sr_T)
@@ -1022,8 +1039,13 @@ public:
 				if (is_fp(r)) Str(S_(r), Ctx(r));
 				else Str(W_(r), Ctx(r));
 			}
+			// T so vive em w15 se a regiao o le ou escreve; senao w15 e lixo
+			// do tier1 e o contexto ja tem o T certo (Macross M3, 4.109)
 			if (tconst < 0)
-				Str(w15, Ctx(reg_sr_T));
+			{
+				if ((W | U).test(reg_sr_T))
+					Str(w15, Ctx(reg_sr_T));
+			}
 			else
 			{
 				Mov(w1, tconst);
@@ -1569,7 +1591,8 @@ public:
 			if (is_fp(r)) Str(S_(r), Ctx(r));
 			else Str(W_(r), Ctx(r));
 		}
-		Str(w15, Ctx(reg_sr_T));
+		if ((W | U).test(reg_sr_T))
+			Str(w15, Ctx(reg_sr_T));
 		Ldr(w29, Ctx(reg_nextpc));
 		BranchAbs(t2_no_update);
 		// contadores numa linha de cache propria (sao escritos a cada volta)
@@ -2914,6 +2937,7 @@ void tier2_note_slowmem(u32 vaddr)
 // Leitura fora da RAM dentro de uma regiao: emula a instrucao (ldr w/s com
 // registrador, ou ldp s,s) por ReadMem32, escreve o destino no ucontext e
 // segue. Stores da regiao vao so para o sq_buffer (nunca dao fault).
+bool tier2_fault_emulate(ucontext_t *uc, uintptr_t pc, u32 guest);
 bool tier2_fault(void *ucv, u32 guest)
 {
 	ucontext_t *uc = (ucontext_t *)ucv;
@@ -2941,20 +2965,38 @@ bool tier2_fault(void *ucv, u32 guest)
 						va = r.blockRanges[i].second;
 						break;
 					}
+				tier2BailFlag = 1;
+				if (tier2BailCycles == 0)
+				{
+					tier2BailCycles = T2_BAIL_CYC;
+					uc->uc_mcontext.regs[27] = (u32)((u32)uc->uc_mcontext.regs[27] - T2_BAIL_CYC);
+				}
+				static int nBail;
+				if (nBail++ < 8)
+					fprintf(stderr, "tier2: [%.3f] BAIL regiao #%u pc=%zx guest=%08X (bloco %08X): acesso emulado, sai na proxima fronteira\n",
+							t2mono(), r.id, (size_t)pc, guest, va);
+				if (tier2_fault_emulate(uc, pc, guest))
+					return true;
+				// instrucao que o emulador abaixo nao conhece: volta ao bail
+				// antigo (inicio do bloco), desfazendo o desconto
+				uc->uc_mcontext.regs[27] = (u32)((u32)uc->uc_mcontext.regs[27] + tier2BailCycles);
+				tier2BailCycles = 0;
 				if (va != 0 && r.bailStub != nullptr)
 				{
-					static int nBail;
-					if (nBail++ < 8)
-						fprintf(stderr, "tier2: [%.3f] BAIL regiao #%u pc=%zx guest=%08X -> bloco %08X\n", t2mono(),
-								r.id, (size_t)pc, guest, va);
-					tier2BailFlag = 1;
+					fprintf(stderr, "tier2: [%.3f] BAIL impreciso regiao #%u insn=%08X -> bloco %08X\n", t2mono(),
+							r.id, *(u32 *)CC_RX2RW((void *)pc), va);
 					p_sh4rcb->cntx.pc = va;
 					uc->uc_mcontext.pc = (uintptr_t)r.bailStub;
 					return true;
 				}
-				break;
+				return false;
 			}
 	}
+	return tier2_fault_emulate(uc, pc, guest);
+}
+
+bool tier2_fault_emulate(ucontext_t *uc, uintptr_t pc, u32 guest)
+{
 	u32 insn = *(u32 *)CC_RX2RW((void *)pc);
 	struct fpsimd_context *fp = nullptr;
 	for (u8 *p = (u8 *)uc->uc_mcontext.__reserved; p < (u8 *)uc->uc_mcontext.__reserved + sizeof(uc->uc_mcontext.__reserved);)
