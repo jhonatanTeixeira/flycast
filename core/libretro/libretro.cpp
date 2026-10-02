@@ -3354,7 +3354,18 @@ static void UpdateInputStateNaomi(u32 port)
 	}
 }
 
+void ctrl_socket_init();
+void ctrl_socket_apply(u32 port, u32 &kcode, s8 &joyx, s8 &joyy);
+static void UpdateInputStateImpl(u32 port);
 void UpdateInputState(u32 port)
+{
+   ctrl_socket_init();		// FC_CTRL_PORT (ctrl_socket.cpp); sem a variavel nao faz nada
+   UpdateInputStateImpl(port);
+   if (port < 4)
+      ctrl_socket_apply(port, kcode[port], joyx[port], joyy[port]);
+}
+
+static void UpdateInputStateImpl(u32 port)
 {
    if (gl_ctx_resetting)
 	  return;
@@ -3373,6 +3384,67 @@ void UpdateInputState(u32 port)
          kcode[i] = 0xFFFFFFFF;
          rt[i] = lt[i] = 0;
          joyx[i] = joyy[i] = joyrx[i] = joyry[i] = 0;
+      }
+      return;
+   }
+
+   // FC_INPUT_SCRIPT (diagnostico, 2026-10-02): controle 1 roteirizado, para
+   // reproduzir um caminho no device sem ninguem segurando o controle.
+   // "a-b:TECLAS;c-d:TECLAS" -- a..b = indices de leitura do controle 1 (o
+   // jogo le ~1x por quadro); TECLAS em A B X Y S(start) U D L R. Fora das
+   // faixas, controle parado. Liga o modo neutro para os outros controles.
+   static int scripted = -1;
+   static std::vector<std::pair<std::pair<u32, u32>, u32>> script;
+   static u32 scriptPoll;
+   if (scripted < 0)
+   {
+      scripted = 0;
+      if (const char *sc = getenv("FC_INPUT_SCRIPT"))
+      {
+         scripted = 1;
+         for (const char *q = sc; *q;)
+         {
+            unsigned a = 0, b = 0;
+            int n = 0;
+            if (sscanf(q, "%u-%u:%n", &a, &b, &n) < 2 || n == 0)
+               break;
+            q += n;
+            u32 m = 0;
+            for (; *q && *q != ';'; q++)
+               switch (*q)
+               {
+               case 'A': m |= DC_BTN_A; break;
+               case 'B': m |= DC_BTN_B; break;
+               case 'X': m |= DC_BTN_X; break;
+               case 'Y': m |= DC_BTN_Y; break;
+               case 'S': m |= DC_BTN_START; break;
+               case 'U': m |= DC_DPAD_UP; break;
+               case 'D': m |= DC_DPAD_DOWN; break;
+               case 'L': m |= DC_DPAD_LEFT; break;
+               case 'R': m |= DC_DPAD_RIGHT; break;
+               }
+            script.push_back({ { a, b }, m });
+            if (*q == ';')
+               q++;
+         }
+      }
+   }
+   if (scripted)
+   {
+      if (port == 0)
+         scriptPoll++;
+      u32 m = 0;
+      for (auto &e : script)
+         if (scriptPoll >= e.first.first && scriptPoll <= e.first.second)
+            m |= e.second;
+      kcode[port] = port == 0 ? ~m : 0xFFFFFFFF;
+      rt[port] = lt[port] = 0;
+      joyx[port] = joyy[port] = joyrx[port] = joyry[port] = 0;
+      static u32 lastLog;
+      if (port == 0 && m != 0 && scriptPoll - lastLog >= 30)
+      {
+         lastLog = scriptPoll;
+         fprintf(stderr, "input script: leitura %u teclas %03x\n", scriptPoll, m);
       }
       return;
    }

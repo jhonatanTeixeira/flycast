@@ -3464,3 +3464,11 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   DOA2 e Shenmue 1 ok. `cold.sh` no device aceita `CORE=` para testar outro `.so`.
 - O tier2 ficou desligado no `retrorun.cfg` do device durante a investigação e foi religado
   com o core novo instalado.
+- Ferramentas novas, só ligam com a variável de ambiente:
+  - `FC_INPUT_SCRIPT="a-b:TECLAS;..."`: roteiro de botões do controle 1, contado em leituras
+    do controle.
+  - `FC_CTRL_PORT=5555` (`core/libretro/ctrl_socket.cpp` + `tools/fc_ctrl.py`): socket TCP
+    com `shot` (PNG da tela, lido no fim do quadro do render), `press/hold/release/stick/wait/status`.
+    Os botões do socket somam com o controle de verdade. Validado no Grandia II (fotos da tela de título).
+- O `/` do device encheu (64 KB livres). Cores de teste antigos movidos para
+  `/roms2/backups/old_test_cores/`.
