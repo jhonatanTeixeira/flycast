@@ -3451,3 +3451,16 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   janela"). Novo `RETRORUN_BENCHMARK_ALLOW_HOTKEYS=1` no fork (commit seguinte ao
   `2703a59`), ligado no `rr_capture.sh`. `retrorun3` reinstalado (md5 `9ba774d0`,
   backup `retrorun3.bak-pre-hotkeys`).
+
+## 2026-10-02 — lote DC: Grandia II e Macross M3 bootam com tier2
+
+- Cold boot com tier2 desligado: Grandia II chega no PRESS START e Macross M3 passa da BIOS.
+  Os dois crashes eram do tier2.
+- 4.108: bail por MMIO agora é preciso (emula o acesso, sai na próxima fronteira de bloco).
+  Resolveu o Grandia.
+- 4.109: a saída de região gravava lixo no T quando a região não usava o T (achado por
+  bisseção com `FC_TIER2_MAXREG`, região reta `8C1D4224`). Resolveu o Macross.
+- Cold boot com o core novo e tier2 ligado: Grandia (PRESS START), Macross (tela do jogo),
+  DOA2 e Shenmue 1 ok. `cold.sh` no device aceita `CORE=` para testar outro `.so`.
+- O tier2 ficou desligado no `retrorun.cfg` do device durante a investigação e foi religado
+  com o core novo instalado.
