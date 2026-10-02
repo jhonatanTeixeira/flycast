@@ -3389,3 +3389,10 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   `GL_ALPHA` (o `GL_R8` custava ~4× neste driver). MvC2 DC: imagem idêntica pixel
   a pixel, `Process` 4,98 → 4,55 ms. `FC_FB_DUMP` agora conta a partir da carga do
   savestate (comparação determinística). Opt-in até a bateria Naomi (4.103).
+
+## 2026-10-02 — contadores de sincronização (fase 1)
+
+- `FC_SYNC_STATS` / `FC_SYNC_PAGES`. MvC2 DC e MBAA: 35-42% dos frames do jogo são
+  descartados (a main ainda ocupada com o anterior) — é isso que tira a suavidade;
+  o wait curto custa 2,5-4 ms/frame à emu, quase tudo esperando a main pegar o frame;
+  ~10 páginas de VRAM escritas por frame no MvC2, ~0 no MBAA (4.104).
