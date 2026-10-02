@@ -3444,3 +3444,10 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   desligado no `retrorun.cfg` por alguns minutos, corrigido, core oficial atualizado
   (`f9435643`, backup `flycast2026_libretro.so.bak-pre-bailfix-2026-10-02` no
   `/roms2/backups`), tier2 religado. Cold boot do Napple ok (40 s, sem erro).
+
+- **Teclas do retrorun na captura (2026-10-02):** o usuário notou que Select+L1/R1
+  (carregar/salvar savestate) pararam. Causa: o modo benchmark do retrorun zera, a
+  cada frame, os pedidos de savestate/pausa/menu/avanço rápido ("o benchmark é dono da
+  janela"). Novo `RETRORUN_BENCHMARK_ALLOW_HOTKEYS=1` no fork (commit seguinte ao
+  `2703a59`), ligado no `rr_capture.sh`. `retrorun3` reinstalado (md5 `9ba774d0`,
+  backup `retrorun3.bak-pre-hotkeys`).
