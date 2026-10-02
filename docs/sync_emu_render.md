@@ -950,3 +950,21 @@ página saiu em `ea0414f3c`, sem registro) — fazer junto do commit deste docum
   nada). **Fase 3 refeita:** (1) retrorun: em FIFO, bloquear o `video_cb` só com 2
   frames pendentes no apresentador (triple buffering); (2) core: sem frame novo,
   esperar com prazo curto em vez de girar.
+- **Fase 3 (2026-10-02): espera com prazo na main + fila de 2 no retrorun.**
+  Medido por trecho dentro do retrorun (`RETRORUN_PRESENT_TIMING=1`): os ~13 ms do
+  `video_cb` são todos no `submit` (fila do apresentador cheia; begin_frame +
+  composição < 1 ms). Causa: o core devolvia frame repetido quando não havia novo, o
+  retrorun reapresentava o repetido, e os repetidos mantinham a fila cheia — cada
+  `retro_run()` esperava um vblank enquanto o jogo produzia frames que eram
+  descartados. **Core:** sem frame pronto, a main espera o próximo até um prazo
+  (`FC_FRAME_WAIT_MS`, padrão 20; 0 = antigo), acordada pelo `rs.Set` do `QueueRender`.
+  **retrorun (fork, branch `threaded-present`):** `RETRORUN_PRESENT_DEPTH=2` (3
+  texturas, até 2 quadros pendentes; padrão 1 = como antes). Medido (savestate,
+  config de jogo, contra a base): MBAA novos/s 39,2 → 41,0, descartes 33% → 30%,
+  intervalo entre frames novos p95 **50 → 33 ms** (sumiram os buracos de 3 frames);
+  MvC2 novos/s 34,2 → 38,9, descartes 42% → 34%, `video_cb` 5,6 → 3,8 ms (cauda de
+  frame ativo p95 18,2 → 28,2 ms). **Usuário: MBAA e MvC2 "já muito bons".**
+  Não medido ainda: a correção do sinal velho do `rs` (a espera passou a ir até um
+  prazo; antes um sinal sobrando fazia o Wait voltar na hora e gerar repetido) e a
+  regra de descarte "render ocupado após liberação antecipada" (ainda ~90% dos
+  descartes).
