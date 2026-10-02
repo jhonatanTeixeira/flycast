@@ -88,9 +88,31 @@ def main():
     ap.add_argument('--window', nargs=2, type=float)
     ap.add_argument('--at')
     ap.add_argument('--span', type=float, default=10.0)
+    ap.add_argument('--log', help='live.log do retrorun (regioes do tier2, em ordem de emissao)')
+    ap.add_argument('--tcb-off', default='0x3a2568', help='offset do simbolo SH4_TCB no .so (nm)')
     a = ap.parse_args()
 
     blocks, clock = parse_dump(a.dump)
+    so_base = None
+    with open(a.dump, errors='replace') as f:
+        for line in f:
+            if line.startswith('M so_base'):
+                so_base = int(line.split()[2], 16)
+                break
+    # layout do cache (blockmanager.h / driver.cpp / tier2.cpp): SH4_TCB alinhado a
+    # 4 KB; [0, 14 MB) blocos; [14, 15 MB) tier2 (T2_AREA = 1 MB); [15, 16 MB) temp
+    CODE_SIZE, T2_AREA = 15 << 20, 1 << 20
+    cc = ((so_base + int(a.tcb_off, 16) + 4095) & ~4095) if so_base else None
+    regions = []    # (inicio, fim, id, blocos) dentro da area do tier2
+    if a.log and cc:
+        pos = cc + CODE_SIZE - T2_AREA
+        rx = re.compile(r'regiao #(\d+): .*?, (\d+) bytes.*blocos: (.*)$')
+        for line in open(a.log, errors='replace'):
+            m = rx.search(line)
+            if m:
+                size = int(m.group(2))
+                regions.append((pos, pos + size, int(m.group(1)), m.group(3).split()[:6]))
+                pos += size
     res = Resolver(blocks)
 
     rows = []
@@ -135,11 +157,25 @@ def main():
     by_sym = collections.Counter()
     info = {}
     unresolved = 0
+    unres_kind = collections.Counter()
     for tid, ts, ip, sym in emu_rows:
         if sym.startswith('SH4_TCB'):
             b = res.find(ip, ts)
             if b is None:
                 unresolved += 1
+                if cc:
+                    off = ip - cc
+                    if CODE_SIZE - T2_AREA <= off < CODE_SIZE:
+                        tag = 'tier2 (area)'
+                        for r0, r1, rid, rb in regions:
+                            if r0 <= ip < r1:
+                                tag = 'tier2 regiao #%d (%s)' % (rid, ' '.join(rb))
+                                break
+                    elif CODE_SIZE <= off < CODE_SIZE + (1 << 20):
+                        tag = 'cache temporario'
+                    else:
+                        tag = 'stubs/despachante (cache principal, fora de bloco)'
+                    unres_kind[tag] += 1
                 continue
             by_block[b[4]] += 1
             info[b[4]] = b
@@ -152,6 +188,10 @@ def main():
     print('  JIT sem bloco (tier2/stubs)   %5.1f%%' % (100.0 * unresolved / n_emu))
     print('  resto (C++, kernel, libs)     %5.1f%%' % (100.0 * sum(by_sym.values()) / n_emu))
 
+    if unres_kind:
+        print('\n--- JIT sem bloco, por lugar ---')
+        for k, n in unres_kind.most_common(12):
+            print('  %5.2f%%  %s' % (100.0 * n / n_emu, k))
     print('\n--- Blocos mais caros (tempo real, %% da thread de emulacao) ---')
     acc = 0
     for va, n in by_block.most_common(a.top):

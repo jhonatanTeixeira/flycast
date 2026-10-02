@@ -3403,3 +3403,13 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   apresentador cheia de frames repetidos. Core: a main espera o próximo frame até
   20 ms (`FC_FRAME_WAIT_MS`); retrorun: `RETRORUN_PRESENT_DEPTH=2`. MBAA p95 entre
   frames novos 50 → 33 ms; MvC2 34 → 39 novos/s. Usuário: "já muito bons" (4.105).
+
+## 2026-10-02 — DC: base dos 4 jogos e o emissor de strips do Napple em nativo
+
+- Base com dumper leve + perf + contadores (Napple, DOA2, Shenmue, Shenmue II): o
+  laço de vértices → SQ domina nos quatro (DOA2: região tier2 #1 = 14% da emu;
+  Shenmue II: 7,5%); som (controle AICA + ARM7) 12-15% nos Shenmue; render pesado
+  no DC (DOA2 descarta 42% dos frames de 60; Shenmue II render 24 ms).
+  `jit_lite_report.py` agora separa regiões do tier2 e stubs.
+- Emissor de strips do Napple (8C14D440) em nativo: idêntico (402 frames com hash
+  completo), VEL 77 → 87%, fps 23,1 → 26,1 (4.106).

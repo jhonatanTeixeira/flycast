@@ -582,26 +582,385 @@ out:
 #undef BAIL
 }
 
+// ---------------------------------------------------------------------------
+// stripemit: emissor de strips de triangulo para o TA (Napple Tale, 8C14D440;
+// consome os registros de 32 bytes que a lightxf grava). Por strip: cabecalho
+// (contagem; negativo = tipo invertido), indice do 1o vertice; por vertice: u,v
+// (int16 -> float * escala), indice do proximo, 2 rajadas de 32 bytes na SQ
+// (PCW+xyz+uv, cores). Roda com FPSCR.SZ=1 (fschg): os fmov movem PARES (8
+// bytes). O laco interno (8C14D4F6) e um bloco que volta para si mesmo -- o
+// tier2 recusa "trecho de 1 bloco", entao nunca virava regiao.
+const u16 strip_s0[] = {
+	0x2F86, 0x2F96, 0x2FA6, 0x2FB6, 0x2FC6, 0xD057, 0x6243, 0x7206, 0x0283, 0x6163, 0x2109, 0xE2F2,
+	0x462D, 0xE303, 0xE200, 0x2639, 0xE300, 0xF99D, 0x4600, 0xF591, 0xF691, 0xF791, 0xF3FD, 0xDB4F,
+	0xDC4F, 0x9087, 0x6845, 0x6945, 0x490D, 0x395C, 0x0983, 0x4811, 0x8900, 0x688B, 0x6045, 0x6A45,
+	0x405A, 0x6043, 0xFA2D, 0x7006, 0x4A5A, 0x0083, 0xFB2D, 0x338C, 0xFA82, 0x328C, 0xFB82, 0xF099,
+	0x78FE, 0xF299, 0x7718, 0xF7AB, 0xF72B, 0xF70B, 0x27B2, 0x0783, 0x7720, 0xF099, 0xE005, 0xF299,
+	0x6945, 0xF150, 0x490D, 0xF260, 0x395C, 0xF370, 0x0983, 0x7720, 0xF042, 0xF72B, 0xF390, 0xF70B,
+	0xF290, 0xF72B, 0xF190, 0xF70B, 0x0783, 0x7720, 0x6045, 0x6A45, 0x405A, 0xF099, 0xFA2D, 0xF299,
+	0x4A5A, 0x6043, 0xFB2D, 0x7006, 0xFA82, 0x0083, 0xFB82, 0x7718, 0xF7AB, 0xF72B, 0xF70B, 0x27B2,
+	0x0783, 0x7720, 0xF099, 0xE005, 0xF299, 0x6945, 0xF150, 0x490D, 0xF260, 0x395C, 0xF370, 0x0983,
+	0xF042, 0x7720, 0xF72B, 0xF390, 0xF70B, 0xF290, 0xF72B, 0xF190, 0xF70B, 0x0783, 0x7720, 0x6045,
+	0x4810, 0x6A45, 0x405A, 0x346C, 0xFA2D, 0x6043, 0x4A5A, 0xFB2D, 0x7006, 0xFA82, 0x0083, 0xFB82,
+	0xF099, 0x8FD4, 0xF299, 0x7718, 0xF7AB, 0xF72B, 0xF70B, 0x27C2, 0x0783, 0x7720, 0xF099, 0xF299,
+	0xF150, 0xF260, 0xF370, 0xF042, 0x7720, 0xF72B, 0xF390, 0xF70B, 0xF290, 0x4110, 0xF72B, 0xF190,
+	0xF70B, 0x0783, 0x7720, 0x8902, 0xAF77, 0x0009 };
+const u16 strip_s1[] = {	// 8C14D586 (depois do literal .word em 8C14D584)
+	0xD40B, 0x6073, 0xD50B, 0x6642, 0x6752, 0x362C, 0x373C, 0x2462, 0x2572, 0xF3FD, 0x6CF6, 0x6BF6,
+	0x6AF6, 0x69F6, 0x000B, 0x68F6 };
+const Span strip_sig[] = {
+	{ 0x8C14D440, sizeof(strip_s0) / 2, strip_s0 },
+	{ 0x8C14D586, sizeof(strip_s1) / 2, strip_s1 },
+};
+
+Stats strip_stats;
+
+// shld Rm,Rn do SH4 (deslocamento logico com sinal no Rm)
+inline u32 sh4_shld(u32 rn, u32 rm)
+{
+	const s32 sm = (s32)rm;
+	if (sm >= 0)
+		return rn << (rm & 31);
+	if ((rm & 31) == 0)
+		return 0;
+	return rn >> (((~rm) & 31) + 1);
+}
+
+// entry 0: 8C14D440 (entrada); 1: 8C14D4F6 (laco do vertice); 2: 8C14D472 (cabeca da strip)
+u64 stripemit_run(s32 c, u32 entry)
+{
+	static const u32 lit5A8 = 0x8C14D5A8, lit5AC = 0x8C14D5AC, lit5B0 = 0x8C14D5B0;
+	static const u32 lit584 = 0x8C14D584, lit5B4 = 0x8C14D5B4, lit5B8 = 0x8C14D5B8;
+
+	if (fpscr.PR || fpscr.SZ != (entry == 0 ? 0u : 1u))
+		return 0;
+	// pre-condicoes antes de qualquer efeito
+	if (!is_ram(r[15] - 20) || !is_ram(r[4]) || !is_ram(r[5]) || (r[7] >> 26) != 0x38)
+		return 0;
+	if (entry == 0 && (r[6] & rd32(lit5A8)) == 0)
+		return 0;		// nenhuma strip: deixa o JIT (caso raro)
+	strip_stats.calls++;
+
+	const float clk = g_lutSh4Clock > 0.f ? g_lutSh4Clock : settings.dreamcast.sh4clock;
+	auto cyc = [clk](u32 n) -> s32 { u32 v = n; v = v * clk; return (s32)std::max(1u, v); };
+	const s32 C_472 = cyc(8), C_482 = cyc(52), C_484 = cyc(51), C_4F6 = cyc(22), C_54E = cyc(9),
+			C_580 = cyc(2), C_586 = cyc(15);
+
+	const u8 *ram = mem_b.data;
+	const u32 ramMask = RAM_MASK;
+	u8 *sq = (u8 *)p_sh4rcb->sq_buffer;
+#define RD32(a) ({ u32 v_; memcpy(&v_, ram + ((a) & ramMask), 4); v_; })
+#define RDF(a) ({ f32 v_; memcpy(&v_, ram + ((a) & ramMask), 4); v_; })
+#define RD16S(a) ({ s16 v_; memcpy(&v_, ram + ((a) & ramMask), 2); (u32)(s32)v_; })
+#define SQW32(a, v) do { u32 v_ = (v); memcpy(sq + ((a) & 0x3C), &v_, 4); } while (0)
+#define SQWF(a, f) SQW32(a, f2u(f))
+	// fmov DRm,@-Rn (SZ=1): Rn -= 8; [Rn] = FRm; [Rn+4] = FRm+1
+#define SQPAIR(lo, hi) do { r7 -= 8; SQWF(r7, lo); SQWF(r7 + 4, hi); } while (0)
+	// fmov @Rm+,DRn (SZ=1): FRn = [Rm]; FRn+1 = [Rm+4]; Rm += 8
+#define LDPAIR(lo, hi) do { lo = RDF(r9); hi = RDF(r9 + 4); r9 += 8; } while (0)
+#define FLUSHSQ(a) do { \
+		sqw_fp *fn_ = do_sqw_nommu; \
+		if ((void *)fn_ == ta_sq_stub) fn_ = (sqw_fp *)&TAWriteSQ; \
+		fn_((a), sq); \
+	} while (0)
+
+	u32 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r15, fpulv, T, jd, szbit;
+	f32 f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11;
+	u32 next = 0;
+	bool cond;
+#define RELOAD() do { \
+		r0 = r[0]; r1 = r[1]; r2 = r[2]; r3 = r[3]; r4 = r[4]; r5 = r[5]; r6 = r[6]; r7 = r[7]; \
+		r8 = r[8]; r9 = r[9]; r10 = r[10]; r11 = r[11]; r12 = r[12]; r15 = r[15]; \
+		f0 = fr[0]; f1 = fr[1]; f2 = fr[2]; f3 = fr[3]; f4 = fr[4]; f5 = fr[5]; f6 = fr[6]; f7 = fr[7]; \
+		f8 = fr[8]; f9 = fr[9]; f10 = fr[10]; f11 = fr[11]; \
+		fpulv = fpul; T = sr.T; jd = Sh4cntx.jdyn; szbit = fpscr.SZ; \
+	} while (0)
+#define FLUSH() do { \
+		r[0] = r0; r[1] = r1; r[2] = r2; r[3] = r3; r[4] = r4; r[5] = r5; r[6] = r6; r[7] = r7; \
+		r[8] = r8; r[9] = r9; r[10] = r10; r[11] = r11; r[12] = r12; r[15] = r15; \
+		fr[0] = f0; fr[1] = f1; fr[2] = f2; fr[3] = f3; fr[4] = f4; fr[5] = f5; fr[6] = f6; fr[7] = f7; \
+		fr[8] = f8; fr[9] = f9; fr[10] = f10; fr[11] = f11; \
+		fpul = fpulv; sr.T = T; Sh4cntx.jdyn = jd; fpscr.SZ = szbit; \
+	} while (0)
+#define ENTER(addr, C) do { \
+		c -= (C); \
+		if (__builtin_expect(c < 0, 0)) \
+		{ \
+			c += sh4_sched_timeslice; \
+			FLUSH(); \
+			t2_last_pc = 0; \
+			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
+			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
+			RELOAD(); \
+		} \
+	} while (0)
+
+	RELOAD();
+	if (entry == 1)
+		goto loopbody;
+	if (entry == 2)
+		goto head;
+
+	// ---- 8C14D440 (ciclos do bloco ja descontados pelo JIT): prologo + 1a cabeca
+	r15 -= 4; WriteMem32(r15, r8);
+	r15 -= 4; WriteMem32(r15, r9);
+	r15 -= 4; WriteMem32(r15, r10);
+	r15 -= 4; WriteMem32(r15, r11);
+	r15 -= 4; WriteMem32(r15, r12);
+	r0 = RD32(lit5A8);
+	r2 = r4;
+	r2 += 6;
+	r1 = r6;
+	r1 &= r0;
+	r2 = 0xFFFFFFF2;
+	r6 = sh4_shld(r6, r2);
+	r3 = 3;
+	r2 = 0;
+	r6 &= r3;
+	r3 = 0;
+	f9 = 1.f;
+	T = r6 >> 31; r6 <<= 1;		// shll
+	f5 = f5 - f9;
+	f6 = f6 - f9;
+	f7 = f7 - f9;
+	szbit ^= 1;					// fschg
+	r11 = RD32(lit5AC);
+	r12 = RD32(lit5B0);
+	goto head_body;
+
+head:	// ---- 8C14D472: cabeca da strip
+	ENTER(0x8C14D472, C_472);
+head_body:
+	r0 = RD16S(lit584);
+	r8 = RD16S(r4); r4 += 2;
+	r9 = RD16S(r4); r4 += 2;
+	r9 = sh4_shld(r9, r0);
+	r9 += r5;
+	T = (s32)r8 >= 0;			// cmp/pz
+	cond = T; jd = T;
+	if (cond)
+		goto b484;
+	// ---- 8C14D482: neg + corpo do 8C14D484 (mesmo bloco)
+	ENTER(0x8C14D482, C_482);
+	r8 = 0 - r8;
+	goto body484;
+b484:
+	ENTER(0x8C14D484, C_484);
+body484:
+	r0 = RD16S(r4); r4 += 2;
+	r10 = RD16S(r4); r4 += 2;
+	fpulv = r0;
+	r0 = r4;
+	f10 = (f32)(s32)fpulv;
+	r0 += 6;
+	fpulv = r10;
+	f11 = (f32)(s32)fpulv;
+	r3 += r8;
+	f10 = f10 * f8;
+	r2 += r8;
+	f11 = f11 * f8;
+	LDPAIR(f0, f1);
+	r8 += 0xFFFFFFFE;
+	LDPAIR(f2, f3);
+	r7 += 24;
+	SQPAIR(f10, f11);
+	SQPAIR(f2, f3);
+	SQPAIR(f0, f1);
+	SQW32(r7, r11);
+	FLUSHSQ(r7);
+	r7 += 32;
+	LDPAIR(f0, f1);
+	r0 = 5;
+	LDPAIR(f2, f3);
+	r9 = RD16S(r4); r4 += 2;
+	f1 = f1 + f5;
+	r9 = sh4_shld(r9, r0);
+	f2 = f2 + f6;
+	r9 += r5;
+	f3 = f3 + f7;
+	r7 += 32;
+	f0 = f0 * f4;
+	SQPAIR(f2, f3);
+	f3 = f3 + f9;
+	SQPAIR(f0, f1);
+	f2 = f2 + f9;
+	SQPAIR(f2, f3);
+	f1 = f1 + f9;
+	SQPAIR(f0, f1);
+	FLUSHSQ(r7);
+	r7 += 32;
+	r0 = RD16S(r4); r4 += 2;
+	r10 = RD16S(r4); r4 += 2;
+	fpulv = r0;
+	LDPAIR(f0, f1);
+	f10 = (f32)(s32)fpulv;
+	LDPAIR(f2, f3);
+	fpulv = r10;
+	r0 = r4;
+	f11 = (f32)(s32)fpulv;
+	r0 += 6;
+	f10 = f10 * f8;
+	f11 = f11 * f8;
+	goto loopbody;
+
+loop:	// ---- 8C14D4F6: um vertice por volta
+	ENTER(0x8C14D4F6, C_4F6);
+loopbody:
+	r7 += 24;
+	SQPAIR(f10, f11);
+	SQPAIR(f2, f3);
+	SQPAIR(f0, f1);
+	SQW32(r7, r11);
+	FLUSHSQ(r7);
+	r7 += 32;
+	LDPAIR(f0, f1);
+	r0 = 5;
+	LDPAIR(f2, f3);
+	r9 = RD16S(r4); r4 += 2;
+	f1 = f1 + f5;
+	r9 = sh4_shld(r9, r0);
+	f2 = f2 + f6;
+	r9 += r5;
+	f3 = f3 + f7;
+	f0 = f0 * f4;
+	r7 += 32;
+	SQPAIR(f2, f3);
+	f3 = f3 + f9;
+	SQPAIR(f0, f1);
+	f2 = f2 + f9;
+	SQPAIR(f2, f3);
+	f1 = f1 + f9;
+	SQPAIR(f0, f1);
+	FLUSHSQ(r7);
+	r7 += 32;
+	r0 = RD16S(r4); r4 += 2;
+	r8--; T = r8 == 0;			// dt
+	r10 = RD16S(r4); r4 += 2;
+	fpulv = r0;
+	r4 += r6;
+	f10 = (f32)(s32)fpulv;
+	r0 = r4;
+	fpulv = r10;
+	f11 = (f32)(s32)fpulv;
+	r0 += 6;
+	f10 = f10 * f8;
+	f11 = f11 * f8;
+	LDPAIR(f0, f1);
+	cond = !T; jd = T;
+	LDPAIR(f2, f3);				// slot do bf.s
+	if (cond)
+		goto loop;
+
+	// ---- 8C14D54E: ultimo vertice da strip (PCW de fim, r12)
+	ENTER(0x8C14D54E, C_54E);
+	r7 += 24;
+	SQPAIR(f10, f11);
+	SQPAIR(f2, f3);
+	SQPAIR(f0, f1);
+	SQW32(r7, r12);
+	FLUSHSQ(r7);
+	r7 += 32;
+	LDPAIR(f0, f1);
+	LDPAIR(f2, f3);
+	f1 = f1 + f5;
+	f2 = f2 + f6;
+	f3 = f3 + f7;
+	f0 = f0 * f4;
+	r7 += 32;
+	SQPAIR(f2, f3);
+	f3 = f3 + f9;
+	SQPAIR(f0, f1);
+	f2 = f2 + f9;
+	r1--; T = r1 == 0;			// dt r1
+	SQPAIR(f2, f3);
+	f1 = f1 + f9;
+	SQPAIR(f0, f1);
+	FLUSHSQ(r7);
+	r7 += 32;
+	cond = T; jd = T;
+	if (cond)
+		goto exit_;
+	// ---- 8C14D580: bra 8C14D472; nop
+	ENTER(0x8C14D580, C_580);
+	goto head;
+
+exit_:	// ---- 8C14D586: contadores + epilogo + rts
+	ENTER(0x8C14D586, C_586);
+	r4 = RD32(lit5B4);
+	r0 = r7;
+	r5 = RD32(lit5B8);
+	r6 = ReadMem32(r4);
+	r7 = ReadMem32(r5);
+	r6 += r2;
+	r7 += r3;
+	WriteMem32(r4, r6);
+	WriteMem32(r5, r7);
+	szbit ^= 1;					// fschg
+	r12 = ReadMem32(r15); r15 += 4;
+	r11 = ReadMem32(r15); r15 += 4;
+	r10 = ReadMem32(r15); r15 += 4;
+	r9 = ReadMem32(r15); r15 += 4;
+	jd = pr;
+	next = pr;
+	r8 = ReadMem32(r15); r15 += 4;	// slot do rts
+	FLUSH();
+	next_pc = next;
+	return (1ull << 32) | (u32)c;
+out:
+	next_pc = next;
+	return (1ull << 32) | (u32)c;
+#undef RD32
+#undef RDF
+#undef RD16S
+#undef SQW32
+#undef SQWF
+#undef SQPAIR
+#undef LDPAIR
+#undef FLUSHSQ
+#undef RELOAD
+#undef FLUSH
+#undef ENTER
+}
+
 } // namespace
 
 // Chamado pelo JIT na compilacao do bloco: esta funcao e conhecida aqui?
 bool hle_fn_lookup(u32 vaddr, u32 *id)
 {
-	if (!hleEnabled() || (vaddr != 0x8C14DDC0 && vaddr != 0x8C14DDD6))
+	if (!hleEnabled())
 		return false;
-	if (!spans_match(lightxf_sig, sizeof(lightxf_sig) / sizeof(lightxf_sig[0])))
-		return false;
-	*id = vaddr == 0x8C14DDC0 ? 0 : 1;
-	static bool logged;
-	if (!logged)
-		fprintf(stderr, "hle: lightxf (8C14DDC0) instalada\n");
-	logged = true;
-	return true;
+	// id = (funcao << 8) | entrada
+	struct Entry { u32 vaddr, id; const Span *sig; size_t n; const char *name; };
+	static const Entry entries[] = {
+		{ 0x8C14DDC0, 0x000, lightxf_sig, sizeof(lightxf_sig) / sizeof(lightxf_sig[0]), "lightxf (8C14DDC0)" },
+		{ 0x8C14DDD6, 0x001, lightxf_sig, sizeof(lightxf_sig) / sizeof(lightxf_sig[0]), "lightxf (8C14DDC0)" },
+		{ 0x8C14D440, 0x100, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
+		{ 0x8C14D4F6, 0x101, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
+		{ 0x8C14D472, 0x102, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
+	};
+	for (const Entry &e : entries)
+	{
+		if (e.vaddr != vaddr || !spans_match(e.sig, e.n))
+			continue;
+		static u32 loggedMask;
+		const u32 bit = 1u << (e.id >> 8);
+		if (!(loggedMask & bit))
+			fprintf(stderr, "hle: %s instalada\n", e.name);
+		loggedMask |= bit;
+		*id = e.id;
+		return true;
+	}
+	return false;
 }
 
 // Retorno: bit 32 = tratou (w27 = 32 bits baixos, next_pc no contexto);
 // 0 = nao tratou, o bloco do JIT segue normalmente.
 extern "C" u64 hle_fn_run(s32 cycles, u32 id)
 {
-	return lightxf_run(cycles, id);
+	switch (id >> 8)
+	{
+	case 0: return lightxf_run(cycles, id & 0xFF);
+	case 1: return stripemit_run(cycles, id & 0xFF);
+	default: return 0;
+	}
 }
