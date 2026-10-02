@@ -3102,6 +3102,7 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Conclusão:** nenhuma das duas "regressões" citadas é regressão de código.
   O único custo real do no-wait (o `re.Wait` cego) foi **eliminado** no 4.87
   (wait por página). **Napple Tale 30→60 fps** foi ganho real do no-wait.
+  **[CORRIGIDO 2026-10-01, ver 4.97: era 30 novos + 30 duplicados cadenciados pelo vsync, não ganho real.]**
 
 ## 2026-09-28 — bateria Naomi cold boot: inspeção visual um-a-um + início do ataque aos que não bootam
 
@@ -3337,3 +3338,11 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   JSONs e logs A/B); tentativas anteriores em `/roms2/jitdump_napple*/`.
 - **Achado de método:** os benchmarks da skill rodavam sem `THREADED_PRESENT`/`VSYNC`
   — diferente do ES; com eles o laço do frontend gira quando não há frame novo.
+- **Correção (mesmo dia, após feedback do usuário):** a 1ª leitura culpava o
+  contador do retrorun; errado. O contador sempre contou voltas e batia com o fps
+  porque o `rs.Wait` segurava o laço. Desde o no-wait (2026-09-27) o core devolve
+  duplicado sem esperar: em FIFO (≥95%) o vsync cadencia a 60 (= 30 novos + 30 dup,
+  o "30→60" de 09-27 não era ganho), em mailbox (<95%) o laço gira a 300+.
+  Rodada C `FC_EMU_WAIT=1`: 24,2 fps, 0 dup, VEL 80,9% (A: 74,8%) — o giro custa ~6
+  pts; a cena segue <100% mesmo com a espera. Som grave = reamostragem do retrorun
+  (fork, `daf93bc`, 2026-09-24, `RETRORUN_AUDIO_RATE_CONTROL`). Detalhes em 4.97/4.98.
