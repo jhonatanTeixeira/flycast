@@ -3413,3 +3413,20 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   `jit_lite_report.py` agora separa regiões do tier2 e stubs.
 - Emissor de strips do Napple (8C14D440) em nativo: idêntico (402 frames com hash
   completo), VEL 77 → 87%, fps 23,1 → 26,1 (4.106).
+
+## 2026-10-02 — instalado como oficial no device
+
+- `flycast2026_libretro.so` = core `037a942b` (tier2 no DC, funções nativas `lightxf`
+  e emissor de strips do Napple, espera com prazo na main, contadores opt-in, Morton
+  opt-in). Backup do anterior (`4c46a0ca`): `/roms2/backups/flycast2026_libretro.so.bak-pre-hle-2026-10-02`
+  (no `/roms2` porque o `/` tinha 91 MB livres).
+- `/usr/local/bin/retrorun3` = fork `2703a59` (`RETRORUN_PRESENT_DEPTH`), md5
+  `5ff0b8a0`. Backup: `retrorun3.bak-pre-depth`.
+- `dreamcast.sh`, `naomi.sh`, `atomiswave.sh`: `RETRORUN_PRESENT_DEPTH=2` na linha do
+  `retrorun3` (backups `*.sh.bak-pre-depth`).
+- Fumaça com os binários oficiais (Napple, savestate): fila 2 ativa, handover do
+  tier2, as duas funções nativas instaladas, VEL 88,5% / 26,5 fps.
+- Build do retrorun (cross, sysroot em `/tmp/opencode/rsysroot`):
+  `make -C build/linux-sdl config=release CXX=aarch64-linux-gnu-g++-13 SDL_CFLAGS="-I$R/include/SDL2 -I$R/include/aarch64-linux-gnu/SDL2 -I$R/include/aarch64-linux-gnu -D_REENTRANT" SDL_LIBS="-L$R/lib -Wl,-rpath-link,$R/lib -Wl,--allow-shlib-undefined -lSDL2" PNG_CFLAGS="-I$R/include/libpng16" PNG_LIBS="-lpng16" GLES_CFLAGS="-I$R/include" GLES_LIBS="-lEGL -lGLESv2"`
+  (`R=/tmp/opencode/rsysroot`; o `--allow-shlib-undefined` cobre as dependências
+  indiretas da libcurl/SDL2 que não estão no sysroot).
