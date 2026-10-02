@@ -3364,3 +3364,21 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   20,3 → 21,6 fps). Core de teste: `/home/ark/flycast_hle.so` (md5 `1e9c212a`).
 - **Device:** limpeza do cache de build-id do perf (`~/.debug`, builds superados de
   hoje) — o `/` tinha chegado a 39 MB livres.
+
+## 2026-10-02 — experimento: a lightxf na GPU (só pra medir)
+
+- Compute shader GLES 3.1 na Mali, chamada da thread de emulação a cada chamada
+  da função (envia → dispatch → espera → lê). GPU ~590 µs/chamada × CPU nativa
+  42 µs/chamada; VEL 80,8% → 22,2% (6,6 fps), underruns 6 → 183; resultado ≠ CPU
+  em 26% dos vértices. Confirma: GPU só para o que vai direto pra tela (4.102).
+
+## 2026-10-02 — mecanismo de sincronização emu ↔ render documentado
+
+- `docs/sync_emu_render.md` (agente + rodada de planejamento com o usuário): mapa
+  das esperas (`rs`/`re`/`frame_finished`), linha do tempo, as duas corridas na
+  VRAM, os furos da paleta, o giro da main thread, comparação com o upstream e o
+  plano em 4 fases (seção 9).
+- Achados: o wait por página (4.87) saiu em `ea0414f3c` sem registro (hoje é o wait
+  curto); o Morton na GPU faz trabalho em dobro (CPU converte e descarta) e está
+  desligado; o glitch do no-wait era só nos personagens 2D (sprites reescritos a
+  cada frame), não no cenário 3D.
