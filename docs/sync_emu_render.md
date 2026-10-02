@@ -907,3 +907,27 @@ página saiu em `ea0414f3c`, sem registro) — fazer junto do commit deste docum
 - Falta da fase 1: os contadores de sincronização (wait curto dividido, frames
   novos/s, descarte por motivo, páginas escritas por época) e a bateria Naomi com
   o Morton ligado antes de virar padrão.
+- **Fase 1, contadores (2026-10-02): feito.** `FC_SYNC_STATS=1` (latência fila→main,
+  `Process` até o `re.Set`, wait curto da emu, intervalo entre frames novos,
+  descartes por motivo) e `FC_SYNC_PAGES=1` (diagnóstico: protege a VRAM inteira por
+  época e conta as páginas distintas escritas). Primeira medição (savestate, config
+  de jogo, com `FC_SYNC_PAGES` ligado):
+
+  | | MvC2 DC | MBAA Naomi |
+  |---|---|---|
+  | frames do jogo / novos apresentados | ~61/s / 35,6/s | ~59/s / 38,2/s |
+  | descartados | 640/1535 (42%; 575 "render ocupado após liberação antecipada") | 519/1481 (35%; 484 idem) |
+  | intervalo entre frames novos p50/p95 | 33,1 / 50,1 ms | 16,8 / 50,0 ms |
+  | latência fila→main (média/p95) | 7,8 / 15,9 ms | 8,3 / 14,4 ms |
+  | `Process` (média/p95) | 4,8 / 8,5 ms | 0,65 / 1,7 ms |
+  | wait curto da emu (média/p95) | 4,1 / 12,3 ms/frame | 2,5 / 7,9 ms/frame |
+  | páginas de VRAM escritas por época (média/p99) | 9,5 / 24 (com textura 3,2) | 0,3 / 16 (com textura ~0) |
+
+  **Leitura:** (1) a perda de suavidade é **descarte de frames** (35-42%, cadência
+  16/33/50 ms), não atraso de invalidação — a main ainda está ocupada com o frame
+  anterior quando o próximo chega; (2) o wait curto custa 2,5-4 ms/frame à emu e é
+  majoritariamente **latência de coleta** (a main ocupada), não `Process` — no MBAA o
+  `Process` é 0,65 ms e a VRAM quase não é escrita; (3) a cópia por época da fase 4 é
+  barata (~10 páginas ≈ 40 KB/frame no MvC2). Hipótese a medir: o ciclo da main
+  (`Process` + `Render` ~7-11 ms + a espera do `video_cb` pelo apresentador FIFO do
+  retrorun) passa de 16,7 ms.

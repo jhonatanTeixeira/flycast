@@ -1,4 +1,8 @@
 #include "Renderer_if.h"
+#include <mutex>
+#include <atomic>
+#include <vector>
+#include <algorithm>
 #include <dlfcn.h>
 #include <atomic>
 #include <chrono>	// FC_REND_SPLIT timing below
@@ -361,6 +365,142 @@ static void rend_fix_overrun_ptrs(rend_context& r)
 	r.render_passes.overrun = &r.Overrun;
 }
 
+// FC_SYNC_STATS=1 (docs/sync_emu_render.md secoes 7 e 9.2, fase 1): mede a
+// sincronizacao emu <-> render por frame, sem mudar o comportamento:
+//   latency  = QueueRender(N) [emu] -> a main pegar o frame N (DequeueRender)
+//   process  = main pegou N -> re.Set (fim do Process: ultima leitura de VRAM)
+//   emuwait  = tempo da emu parada no re.Wait (wait curto)
+//   newframe = intervalo entre frames NOVOS apresentados (retro_run)
+// FC_SYNC_PAGES=1 (diagnostico, muda o custo): protege a VRAM inteira na
+// abertura de cada epoca (QueueRender(N) .. a emu sair do re.Wait de N) e conta
+// as paginas distintas escritas nela -- dimensiona a copia por epoca (fase 4).
+// Despejo a cada ~150 retro_run em /tmp/sync-stats-<pid>.txt.
+int g_syncStats = -1;
+int g_syncPages = -1;
+static std::mutex g_syncMtx;
+static std::vector<u32> g_syncLat, g_syncProc, g_syncEmuWait, g_syncNewInt, g_syncPagesW, g_syncPagesTex;
+static std::atomic<u64> g_syncQueueUs{0};
+static std::atomic<u32> g_syncSeq{0};
+static u32 g_syncSeqSeen;		// main thread
+static u64 g_syncDequeueUs;		// main thread
+static u64 g_syncLastNewUs, g_syncT0;	// main thread
+static u32 g_syncNewFrames;		// main thread
+bool g_syncPagesArmed;			// emu thread (lido no fault, que roda na emu)
+u32 g_syncPagesCount, g_syncPagesTexCount;	// emu thread
+u8 g_syncPageSeen[8 * 1024 * 1024 / 4096];
+
+static bool sync_stats_on()
+{
+	if (g_syncStats < 0)
+	{
+		g_syncStats = getenv("FC_SYNC_STATS") != nullptr ? 1 : 0;
+		g_syncPages = g_syncStats && getenv("FC_SYNC_PAGES") != nullptr ? 1 : 0;
+	}
+	return g_syncStats == 1;
+}
+static void sync_add(std::vector<u32>& v, u64 x)
+{
+	std::lock_guard<std::mutex> lk(g_syncMtx);
+	if (v.size() < (1u << 20))
+		v.push_back((u32)std::min<u64>(x, 0xFFFFFFFFu));
+}
+// emu thread, QueueRender(N) com sucesso
+static void sync_frame_queued()
+{
+	g_syncQueueUs.store(rend_now_us(), std::memory_order_relaxed);
+	g_syncSeq.fetch_add(1, std::memory_order_release);
+	if (g_syncPages == 1)
+	{
+		memset(g_syncPageSeen, 0, sizeof(g_syncPageSeen));
+		g_syncPagesCount = g_syncPagesTexCount = 0;
+		g_syncPagesArmed = true;
+		extern void _vmem_protect_vram(u32 addr, u32 size);
+		_vmem_protect_vram(0, VRAM_SIZE);
+	}
+}
+// main thread, pegou um frame da fila
+static void sync_frame_dequeued()
+{
+	u32 seq = g_syncSeq.load(std::memory_order_acquire);
+	if (seq == g_syncSeqSeen)
+		return;
+	g_syncSeqSeen = seq;
+	g_syncDequeueUs = rend_now_us();
+	u64 q = g_syncQueueUs.load(std::memory_order_relaxed);
+	if (q != 0 && g_syncDequeueUs >= q)
+		sync_add(g_syncLat, g_syncDequeueUs - q);
+}
+// main thread, re.Set (fim do Process)
+static void sync_process_done()
+{
+	if (g_syncDequeueUs != 0)
+		sync_add(g_syncProc, rend_now_us() - g_syncDequeueUs);
+}
+// emu thread, saiu do re.Wait de N (fecha a epoca)
+static void sync_epoch_closed(u64 waitUs)
+{
+	sync_add(g_syncEmuWait, waitUs);
+	if (g_syncPagesArmed)
+	{
+		g_syncPagesArmed = false;
+		sync_add(g_syncPagesW, g_syncPagesCount);
+		sync_add(g_syncPagesTex, g_syncPagesTexCount);
+	}
+}
+// main thread, retro_run apresentou um frame novo
+void sync_new_frame_presented()
+{
+	if (!sync_stats_on())
+		return;
+	u64 now = rend_now_us();
+	if (g_syncT0 == 0)
+		g_syncT0 = now;
+	if (g_syncLastNewUs != 0)
+		sync_add(g_syncNewInt, now - g_syncLastNewUs);
+	g_syncLastNewUs = now;
+	g_syncNewFrames++;
+}
+static void sync_dist(FILE *f, const char *name, std::vector<u32> v, double scale, const char *unit)
+{
+	if (v.empty())
+	{
+		fprintf(f, "%s\tn=0\n", name);
+		return;
+	}
+	std::sort(v.begin(), v.end());
+	double sum = 0;
+	for (u32 x : v)
+		sum += x;
+	auto pc = [&](double p) { return v[std::min(v.size() - 1, (size_t)(p * v.size()))] * scale; };
+	fprintf(f, "%s\tn=%zu\tavg=%.3f\tp50=%.3f\tp95=%.3f\tp99=%.3f\tmax=%.3f %s\n", name, v.size(),
+			sum / v.size() * scale, pc(0.50), pc(0.95), pc(0.99), v.back() * scale, unit);
+}
+void sync_dump_stats(const char *path)
+{
+	if (!sync_stats_on())
+		return;
+	std::vector<u32> lat, proc, ew, ni, pw, pt;
+	{
+		std::lock_guard<std::mutex> lk(g_syncMtx);
+		lat = g_syncLat; proc = g_syncProc; ew = g_syncEmuWait; ni = g_syncNewInt; pw = g_syncPagesW; pt = g_syncPagesTex;
+	}
+	FILE *f = fopen(path, "w");
+	if (f == nullptr)
+		return;
+	extern u32 g_queueDrops, g_queueOk, g_queueWaits, g_queueBusyDrops;
+	double secs = g_syncT0 != 0 ? (rend_now_us() - g_syncT0) / 1e6 : 0;
+	fprintf(f, "queued\t%u\tdropped\t%u\tdropped_busy_after_early_release\t%u\tdropped_slot_busy\t%u\tqueue_waits\t%u\n",
+			g_queueOk, g_queueDrops, g_queueBusyDrops, g_queueDrops - g_queueBusyDrops, g_queueWaits);
+	fprintf(f, "new_frames\t%u\tsecs\t%.1f\tnew_fps\t%.2f\n", g_syncNewFrames, secs, secs > 0 ? g_syncNewFrames / secs : 0);
+	sync_dist(f, "latency_queue_to_dequeue", lat, 0.001, "ms");
+	sync_dist(f, "process_dequeue_to_reset", proc, 0.001, "ms");
+	sync_dist(f, "emu_rewait", ew, 0.001, "ms");
+	sync_dist(f, "new_frame_interval", ni, 0.001, "ms");
+	sync_dist(f, "vram_pages_written_per_epoch", pw, 1, "pages");
+	sync_dist(f, "vram_pages_with_textures_per_epoch", pt, 1, "pages");
+	fclose(f);
+}
+
 bool rend_frame(TA_context* ctx, bool draw_osd)
 {
    if (renderer_changed || renderer == NULL)
@@ -382,8 +522,12 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
       g_rendProcUs += rend_now_us() - t0;
 #if !defined(TARGET_NO_THREADS)
    if (settings.rend.ThreadedRendering && (!proc || (!ctx->rend.isRenderFramebuffer && !ctx->rend.isRTT)))
+   {
 	   // If rendering to texture, continue locking until the frame is rendered
+      if (g_syncStats == 1)
+         sync_process_done();
       re.Set();
+   }
 
    {
       static int earlyEnabled = -1;
@@ -478,6 +622,8 @@ bool rend_single_frame(void)
 				}
 #endif
 				_pvrrc = DequeueRender();
+				if (_pvrrc != NULL && g_syncStats == 1)
+					sync_frame_dequeued();
 
 				if (!settings.rend.ThreadedRendering && _pvrrc == NULL)
 					return false;
@@ -694,6 +840,8 @@ void rend_start_render(void)
 
          if (QueueRender(ctx))
          {
+            if (sync_stats_on())
+               sync_frame_queued();
             palette_update();
 #if !defined(TARGET_NO_THREADS)
             if (settings.rend.ThreadedRendering)
@@ -737,13 +885,15 @@ void rend_end_render(void)
 	   // evita o render ler VRAM ja sobrescrita (glitch), sem esperar o draw.
 	   if (settings.rend.ThreadedRendering && (!g_emuNeverWaits || g_emuWaitRe))
 	   {
-		   u64 tw = g_rendSplitEnabled ? rend_now_us() : 0;
+		   u64 tw = (g_rendSplitEnabled || g_syncStats == 1) ? rend_now_us() : 0;
 		   re.Wait();
 		   if (g_rendSplitEnabled)
 		   {
 			   g_emuReWaitUs += rend_now_us() - tw;
 			   g_emuReWaits++;
 		   }
+		   if (g_syncStats == 1)
+			   sync_epoch_closed(rend_now_us() - tw);
 	   }
 	   else
 #endif

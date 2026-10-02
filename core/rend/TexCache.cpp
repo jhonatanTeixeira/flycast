@@ -348,6 +348,22 @@ bool VramLockedWriteOffset(size_t offset)
 	{
 		std::lock_guard<cMutex> lockguard(vramlist_lock);
 
+		// FC_SYNC_PAGES (Renderer_if.cpp): paginas distintas escritas na epoca
+		extern bool g_syncPagesArmed;
+		extern u32 g_syncPagesCount, g_syncPagesTexCount;
+		extern u8 g_syncPageSeen[];
+		if (g_syncPagesArmed && !g_syncPageSeen[addr_hash])
+		{
+			g_syncPageSeen[addr_hash] = 1;
+			g_syncPagesCount++;
+			for (auto& l : list)
+				if (l != nullptr)
+				{
+					g_syncPagesTexCount++;
+					break;
+				}
+		}
+
 		g_vramWriteFaults++;
 		const bool precise = TexPreciseInvlEnabled();
 		bool survivors = false;

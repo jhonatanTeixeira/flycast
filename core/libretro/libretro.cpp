@@ -1378,6 +1378,11 @@ void retro_run (void)
       extern u64 g_lastPresentUs;
       auto p0 = std::chrono::steady_clock::now();
       video_cb(is_dupe ? 0 : RETRO_HW_FRAME_BUFFER_VALID, screen_width, screen_height, 0);
+      if (!is_dupe)
+      {
+         extern void sync_new_frame_presented();
+         sync_new_frame_presented();
+      }
       g_lastPresentUs = (u64)std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - p0).count();
    }
@@ -1444,6 +1449,23 @@ void retro_run (void)
             char path[64];
             snprintf(path, sizeof(path), "/tmp/rend-split-%d.txt", (int)getpid());
             rend_dump_split(path);
+         }
+      }
+   }
+
+   // FC_SYNC_STATS (opt-in, Renderer_if.cpp): sincronizacao emu <-> render
+   {
+      extern int g_syncStats;
+      if (g_syncStats == 1)
+      {
+         static int syncCounter = 0;
+         if (++syncCounter >= 150)
+         {
+            syncCounter = 0;
+            extern void sync_dump_stats(const char *path);
+            char path[64];
+            snprintf(path, sizeof(path), "/tmp/sync-stats-%d.txt", (int)getpid());
+            sync_dump_stats(path);
          }
       }
    }
