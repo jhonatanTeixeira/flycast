@@ -70,7 +70,7 @@ struct PipelineShader
 	GLint fog_clamp_min, fog_clamp_max;
 	GLint normal_matrix;
 	GLint palette_index;
-	GLint texRaw, uTexW, uTexH, uPal4;	// FC_TEX_GPU_MORTON
+	GLint texRaw, uTexW, uTexH, uPal4, uWrap;	// FC_TEX_GPU_MORTON
 	GLint uShowIdx;
 
 	//

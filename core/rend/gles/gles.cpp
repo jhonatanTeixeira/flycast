@@ -263,54 +263,75 @@ lowp vec4 getPaletteEntry(highp float colorIndex)
 // fiel ao PowerVR, que amostrava a VRAM no formato nativo. Validado no Mali-G31
 // (ver /tmp/opencode/mali_morton_sdl.c). uTexW/uTexH = dimensoes logicas.
 precision highp int;
-// sampler2D (float, GL_R8 normalizado): MESMO tipo do `tex`, entao os dois
+// sampler2D (float, GL_ALPHA normalizado, canal .a): MESMO tipo do `tex`, entao os dois
 // podem dividir a unidade 0 sem erro de tipo no GLES. O `tex` fica morto aqui.
 uniform highp sampler2D texRaw;
 uniform int uTexW, uTexH;
 uniform int uPal4;	// 1 = pal4, 0 = pal8
 uniform int uShowIdx;	// debug: 1 = mostra o indice cru
-#define TEXRAW_BYTE(bo) uint(texelFetch(texRaw, ivec2((bo) %% uTexW, (bo) / uTexW), 0).r * 255.0 + 0.5)
+#define TEXRAW_BYTE(bo) uint(texelFetch(texRaw, ivec2((bo) %% uTexW, (bo) / uTexW), 0).a * 255.0 + 0.5)
 uint _p1(uint x){ x&=0xffffu; x=(x|(x<<8))&0x00FF00FFu; x=(x|(x<<4))&0x0F0F0F0Fu; x=(x|(x<<2))&0x33333333u; x=(x|(x<<1))&0x55555555u; return x; }
 uint _morton(int x,int y){ return _p1(uint(y))|(_p1(uint(x))<<1); }
-lowp vec4 palettePixelMorton(highp vec2 coords)
+// Modo de repeticao do TSP (o raw fica em CLAMP no GL; o shader aplica o do
+// desenho): bit0 ClampU, bit1 FlipU, bit2 ClampV, bit3 FlipV.
+uniform int uWrap;
+int _wrapCoord(int v, int n, bool clampMode, bool flipMode)
 {
-	highp vec2 texSize = vec2(float(uTexW), float(uTexH));
-	highp vec2 pixCoord = floor(coords * texSize);
-	int x = int(pixCoord.x); int y = int(pixCoord.y);
-	x = (x < 0) ? 0 : (x >= uTexW ? uTexW-1 : x);
-	y = (y < 0) ? 0 : (y >= uTexH ? uTexH-1 : y);
+	if (clampMode)
+		return v < 0 ? 0 : (v >= n ? n - 1 : v);
+	if (flipMode)
+	{
+		int p = v - 2 * n * int(floor(float(v) / float(2 * n)));
+		return p < n ? p : 2 * n - 1 - p;
+	}
+	return v - n * int(floor(float(v) / float(n)));
+}
+// indice da paleta (0..255, ja normalizado /255) no texel (x,y) logico
+highp float mortonIndexAt(int x, int y)
+{
+	x = _wrapCoord(x, uTexW, (uWrap & 1) != 0, (uWrap & 2) != 0);
+	y = _wrapCoord(y, uTexH, (uWrap & 4) != 0, (uWrap & 8) != 0);
 	uint idx = _morton(x, y);
-	highp float colorIndex;
 	if (uPal4 == 1)
 	{
 		// pal4: byte = (idx/16)*8 + b(lx,ly); nibble = (ly par)? low : high
 		uint group = idx / 16u;
 		int lx = x & 3; int ly = y & 3;
 		uint b = uint((lx & 1) + (lx >> 1) * 4 + (ly >> 1) * 2);
-		int bo = int(group * 8u + b);
-		uint wb = TEXRAW_BYTE(bo);
+		uint wb = TEXRAW_BYTE(int(group * 8u + b));
 		uint nib = ((y & 1) == 0) ? (wb & 0xFu) : ((wb >> 4) & 0xFu);
-		colorIndex = float(nib) / 255.0;
+		return float(nib) / 255.0;
 	}
-	else
-	{
-		// pal8: bloco 2x4 (xpp=2,ypp=4)=8 bytes; os 3 bits baixos do Morton sao
-		// a posicao intra-bloco, logo idx/8 e o grupo. Mapa do byte
-		// (convPAL8PT_TW): (0,0)=0 (0,1)=1 (1,0)=2 (1,1)=3 (0,2)=4 (0,3)=5 (1,2)=6 (1,3)=7.
-		uint group = idx / 8u;
-		int lx = x & 1; int ly = y & 3;
-		uint b = uint(lx * 2 + (ly & 1) + (ly >> 1) * 4);
-		int bo = int(group * 8u + b);
-		uint wb = TEXRAW_BYTE(bo);
-		colorIndex = float(wb) / 255.0;
-	}
+	// pal8: bloco 2x4 (xpp=2,ypp=4)=8 bytes; os 3 bits baixos do Morton sao
+	// a posicao intra-bloco, logo idx/8 e o grupo. Mapa do byte
+	// (convPAL8PT_TW): (0,0)=0 (0,1)=1 (1,0)=2 (1,1)=3 (0,2)=4 (0,3)=5 (1,2)=6 (1,3)=7.
+	uint group = idx / 8u;
+	int lx = x & 1; int ly = y & 3;
+	uint b = uint(lx * 2 + (ly & 1) + (ly >> 1) * 4);
+	return float(TEXRAW_BYTE(int(group * 8u + b))) / 255.0;
+}
+lowp vec4 palettePixelMorton(highp vec2 coords)
+{
+	highp vec2 pixCoord = floor(coords * vec2(float(uTexW), float(uTexH)));
+	int x = int(pixCoord.x); int y = int(pixCoord.y);
+	highp float colorIndex = mortonIndexAt(x, y);
 	if (uShowIdx == 1)
-	{
-		// R = byte lido (colorIndex*255), G = uTexW, B = bo baixo / 255
-		int bo2 = int(idx / 8u) * 8;
-		return vec4(colorIndex, float(uTexW) / 255.0, float(bo2 & 255) / 255.0, 1.0);
-	}
+		return vec4(colorIndex, float(uTexW) / 255.0, 0.0, 1.0);
 	return getPaletteEntry(colorIndex);
+}
+// Bilinear: indices nao se interpolam, entao 4 buscas na paleta e mistura das
+// cores -- mesma tecnica do palettePixelBilinear (pp_Palette == 2).
+lowp vec4 palettePixelMortonBilinear(highp vec2 coords)
+{
+	highp vec2 pixCoord = coords * vec2(float(uTexW), float(uTexH)) - 0.5;
+	highp vec2 origin = floor(pixCoord);
+	int x0 = int(origin.x); int y0 = int(origin.y);
+	lowp vec4 c00 = getPaletteEntry(mortonIndexAt(x0, y0));
+	lowp vec4 c10 = getPaletteEntry(mortonIndexAt(x0 + 1, y0));
+	lowp vec4 c01 = getPaletteEntry(mortonIndexAt(x0, y0 + 1));
+	lowp vec4 c11 = getPaletteEntry(mortonIndexAt(x0 + 1, y0 + 1));
+	highp vec2 weight = pixCoord - origin;
+	return mix(mix(c00, c10, weight.x), mix(c01, c11, weight.x), weight.y);
 }
 #endif
 
@@ -370,7 +391,9 @@ void main()
 	#endif
 	#if pp_Texture==1
 	{
-		#if pp_GpuMorton == 1
+		#if pp_GpuMorton == 1 && pp_Palette == 2
+			lowp vec4 texcol = palettePixelMortonBilinear(vtx_uv);
+		#elif pp_GpuMorton == 1
 			lowp vec4 texcol = palettePixelMorton(vtx_uv);
 		#elif pp_Palette == 0
 			lowp vec4 texcol = texture(tex, vtx_uv);
@@ -797,6 +820,7 @@ bool CompilePipelineShader(	PipelineShader* s)
 		s->uTexH = glGetUniformLocation(s->program, "uTexH");
 		s->uPal4 = glGetUniformLocation(s->program, "uPal4");
 		s->uShowIdx = glGetUniformLocation(s->program, "uShowIdx");
+		s->uWrap = glGetUniformLocation(s->program, "uWrap");
 		if (s->uShowIdx != -1) glUniform1i(s->uShowIdx, getenv("FC_MORTON_SHOWIDX") ? 1 : 0);
 		// texRaw vai na unidade 3: a unidade 0 tem `sampler2D tex` e uma unidade
 		// nao pode ter dois tipos de sampler no mesmo draw (GLES).
@@ -1355,9 +1379,14 @@ u64 g_taLockUs, g_taCleanupUs;
 // across runs without a screenshot hotkey. FC_FB_DUMP=<first frame to dump>,
 // FC_FB_DUMP_N=<how many> (default 1). Output dir FC_FB_DUMP_DIR or
 // /roms2/bios/dc/fbdump.
+// Contador do dump zerado na carga de savestate (state_hash_mark_load), como o
+// do FC_STATE_HASH: sem isso o indice depende de quantos frames o boot
+// renderizou antes da carga, e duas rodadas nao pegam o mesmo frame do jogo.
+int g_fbDumpFrame;
 static void fc_dump_framebuffer()
 {
-	static int first = -2, count = 1, step = 1, frame = 0;
+	static int first = -2, count = 1, step = 1;
+	int &frame = g_fbDumpFrame;
 	if (first == -2)
 	{
 		const char *e = getenv("FC_FB_DUMP");

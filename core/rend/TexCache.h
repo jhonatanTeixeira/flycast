@@ -715,11 +715,13 @@ public:
 		if (e == -1) e = getenv("FC_TEX_GPU_MORTON") != nullptr ? 1 : 0;
 		return e == 1;
 	}
-	// Elegivel: paletizada, nearest, sem VQ/mipmap/upscale/dump -- subir cru.
+	// Elegivel: paletizada com a paleta na GPU, sem VQ/mipmap/upscale/dump --
+	// subir cru. O filtro (nearest/bilinear) e o modo de repeticao sao
+	// decididos POR DESENHO no shader (a chave do cache nao inclui o filtro).
 	bool IsGpuMorton(TSP tsp, TCW tcw)
 	{
 		return GpuMortonEnabled() && IsGpuHandledPaletted(tsp, tcw)
-				&& tsp.FilterMode == 0 && !tcw.MipMapped && !tcw.VQ_Comp;
+				&& !tcw.MipMapped && !tcw.VQ_Comp;
 	}
 	u32 texture_hash;			// xxhash of texture data, used for custom textures
 	u32 old_texture_hash;		// legacy hash

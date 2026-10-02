@@ -3382,3 +3382,10 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   curto); o Morton na GPU faz trabalho em dobro (CPU converte e descarta) e está
   desligado; o glitch do no-wait era só nos personagens 2D (sprites reescritos a
   cada frame), não no cenário 3D.
+
+## 2026-10-02 — fase 1: Morton na GPU de verdade
+
+- Sem conversão na CPU, bilinear e modos de repetição no shader, upload cru em
+  `GL_ALPHA` (o `GL_R8` custava ~4× neste driver). MvC2 DC: imagem idêntica pixel
+  a pixel, `Process` 4,98 → 4,55 ms. `FC_FB_DUMP` agora conta a partir da carga do
+  savestate (comparação determinística). Opt-in até a bateria Naomi (4.103).

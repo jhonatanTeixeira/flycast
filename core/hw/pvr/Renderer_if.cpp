@@ -535,6 +535,8 @@ void state_hash_mark_load()
       fflush(g_stateHashFile);
    }
    g_stateHashFrame = 0;
+   extern int g_fbDumpFrame;
+   g_fbDumpFrame = 0;		// FC_FB_DUMP: frames contados a partir da carga
    extern void jit_trace_start();
    jit_trace_start();	// FC_JIT_TRACE: so traca a partir da carga
 }
