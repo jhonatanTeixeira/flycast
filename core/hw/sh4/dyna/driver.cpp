@@ -64,8 +64,10 @@ void emit_SetBaseAddr(void)
 }
 
 void jit_dump_line(const char *fmt, ...);
+void jit_dump_time();
 void clear_temp_cache(bool full)
 {
+	jit_dump_time();
 	jit_dump_line("Z temp full=%d used=%u\n", (int)full, TempLastAddr);
 	//printf("recSh4:Temp Code Cache clear at %08X\n", curr_pc);
 	TempLastAddr = 0;
@@ -74,6 +76,7 @@ void clear_temp_cache(bool full)
 
 static void recSh4_ClearCache(void)
 {
+	jit_dump_time();
 	jit_dump_line("Z full pc=%08X free=%u\n", next_pc, emit_FreeSpace());
 	INFO_LOG(DYNAREC, "recSh4:Dynarec Cache clear at %08X free space %d", next_pc, emit_FreeSpace());
 	LastAddr=LastAddr_min;

@@ -126,6 +126,20 @@ void DumpIfbCounts()
 // limpezas do cache de codigo. Formato de linha em jit_dump_* abaixo.
 static FILE *jitDumpFile;
 static int jitDumpState = -1;	// -1 nao decidido, 0 desligado, 1 ligado
+// "t <ns CLOCK_MONOTONIC> <ns CLOCK_REALTIME>": o monotonic casa com o
+// `perf record -k mono`; o realtime casa com o log do retrorun e com a hora
+// que o usuario reporta. Gravada na abertura e antes de cada limpeza de cache.
+void jit_dump_time()
+{
+	if (jitDumpState != 1)
+		return;
+	struct timespec mono, wall;	// nao `r`: macro do banco de GPRs do SH4
+	clock_gettime(CLOCK_MONOTONIC, &mono);
+	clock_gettime(CLOCK_REALTIME, &wall);
+	fprintf(jitDumpFile, "t %llu %llu\n",
+			(unsigned long long)mono.tv_sec * 1000000000ull + mono.tv_nsec,
+			(unsigned long long)wall.tv_sec * 1000000000ull + wall.tv_nsec);
+}
 bool jit_dump_enabled()
 {
 	if (jitDumpState < 0)
@@ -148,11 +162,26 @@ bool jit_dump_enabled()
 				extern u8 *CodeCache;
 				fprintf(jitDumpFile, "M so_base %zx code_base %zx\n", (size_t)soBase, (size_t)CodeCache);
 				jitDumpState = 1;
+				jit_dump_time();
 			}
 		}
 	}
 	return jitDumpState == 1;
 }
+// FC_JIT_DUMP_LITE=1 (com FC_JIT_DUMP): so o texto gravado na COMPILACAO.
+// Nada de instrumentacao dentro dos blocos (chamada por bsr, contador por
+// saida condicional, chamada por saida dinamica) nem do despejo de execucoes
+// a cada 1s -- no Napple Tale o dump completo derrubava a VEL de 74,8% para
+// 23,8% (4.98). O tempo por bloco vem do perf (FC_PERF_MAP + perf record -k
+// mono), casado com o dump pelas linhas 't'.
+bool jit_dump_lite()
+{
+	static int lite = -1;
+	if (lite < 0)
+		lite = getenv("FC_JIT_DUMP_LITE") != nullptr ? 1 : 0;
+	return lite == 1;
+}
+static bool JitDumpRuntime() { return jit_dump_enabled() && !jit_dump_lite(); }
 // linha livre (limpeza de cache, fault reescrito, execucoes...)
 void jit_dump_line(const char *fmt, ...)
 {
@@ -336,6 +365,9 @@ void tier2_init();
 void tier2_reset();
 bool tier2_owns_pc(uintptr_t pc);
 bool tier2_sampling();
+bool tier2_configured();
+bool hle_fn_lookup(u32 vaddr, u32 *id);
+extern "C" u64 hle_fn_run(s32 cycles, u32 id);
 void tier2_note_slowmem(u32 vaddr);
 extern uintptr_t t2_last_pc;
 
@@ -616,7 +648,10 @@ void EmitPerfMapEntry(void *code, u32 size, u32 vaddr)
 		}
 	}
 	if (perf_map_file != nullptr)
+	{
 		fprintf(perf_map_file, "%llx %x SH4_%08x\n", (unsigned long long)(uintptr_t)code, size, vaddr);
+		fflush(perf_map_file);	// so na compilacao; o processo sai sem fclose
+	}
 }
 
 void ngen_mainloop(void* v_cntx)
@@ -999,6 +1034,27 @@ public:
 			Mov(w0, block->vaddr);
 			Mov(w1, 0);
 			GenCallRuntime(jit_trace_block);
+		}
+
+		// Funcao do jogo reescrita em nativo (hle_fn.cpp): se este bloco e a
+		// entrada de uma funcao conhecida e os bytes SH4 batem, a versao
+		// nativa roda a funcao inteira (mesmo resultado e mesmos ciclos) e
+		// devolve o contador; o despachante segue do next_pc que ela gravou.
+		// Se ela recusar (bit 32 = 0), o bloco normal continua daqui.
+		{
+			u32 hleId;
+			if (!mmu_enabled() && hle_fn_lookup(block->vaddr, &hleId))
+			{
+				Mov(w0, w27);
+				Mov(w1, hleId);
+				GenCallRuntime(hle_fn_run);
+				Label hle_declined;
+				Tbz(x0, 32, &hle_declined);
+				Mov(w27, w0);
+				Ldr(w29, sh4_context_mem_operand(&next_pc));
+				GenBranch(*arm64_no_update);
+				Bind(&hle_declined);
+			}
 		}
 
 		const bool jitDump = jit_dump_enabled();
@@ -1971,7 +2027,7 @@ public:
 		case BET_StaticJump:
 		case BET_StaticCall:
 			// next_pc = block->BranchBlock;
-			if (block->BlockType == BET_StaticCall && jit_dump_enabled())
+			if (block->BlockType == BET_StaticCall && JitDumpRuntime())
 			{
 				Mov(w0, block->NextBlock);	// endereco de retorno (bsr)
 				GenCallRuntime(jit_dump_call);
@@ -2008,7 +2064,7 @@ public:
 				Label branch_not_taken;
 
 				B(ne, &branch_not_taken);
-				u32 *condCount = jit_dump_enabled() ? jit_dump_cond_counter(block) : nullptr;
+				u32 *condCount = JitDumpRuntime() ? jit_dump_cond_counter(block) : nullptr;
 				if (condCount != nullptr)
 					EmitDumpCount(&condCount[0]);
 				if (block->pBranchBlock != NULL)
@@ -2050,7 +2106,7 @@ public:
 		case BET_DynamicRet:
 			// next_pc = *jdyn;
 
-			if (jit_dump_enabled())
+			if (JitDumpRuntime())
 			{
 				// Tudo ja foi descarregado; w29 (pc) e x28/x27 sobrevivem a chamada.
 				Mov(w0, w29);
@@ -2316,7 +2372,7 @@ public:
 			Str(w0, MemOperand(x1));
 		}
 		Mov(x29, lr);				// Trashing pc here but it will be reset at the end of the block or in DoInterrupts
-		if (tier2_sampling())
+		if (tier2_configured())
 		{
 			// nivel 2: amostra do bloco que estava rodando no fim da fatia
 			Mov(x0, reinterpret_cast<uintptr_t>(&t2_last_pc));

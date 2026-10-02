@@ -791,9 +791,10 @@ bool jit_dump_cond_peek(const RuntimeBlockInfo *b, u32& taken, u32& next);
 
 // FC_JIT_DUMP: execucoes de todos os blocos vivos (R code vaddr runs), a
 // cada ~150 frames (libretro.cpp); os descartados saem no destrutor (D).
+bool jit_dump_lite();
 void bm_DumpJitRuns()
 {
-	if (!jit_dump_enabled())
+	if (!jit_dump_enabled() || jit_dump_lite())	// leve: sem contadores, nada a despejar
 		return;
 	jit_dump_line("T\n");
 	for (auto& it : blkmap)
