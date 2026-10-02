@@ -3313,3 +3313,27 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   cfgs `~/.config/retrorun.cfg`, `r_t2off.cfg` e `r_noload.cfg` (backups
   `*.bak-pre-vmu`). Antes o padrão era VMU compartilhado entre todos os jogos.
 - **Próximo:** bateria Dreamcast com tier2 OFF (janela rolante).
+
+## 2026-10-01 — Napple Tale (DC): dump do JIT + métricas no savestate do "340 fps / som desafinado"
+
+- **Pedido:** início da bateria Dreamcast; no Napple, sempre que o jogo ficava
+  lento o contador marcava 340+ fps e o som desafinava. Sem mudar código: dump do
+  JIT + métricas no ponto do savestate do usuário.
+- **Setup:** savestate `.fc2021-rrstate.auto` (o `retrorun.cfg` do ES não tem
+  `retrorun_auto_load`, padrão false — criado `/home/ark/r_napple_load.cfg` =
+  `retrorun.cfg` + `retrorun_auto_load = true` + `retrorun_auto_save = false`),
+  mesmo ambiente do `dreamcast.sh` (`RETRORUN_VSYNC=1 RETRORUN_SDL_THREADED_PRESENT=1`),
+  `perfmax performance`, tier2 on, 20s + 8s warmup. Script `/home/ark/napple_ab.sh A|B`.
+- **Rodada A (limpa):** VEL 74,8%, 22,4 frames novos/s (jogo pede 30), **384
+  `retro_run`/s** (7.246 de 7.695 duplicados) = o "340+ fps"; áudio esticado pelo
+  controle de taxa do retrorun (ratio médio 1,33, máx 1,53) = o "desafinado".
+  Não é perda de noção de tempo: é a emu abaixo de 100% + contador que conta
+  voltas vazias + áudio esticado (4.97).
+- **Rodada B (`FC_JIT_DUMP` + `FC_BLOCK_PROF`):** o dump derruba esse jogo para
+  VEL 23,8% (4.98) — serve só para a distribuição do código quente. Quente: laço
+  de vértices → SQ em blocos de 2-3 instruções SH4 (`8C14DDF8`, `8C14DDFE`,
+  `8C1350A4`, `8C1350C0`, `8C1368B6`...), saída/ligação de bloco 35% do host.
+- **Arquivos:** `/roms2/jitdump_napple_B/` (jit-96167.txt, hot-blocks, dyn-96167.bin,
+  JSONs e logs A/B); tentativas anteriores em `/roms2/jitdump_napple*/`.
+- **Achado de método:** os benchmarks da skill rodavam sem `THREADED_PRESENT`/`VSYNC`
+  — diferente do ES; com eles o laço do frontend gira quando não há frame novo.

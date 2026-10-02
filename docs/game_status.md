@@ -661,3 +661,18 @@ Com `RETRORUN_BENCHMARK_KEEP_RUNNING=1` (o jogo não fecha no fim da janela).
   do Dreamcast: DOA2/Shenmue II.)
 - **Ainda a revisar (percepção, não tier2):** suavização de movimentação
   (`capsnk`, `cvs2`) — cache de paletas + wait-curto.
+
+### Napple Tale (DC) — savestate do usuário a 75% de velocidade (2026-10-01)
+
+Usuário (jogando, pelo ES): quando o jogo fica lento o contador vai a **340+ fps**
+e o **som desafina**. Medido no savestate (ambiente do ES, sem instrumentação):
+VEL **74,8%**, **22,4 frames novos/s** (o jogo pede 30), 384 `retro_run`/s (quase
+todos duplicados, isso é o "340 fps"), áudio esticado em média 1,33x pelo retrorun
+(o "desafinado"), 6 underruns. Ver `docs/tech_debits.md` 4.97.
+
+| Rodada | VEL% | fps real (novos) | retro_run/s | core avg/p50/p95/p99 (ms) | active p50/p95/p99 (ms) | underruns |
+|---|---|---|---|---|---|---|
+| A limpa | 74,8 | 22,4 | 384 | 1,70 / 0,33 / 22,9 / 24,4 | 1,17 / 24,1 / 25,7 | 6 |
+| B dump JIT | 23,8 | 7,1 | 662 | 0,71 / 0,30 / 0,41 / 22,6 | 1,03 / 1,56 / 23,7 | 61 |
+
+(p50/média de frame time não valem aqui: as voltas com frame duplicado dominam.)
