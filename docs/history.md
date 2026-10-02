@@ -3430,3 +3430,17 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   `make -C build/linux-sdl config=release CXX=aarch64-linux-gnu-g++-13 SDL_CFLAGS="-I$R/include/SDL2 -I$R/include/aarch64-linux-gnu/SDL2 -I$R/include/aarch64-linux-gnu -D_REENTRANT" SDL_LIBS="-L$R/lib -Wl,-rpath-link,$R/lib -Wl,--allow-shlib-undefined -lSDL2" PNG_CFLAGS="-I$R/include/libpng16" PNG_LIBS="-lpng16" GLES_CFLAGS="-I$R/include" GLES_LIBS="-lEGL -lGLESv2"`
   (`R=/tmp/opencode/rsysroot`; o `--allow-shlib-undefined` cobre as dependências
   indiretas da libcurl/SDL2 que não estão no sysroot).
+
+## 2026-10-02 — captura da bateria DC no caminho do ES + crash do tier2 no cold boot
+
+- `tools/rr_capture.sh` (instalado em `/home/ark/rr_capture.sh`): o `dreamcast.sh` chama
+  ele no lugar do `retrorun3` (backup `dreamcast.sh.bak-pre-capture`). Roda o
+  `retrorun3` oficial com dumper leve, `FC_SYNC_STATS`, benchmark de janela rolante
+  (últimos 40 s, grava ao fechar) e `perf record -N -F 299`; uma pasta por sessão em
+  `/roms2/dcbat/<data-hora>_<jogo>/`. Só DC; Naomi/Atomiswave inalterados. Benchmark
+  não grava SRAM do frontend, mas o VMU por jogo é gravado pelo core.
+- O teste de fumaça (cold boot pelo `dreamcast.sh`) achou um crash do tier2 no DC:
+  bail de MMIO dentro de folha embutida retomava em `0xF0000000` (4.107). Tier2
+  desligado no `retrorun.cfg` por alguns minutos, corrigido, core oficial atualizado
+  (`f9435643`, backup `flycast2026_libretro.so.bak-pre-bailfix-2026-10-02` no
+  `/roms2/backups`), tier2 religado. Cold boot do Napple ok (40 s, sem erro).

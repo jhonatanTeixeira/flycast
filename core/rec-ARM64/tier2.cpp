@@ -2013,7 +2013,17 @@ void finish()
 			? (u8 *)CC_RW2RX(t2_ptr + c->bailLabel->GetLocation()) : nullptr;
 	reg.blockRanges.reserve(c->blockLabel.size());
 	for (auto &kv : c->blockLabel)
-		reg.blockRanges.push_back({(uintptr_t)CC_RW2RX(t2_ptr + kv.second->GetLocation()), kv.first});
+	{
+		// Copias de folhas embutidas usam chave sintetica 0xF0000000|...
+		// (inlineLeaves): o bail tem de retomar no bloco REAL da folha. Sem a
+		// traducao, um fault de MMIO dentro da copia mandava o pc para
+		// 0xF0000000 -> instrucao ilegal (Napple Tale, cold boot, 2026-10-02).
+		u32 va = kv.first;
+		auto real = c->realOf.find(va);
+		if (real != c->realOf.end())
+			va = real->second;
+		reg.blockRanges.push_back({(uintptr_t)CC_RW2RX(t2_ptr + kv.second->GetLocation()), va});
+	}
 	std::sort(reg.blockRanges.begin(), reg.blockRanges.end());
 	installed++;
 	if (const char *dd = getenv("FC_TIER2_DUMP"))	// diagnostico: bytes da regiao
