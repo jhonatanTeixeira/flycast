@@ -221,6 +221,9 @@ __forceinline
 		glUniform1i(CurrentShader->uTexW, (GLint)rawInfo->w);
 		glUniform1i(CurrentShader->uTexH, (GLint)rawInfo->h);
 		glUniform1i(CurrentShader->uPal4, rawInfo->pal4 ? 1 : 0);
+		// modo de repeticao do desenho (o raw fica em CLAMP no GL)
+		glUniform1i(CurrentShader->uWrap, (gp->tsp.ClampU ? 1 : 0) | (gp->tsp.FlipU ? 2 : 0)
+				| (gp->tsp.ClampV ? 4 : 0) | (gp->tsp.FlipV ? 8 : 0));
 	}
 	if (CurrentShader->trilinear_alpha != -1)
 		glUniform1f(CurrentShader->trilinear_alpha, ShaderUniforms.trilinear_alpha);

@@ -878,6 +878,29 @@ void BaseTextureCacheData::Update()
 			g_texDq_notPal++;		// nem e paletizada: caminho GPU nao se aplica
 	}
 
+	// FC_TEX_GPU_MORTON: a textura paletizada twiddled vai CRUA para a GPU e o
+	// shader faz o untwiddle + paleta. Sem conversao na CPU -- antes o
+	// texconv8 rodava aqui e o UploadToGPU jogava o resultado fora (trabalho em
+	// dobro, docs/sync_emu_render.md 9.1). A pagina e protegida ANTES de ler os
+	// bytes: uma escrita do jogo durante a copia da fault e re-suja a textura
+	// (corrida B, mesma secao 3.3), em vez de a textura ficar velha.
+	if (IsGpuMorton(tsp, tcw))
+	{
+		h = original_h;
+		libCore_vramlock_Lock(sa_tex, sa + size - 1, this);
+		u64 conv_us = g_taSplitEnabled ? ta_split_now_us() - _conv_t0 : 0;
+		u64 up_t0 = g_taSplitEnabled ? ta_split_now_us() : 0;
+		gpu_morton = true;
+		UploadToGPU(w, h, nullptr, false, false);
+		if (g_taSplitEnabled)
+		{
+			g_texConvUs += conv_us;
+			g_texUploadUs += ta_split_now_us() - up_t0;
+		}
+		PrintTextureName();
+		return;
+	}
+
 	void *temp_tex_buffer = NULL;
 	u32 upscaled_w = w;
 	u32 upscaled_h = h;

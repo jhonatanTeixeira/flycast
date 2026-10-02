@@ -1497,6 +1497,14 @@ void retro_run (void)
                extern u32 g_texDq_notPal, g_texDq_filter, g_texDq_mipmap, g_texDq_vq;
                fprintf(tf, "conv_us_total\t%llu\n", (unsigned long long)g_texConvUs);
                fprintf(tf, "upload_us_total\t%llu\n", (unsigned long long)g_texUploadUs);
+               {
+                  extern u64 g_rawBindUs, g_rawCallUs;
+                  extern u32 g_rawUploads, g_rawSubUploads;
+                  fprintf(tf, "raw_uploads\t%u\n", g_rawUploads);
+                  fprintf(tf, "raw_sub_uploads\t%u\n", g_rawSubUploads);
+                  fprintf(tf, "raw_bind_param_us_total\t%llu\n", (unsigned long long)g_rawBindUs);
+                  fprintf(tf, "raw_teximage_us_total\t%llu\n", (unsigned long long)g_rawCallUs);
+               }
                fprintf(tf, "updates\t%u\n", g_texUpdates);
                fprintf(tf, "src_mb_total\t%.1f\n", g_texBytes / 1048576.0);
                fprintf(tf, "paletted\t%u\n", g_texPaletted);

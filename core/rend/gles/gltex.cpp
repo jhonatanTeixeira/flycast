@@ -67,17 +67,22 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 	{
 		u32 nbytes = w * h / (tcw.PixelFmt == PixelPal4 ? 2 : 1);
 		u32 rw = w, rh = (nbytes + rw - 1) / rw;
-		static thread_local std::vector<u8> rawbuf;
-		rawbuf.assign((size_t)rw * rh, 0);
 		u32 avail = (size > 0 && (u64)sa + size <= VRAM_SIZE) ? size : nbytes;
 		if (avail > rw * rh) avail = rw * rh;
-		memcpy(rawbuf.data(), &vram[sa], avail);
-		gl_UploadRawTexture(texID, rw, rh, rawbuf.data());
+		if (avail == rw * rh)
+			// caso comum: os bytes da VRAM ja tem o tamanho exato -- sobe direto,
+			// sem copia intermediaria
+			gl_UploadRawTexture(texID, rw, rh, &vram[sa]);
+		else
+		{
+			static thread_local std::vector<u8> rawbuf;
+			rawbuf.assign((size_t)rw * rh, 0);
+			memcpy(rawbuf.data(), &vram[sa], avail);
+			gl_UploadRawTexture(texID, rw, rh, rawbuf.data());
+		}
 		gl_RegisterRawTexture(texID, w, h, tcw.PixelFmt == PixelPal4);
-		// CRITICO: sem este lock a textura nunca e invalidada quando o jogo
-		// escreve na VRAM -> sprite velho/corrompido na tela (glitch). O
-		// caminho normal faz isso depois da conversao; aqui tambem tem de ser.
-		libCore_vramlock_Lock(sa_tex, sa + size - 1, this);
+		// A pagina ja foi protegida no Update() ANTES desta leitura (uma vez so;
+		// antes era travada duas vezes neste caminho).
 		if (getenv("FC_MORTON_LOG"))
 			NOTICE_LOG(RENDERER, "MORTON upload: texid=%llu w=%u h=%u pix=%d sa=%u size=%u nbytes=%u rw=%u rh=%u stride=%d StrideSel=%d Mip=%d",
 				(unsigned long long)texID, w, h, tcw.PixelFmt, sa, size, nbytes, rw, rh,
@@ -91,7 +96,7 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 				char fn[128];
 				snprintf(fn, sizeof(fn), "%s/raw_%llu.bin", d, (unsigned long long)texID);
 				FILE *rf = fopen(fn, "wb");
-				if (rf) { fwrite(rawbuf.data(), 1, rw * rh, rf); fclose(rf); }
+				if (rf) { fwrite(&vram[sa], 1, avail, rf); fclose(rf); }
 				snprintf(fn, sizeof(fn), "%s/vram_%llu.bin", d, (unsigned long long)texID);
 				rf = fopen(fn, "wb");
 				if (rf) { fwrite(&vram[sa], 1, rw * rh, rf); fclose(rf); }
@@ -508,21 +513,49 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
 
 // FC_TEX_GPU_MORTON: sobe os bytes CRUS (twiddled) como R8UI. O shader faz o
 // untwiddle Morton + paleta por fragmento. rw x rh = layout linear dos bytes.
+// FC_TA_SPLIT: custo do upload cru do Morton, separado em bind/parametros e envio
+u64 g_rawBindUs, g_rawCallUs;
+u32 g_rawUploads, g_rawSubUploads;
+// dimensoes da ultima alocacao R8 de cada textura crua (para reaproveitar)
+static std::unordered_map<GLuint, u64> g_rawAlloc;
 void gl_UploadRawTexture(u64 texID, u32 rw, u32 rh, const u8 *data)
 {
-	// GL cru de proposito: glcache.BindTexture/TexParameteri cacheiam por
-	// textura ignorando a unidade ativa e podem pular o bind -> o
-	// glTexImage2D cairia no binding errado. Aqui sempre na unidade 0.
+	// Unidade 0 explicita e bind PELO glcache: o glcache cacheia por textura
+	// ignorando a unidade ativa, entao so e seguro com a unidade 0 ativa -- e
+	// assim o cache continua coerente (bind direto o deixava desatualizado).
+	u64 t0 = g_taSplitEnabled ? tex_now_us() : 0;
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, (GLuint)texID);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	// GL_R8=0x8229, GL_RED=0x1903 (nao existem no header GLES2 daqui). sampler2D
-	// float normalizado -> mesmo tipo do `tex`, sem conflito de unidade.
-	glTexImage2D(GL_TEXTURE_2D, 0, 0x8229, rw, rh, 0, 0x1903, GL_UNSIGNED_BYTE, data);
+	glcache.BindTexture(GL_TEXTURE_2D, (GLuint)texID);
+	const u64 dims = ((u64)rw << 32) | rh;
+	auto it = g_rawAlloc.find((GLuint)texID);
+	const bool same = it != g_rawAlloc.end() && it->second == dims;
+	if (!same)
+	{
+		// parametros so na alocacao: na Mali, mexer em parametro de textura a
+		// cada upload forca revalidacao (o upload cru custava 2,7x o normal)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	}
+	u64 t1 = g_taSplitEnabled ? tex_now_us() : 0;
+	// rw = largura logica (>= 8, potencia de 2): o alinhamento padrao de 4 serve.
+	// GL_ALPHA (0x1906), nao GL_R8: neste driver (Mali r13p0) o formato legado
+	// de 1 canal e o caminho rapido -- o GL_R8 custou +56% por chamada no
+	// FC_TEX_R8 (rendering_improvement_plan.md) e o upload cru em R8 saia
+	// ~160 us por chamada contra ~35 us do caminho normal (GL_ALPHA). O shader
+	// le o canal .a. Sempre glTexImage2D (realocar): o glTexSubImage2D nao
+	// ajudou neste driver (FC_TEX_SUBIMAGE -4%) e aqui piorou.
+	glTexImage2D(GL_TEXTURE_2D, 0, 0x1906, rw, rh, 0, 0x1906, GL_UNSIGNED_BYTE, data);
+	if (same)
+		g_rawSubUploads++;	// mesma dimensao da alocacao anterior
+	g_rawAlloc[(GLuint)texID] = dims;
+	g_rawUploads++;
+	if (g_taSplitEnabled)
+	{
+		g_rawBindUs += t1 - t0;
+		g_rawCallUs += tex_now_us() - t1;
+	}
 	glCheck();
 }
 
@@ -538,6 +571,7 @@ const TexRawInfo* gl_GetRawInfo(u64 texID)
 }
 void gl_UnregisterRawTexture(u64 texID)
 {
+	g_rawAlloc.erase((GLuint)texID);
 	g_rawTextures.erase((GLuint)texID);
 }
 

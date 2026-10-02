@@ -896,3 +896,14 @@ página saiu em `ea0414f3c`, sem registro) — fazer junto do commit deste docum
   (o wait curto custava ~19% ali), DOA2.
 - **Determinismo:** `FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL` (método do
   4.101) sempre que a mudança não deveria alterar a emulação (fases 2 e 4).
+
+### 9.4 Andamento
+
+- **Fase 1, Morton (2026-10-02): feito, opt-in.** Imagem idêntica pixel a pixel no
+  MvC2 DC; `Process` −9%, textura −12% por frame. A conversão na CPU era pequena
+  no MvC2 (~0,8 ms/frame); o `Process` é dominado pelo custo fixo do driver por
+  upload (~30-34 µs × ~1.400 uploads/s). Upload cru tem de ser `GL_ALPHA` neste
+  driver (o `GL_R8` custava ~4×). Detalhes: `tech_debits.md` 4.103.
+- Falta da fase 1: os contadores de sincronização (wait curto dividido, frames
+  novos/s, descarte por motivo, páginas escritas por época) e a bateria Naomi com
+  o Morton ligado antes de virar padrão.
