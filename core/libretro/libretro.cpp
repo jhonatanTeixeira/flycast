@@ -3355,14 +3355,14 @@ static void UpdateInputStateNaomi(u32 port)
 }
 
 void ctrl_socket_init();
-void ctrl_socket_apply(u32 port, u32 &kcode, s8 &joyx, s8 &joyy);
+void ctrl_socket_apply(u32 port, u32 &kcode, s8 &joyx, s8 &joyy, s8 &joyrx, s8 &joyry, u8 &lt, u8 &rt);
 static void UpdateInputStateImpl(u32 port);
 void UpdateInputState(u32 port)
 {
    ctrl_socket_init();		// FC_CTRL_PORT (ctrl_socket.cpp); sem a variavel nao faz nada
    UpdateInputStateImpl(port);
    if (port < 4)
-      ctrl_socket_apply(port, kcode[port], joyx[port], joyy[port]);
+      ctrl_socket_apply(port, kcode[port], joyx[port], joyy[port], joyrx[port], joyry[port], lt[port], rt[port]);
 }
 
 static void UpdateInputStateImpl(u32 port)
