@@ -11,8 +11,8 @@ Liga só com a variável: `FC_CTRL_PORT=5555`. Sem ela o core não muda.
 
 | Comando | O que faz |
 |---|---|
-| `do SEQUENCIA` | executa a sequência e responde `ok N leituras` quando termina |
-| `mode step` | pausa o jogo; cada `do` despausa, executa e pausa de novo |
+| `do SEQUENCIA` | executa a sequência e bloqueia até ela terminar. Normal: responde `ok N leituras`. Pausado: responde `PPM <bytes> ok N leituras` + a tela do resultado |
+| `mode step` | pausa o jogo; cada `do` despausa, executa, pausa de novo e devolve a tela |
 | `mode live` | volta ao normal |
 | `shot` | `PPM <bytes>\n` + imagem P6; pausado, devolve o quadro em que parou |
 | `set tap ON OFF` | toque padrão: leituras apertado / solto (padrão 6/6) |
@@ -56,6 +56,11 @@ Exemplo: `do LS(up,35):2s; A; wait:1s; A+B*3/100ms; LT(100)+RIGHT:20f`
 
 ## Modo step
 
+O `do` bloqueia quem pediu até a sequência terminar e o jogo parar, e a resposta
+já é a imagem do resultado (um ciclo dá ~0,5 s no Wi-Fi, com a imagem). No
+cliente, `do SEQ > arquivo.png` salva a imagem; sem `> arquivo`, ele numera
+`passo_001.png`, `passo_002.png`...
+
 A thread de emulação fica parada dentro da leitura do controle. Antes de parar,
 o core pede um quadro ao render, e esse quadro é o que o `shot` devolve. O som
 fica mudo e o frontend repete o último quadro. **Volte para `mode live` antes de
@@ -66,7 +71,7 @@ fechar o jogo**: com a emulação parada, o fechamento pode travar.
 ```
 python3 tools/fc_ctrl.py shot tela.png
 python3 tools/fc_ctrl.py do "LS(up,35):2s; A"
-python3 tools/fc_ctrl.py run "mode step | do A | shot a.png | do DOWN; A | shot b.png | mode live"
+python3 tools/fc_ctrl.py run "mode step | do A > a.png | do DOWN; A > b.png | mode live"
 ```
 
 `run` separa comandos com `|`, porque o `;` pertence à sequência.
