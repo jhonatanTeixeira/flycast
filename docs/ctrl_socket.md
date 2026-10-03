@@ -47,8 +47,8 @@ Exemplo: `do LS(up,35):2s; A; wait:1s; A+B*3/100ms; LT(100)+RIGHT:20f`
 
 - O tempo em `s`/`ms` é o tempo **emulado** (relógio do SH4): com o jogo lento, o
   passo dura mais na parede e o mesmo no jogo.
-- O A físico do R36 vira o **B** do Dreamcast (mapeamento do core); aqui os nomes
-  são os do Dreamcast.
+- Os nomes são os botões do Dreamcast. No Grandia II, o `A` do socket abriu o
+  cristal de save e confirmou o menu, o mesmo que o A físico do R36 faz.
 - A sequência só anda quando o jogo lê o controle. Em tela de carregamento que
   não lê, ela espera.
 - O controle de verdade continua valendo; enquanto um passo usa o analógico, o
