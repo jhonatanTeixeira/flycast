@@ -2,15 +2,16 @@
 """Cliente do socket de controle do core (FC_CTRL_PORT, core/libretro/ctrl_socket.cpp).
 
   fc_ctrl.py [--host 192.168.0.14] [--port 5555] shot tela.png
-  fc_ctrl.py press UR 90            segura cima+direita por 90 leituras (~1,5 s)
-  fc_ctrl.py hold A | release | stick 0 -127 | wait 60 | status
-  fc_ctrl.py run "press UR 90; wait 90; press A 6; wait 30; shot a.png"
-  fc_ctrl.py                        modo interativo (mesmos comandos, um por linha)
+  fc_ctrl.py do "LS(up,35):2s; A; wait:1s; A+B*3/100ms"   sequencia (docs/ctrl_socket.md)
+  fc_ctrl.py mode step              pausa; cada "do" anda e pausa de novo
+  fc_ctrl.py mode live
+  fc_ctrl.py run "mode step | do A | shot a.png | do DOWN; A | shot b.png"
+  fc_ctrl.py                        modo interativo (um comando por linha)
 
-Teclas: A B X Y S(start) U D L R. "shot" salva PNG se o Pillow existir, senao PPM.
+"run" separa comandos com '|' (o ';' e da sequencia do "do").
+"shot" salva PNG se o Pillow existir, senao PPM.
 """
 import argparse
-import shlex
 import socket
 import sys
 
@@ -44,11 +45,12 @@ class Ctrl:
         return 'ok %s' % path
 
     def do(self, line):
-        p = shlex.split(line)
-        if not p:
+        line = line.strip()
+        if not line:
             return ''
+        p = line.split(None, 1)
         if p[0] == 'shot':
-            return self.shot(p[1] if len(p) > 1 else 'tela.png')
+            return self.shot(p[1].strip() if len(p) > 1 else 'tela.png')
         return self.cmd(line)
 
 
@@ -64,11 +66,11 @@ def main():
             print(c.do(line), flush=True)
         return
     if a.args[0] == 'run':
-        for part in ' '.join(a.args[1:]).split(';'):
+        for part in ' '.join(a.args[1:]).split('|'):
             if part.strip():
                 print('%s -> %s' % (part.strip(), c.do(part)), flush=True)
         return
-    print(c.do(' '.join(shlex.quote(x) for x in a.args)))
+    print(c.do(' '.join(a.args)))
 
 
 if __name__ == '__main__':

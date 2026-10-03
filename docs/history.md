@@ -3472,3 +3472,11 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
     Os botões do socket somam com o controle de verdade. Validado no Grandia II (fotos da tela de título).
 - O `/` do device encheu (64 KB livres). Cores de teste antigos movidos para
   `/roms2/backups/old_test_cores/`.
+- Socket de controle ampliado (`docs/ctrl_socket.md`): `do` com sequência (combinações
+  com `+`, passos com `;`, `:3s`, `*5`, `/200ms`), analógicos e gatilhos com força,
+  `mode step` (jogo pausado entre comandos) e `pc N` (amostra do PC/PR do SH4).
+  Validado no Grandia II.
+- Grandia II, tela preta no "Save Game" a partir do savestate de 13/08: reproduzida pelo
+  socket. Também acontece com tier2 desligado e com o próprio `flycast2021` de agosto,
+  que criou o savestate. Não é regressão. Suspeita: estado do GD-ROM/VMU guardado no
+  savestate. Falta o teste sem savestate (Continue pelo VMU ou New Game até um cristal).
