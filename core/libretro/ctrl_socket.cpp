@@ -3,9 +3,11 @@
 // controle 1 -- sem ninguem segurando o device. Protocolo de texto, uma linha
 // por comando (cliente: tools/fc_ctrl.py; referencia: docs/ctrl_socket.md):
 //
-//   do SEQUENCIA      -> executa a sequencia e responde "ok" quando termina
+//   do SEQUENCIA      -> executa a sequencia e responde "ok N leituras" quando
+//                        termina; no modo step responde "PPM <bytes> ok N
+//                        leituras\n" + a tela do resultado (jogo ja parado)
 //   mode step|live    -> step: o jogo fica pausado; cada "do" despausa, executa
-//                        e pausa de novo (a resposta sai com a tela ja parada)
+//                        e pausa de novo
 //   shot              -> "PPM <bytes>\n" + P6 (RGB, de cima para baixo); pausado,
 //                        devolve o quadro em que o jogo parou
 //   set tap ON OFF    -> duracao padrao do toque (leituras apertado / solto)
@@ -439,8 +441,22 @@ bool handle(int fd, const char *line)
 		if (!doneCv.wait_for(l, std::chrono::seconds(300),
 				[id] { return doneId >= id && (frozen || !stepMode || !pending.empty()); }))
 			return reply(fd, "ERR sequencia nao terminou em 300 s\n");
+		u32 polls = (u32)pollCount - start;
+		if (frozen)
+		{
+			// modo step: a resposta e a propria tela do resultado
+			std::vector<u8> img;
+			{
+				std::lock_guard<std::mutex> sl(shotMx);
+				img = lastPpm;
+			}
+			l.unlock();
+			char h[64];
+			snprintf(h, sizeof(h), "PPM %zu ok %u leituras\n", img.size(), polls);
+			return reply(fd, h) && sendAll(fd, img.data(), img.size());
+		}
 		char s[64];
-		snprintf(s, sizeof(s), "ok %u leituras%s\n", (u32)pollCount - start, frozen ? " (pausado)" : "");
+		snprintf(s, sizeof(s), "ok %u leituras\n", polls);
 		return reply(fd, s);
 	}
 	if (!strcmp(cmd, "mode"))

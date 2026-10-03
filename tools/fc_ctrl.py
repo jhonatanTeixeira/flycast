@@ -3,9 +3,11 @@
 
   fc_ctrl.py [--host 192.168.0.14] [--port 5555] shot tela.png
   fc_ctrl.py do "LS(up,35):2s; A; wait:1s; A+B*3/100ms"   sequencia (docs/ctrl_socket.md)
-  fc_ctrl.py mode step              pausa; cada "do" anda e pausa de novo
+  fc_ctrl.py mode step              pausa; cada "do" anda, pausa e devolve a tela
+  fc_ctrl.py do "A; DOWN > menu.png"   no modo step salva a tela do resultado
+                                       (sem "> arquivo": passo_001.png, passo_002.png...)
   fc_ctrl.py mode live
-  fc_ctrl.py run "mode step | do A | shot a.png | do DOWN; A | shot b.png"
+  fc_ctrl.py run "mode step | do A > a.png | do DOWN; A > b.png | mode live"
   fc_ctrl.py                        modo interativo (um comando por linha)
 
 "run" separa comandos com '|' (o ';' e da sequencia do "do").
@@ -20,29 +22,31 @@ class Ctrl:
     def __init__(self, host, port):
         self.s = socket.create_connection((host, port), timeout=70)
         self.f = self.s.makefile('rb')
+        self.step = 0
 
     def cmd(self, line):
         self.s.sendall((line.strip() + '\n').encode())
         return self.f.readline().decode().rstrip('\n')
 
-    def shot(self, path):
-        self.s.sendall(b'shot\n')
+    def shot(self, path, line='shot'):
+        self.s.sendall((line + '\n').encode())
         head = self.f.readline().decode().split()
-        if len(head) != 2 or head[0] != 'PPM':
+        if len(head) < 2 or head[0] != 'PPM':
             return ' '.join(head)
         data = self.f.read(int(head[1]))
+        extra = (' '.join(head[2:]) + ' ') if len(head) > 2 else ''
         try:
             import io
             from PIL import Image
             img = Image.open(io.BytesIO(data))
             if not path.lower().endswith('.ppm'):
                 img.save(path)
-                return 'ok %s %dx%d' % (path, img.width, img.height)
+                return '%s-> %s %dx%d' % (extra, path, img.width, img.height)
         except ImportError:
             if not path.lower().endswith('.ppm'):
                 path = path.rsplit('.', 1)[0] + '.ppm'
         open(path, 'wb').write(data)
-        return 'ok %s' % path
+        return '%s-> %s' % (extra, path)
 
     def do(self, line):
         line = line.strip()
@@ -51,6 +55,12 @@ class Ctrl:
         p = line.split(None, 1)
         if p[0] == 'shot':
             return self.shot(p[1].strip() if len(p) > 1 else 'tela.png')
+        if p[0] == 'do':
+            # "do SEQ > arquivo.png": no modo step a resposta traz a tela
+            seq, _, path = line.partition('>')
+            self.step += 1
+            path = path.strip() or 'passo_%03d.png' % self.step
+            return self.shot(path, seq.strip())
         return self.cmd(line)
 
 
