@@ -8,6 +8,7 @@
                                        (sem "> arquivo": passo_001.png, passo_002.png...)
   fc_ctrl.py mode live
   fc_ctrl.py run "mode step | do A > a.png | do DOWN; A > b.png | mode live"
+  fc_ctrl.py mem 8C200000 20000 > sofdec.bin   le a RAM do jogo (hex)
   fc_ctrl.py                        modo interativo (um comando por linha)
 
 "run" separa comandos com '|' (o ';' e da sequencia do "do").
@@ -55,6 +56,17 @@ class Ctrl:
         p = line.split(None, 1)
         if p[0] == 'shot':
             return self.shot(p[1].strip() if len(p) > 1 else 'tela.png')
+        if p[0] == 'mem':
+            # "mem ADDR LEN > arquivo.bin"
+            req, _, path = line.partition('>')
+            self.s.sendall((req.strip() + '\n').encode())
+            head = self.f.readline().decode().split()
+            if len(head) != 2 or head[0] != 'BIN':
+                return ' '.join(head)
+            data = self.f.read(int(head[1]))
+            path = path.strip() or 'mem_%s.bin' % req.split()[1]
+            open(path, 'wb').write(data)
+            return 'ok %s (%d bytes)' % (path, len(data))
         if p[0] == 'do':
             # "do SEQ > arquivo.png": no modo step a resposta traz a tela
             seq, _, path = line.partition('>')
