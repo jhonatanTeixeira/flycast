@@ -3480,3 +3480,7 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   socket. Também acontece com tier2 desligado e com o próprio `flycast2021` de agosto,
   que criou o savestate. Não é regressão. Suspeita: estado do GD-ROM/VMU guardado no
   savestate. Falta o teste sem savestate (Continue pelo VMU ou New Game até um cristal).
+- FMVs (`docs/fmv_plan.md`): abertura do RE CV medida (VEL 76-79%, emu a 98%); o tier2
+  de hoje não ajuda. Sofdec MPV 1.14 mapeada: a IDCT do macrobloco come ~25% da thread
+  de emulação. Socket ganhou `mem ADDR LEN` (lê a RAM do jogo); `tools/sh4raw.py`
+  desmonta o dump cru. Próximo: IDCT nativa exata por assinatura.

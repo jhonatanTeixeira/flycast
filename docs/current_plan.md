@@ -6,6 +6,17 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-10-02): FMVs do DC
+
+- **in progress** — melhorar as FMVs (Sofdec) com o tier2. Abertura do RE: Code
+  Veronica: thread de emulação a 98%, 40% na faixa do decodificador
+  `8C209000–8C20C000`, só ~8% dentro de regiões do tier2.
+- **pendente** — codec nativo + entender o player da Sofdec (`docs/fmv_plan.md`).
+  Jogos de teste: RE CV, Elemental Gimmick Gear, Grandia II (depois do PRESS START).
+- Lote DC: Grandia II e Macross bootam (4.108/4.109). A tela preta no save do
+  Grandia é do savestate de 13/08 (o core de agosto trava igual). Faltam DOA2,
+  MvC2 e Shenmue 1.
+
 ## Agora (2026-09-28, fim): bateria Naomi TIER2 OFF — o tier2 é perda líquida no Naomi
 
 **done** — bateria completa (19/20; `cvsgd` sem o GD) com `r_t2off.cfg` +

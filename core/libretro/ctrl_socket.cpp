@@ -13,6 +13,7 @@
 //   set tap ON OFF    -> duracao padrao do toque (leituras apertado / solto)
 //   status            -> leitura atual, modo, teclas
 //   pc N              -> amostra o PC e o PR do SH4 N vezes (1 ms)
+//   mem ADDR LEN      -> "BIN <bytes>\n" + LEN bytes da RAM do jogo (hex, ate 1 MB)
 //   press/hold/release/stick/wait -> comandos antigos (ver docs)
 //
 // SEQUENCIA: passos separados por ';', executados em ordem. Passo =
@@ -34,6 +35,7 @@
 #include "types.h"
 #include "hw/sh4/sh4_if.h"
 #include "hw/sh4/sh4_sched.h"
+#include "hw/sh4/sh4_mem.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -596,7 +598,20 @@ bool handle(int fd, const char *line)
 		}
 		return reply(fd, out + "\n");
 	}
-	return reply(fd, "ERR comandos: do mode shot set status pc press hold release stick wait\n");
+	if (!strcmp(cmd, "mem"))
+	{
+		unsigned addr = 0, len = 0;
+		if (sscanf(line, "%*s %x %x", &addr, &len) < 2 || len == 0 || len > (1u << 20))
+			return reply(fd, "ERR mem ADDR LEN (hex, LEN ate 100000)\n");
+		const u8 *p = GetMemPtr(addr, len);
+		if (p == nullptr)
+			return reply(fd, "ERR endereco fora da RAM\n");
+		std::vector<u8> copy(p, p + len);
+		char h[32];
+		snprintf(h, sizeof(h), "BIN %u\n", len);
+		return reply(fd, h) && sendAll(fd, copy.data(), copy.size());
+	}
+	return reply(fd, "ERR comandos: do mode shot set status pc mem press hold release stick wait\n");
 }
 
 void serve(int port)
