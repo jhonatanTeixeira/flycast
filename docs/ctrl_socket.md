@@ -14,6 +14,7 @@ Liga só com a variável: `FC_CTRL_PORT=5555`. Sem ela o core não muda.
 | `do SEQUENCIA` | executa a sequência e bloqueia até ela terminar. Normal: responde `ok N leituras`. Pausado: responde `PPM <bytes> ok N leituras` + a tela do resultado |
 | `mode step` | pausa o jogo; cada `do` despausa, executa, pausa de novo e devolve a tela |
 | `mode live` | volta ao normal |
+| `step N` | (modo step) anda N quadros e pausa de novo, devolvendo a tela. `step 0` só congela. Serve para deixar cutscenes/transições andarem sozinhas sem sair do step |
 | `shot` | `PPM <bytes>\n` + imagem P6; pausado, devolve o quadro em que parou |
 | `set tap ON OFF` | toque padrão: leituras apertado / solto (padrão 6/6) |
 | `status` | leitura atual, modo, fila |

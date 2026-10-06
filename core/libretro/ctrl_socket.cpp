@@ -8,6 +8,8 @@
 //                        leituras\n" + a tela do resultado (jogo ja parado)
 //   mode step|live    -> step: o jogo fica pausado; cada "do" despausa, executa
 //                        e pausa de novo
+//   step N            -> (modo step) anda N quadros e pausa de novo, devolvendo
+//                        a tela; step 0 so congela. Para cutscenes/transicoes
 //   shot              -> "PPM <bytes>\n" + P6 (RGB, de cima para baixo); pausado,
 //                        devolve o quadro em que o jogo parou
 //   set tap ON OFF    -> duracao padrao do toque (leituras apertado / solto)
@@ -106,6 +108,12 @@ std::deque<std::shared_ptr<Program>> pending;
 u64 nextId = 1, doneId = 0;
 std::atomic<bool> stepMode{false};
 std::atomic<bool> frozen{false};
+// "step N": no modo step, deixa a emu thread andar N leituras (quadros) antes de
+// voltar a parar. 0 = parar ja. Serve para deixar o jogo andar sozinho em
+// cutscenes/transicoes sem mudar para o modo live.
+std::atomic<u32> stepFramesLeft{0};	// leituras restantes antes de congelar (0 = congelado)
+// quando um "step N" esta em andamento, a leitura em que ele comecou (para o pollCount)
+std::atomic<u32> stepFramesStart{0};
 
 // estado da execucao (so a emu thread mexe)
 std::shared_ptr<Program> cur;
@@ -470,11 +478,13 @@ bool handle(int fd, const char *line)
 				std::lock_guard<std::mutex> l(shotMx);
 				freezeFrame = false;
 			}
+			stepFramesLeft = 0;
 			stepMode = true;
 		}
 		else if (!strcmp(a1, "live"))
 		{
 			stepMode = false;
+			stepFramesLeft = 0;
 			std::lock_guard<std::mutex> l(seqMx);
 			seqCv.notify_all();
 		}
@@ -487,6 +497,52 @@ bool handle(int fd, const char *line)
 				std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 		return reply(fd, std::string("ok ") + (stepMode ? (frozen ? "step (pausado)" : "step") : "live") + "\n");
+	}
+	if (!strcmp(cmd, "step"))
+	{
+		// "step N": no modo step, anda N leituras (quadros) e para de novo.
+		// Sem N = 1. step 0 = so congela (nada de novo). So no modo step.
+		if (!stepMode)
+			return reply(fd, "ERR step so no modo step (mode step)\n");
+		int frames = 1;
+		sscanf(line, "%*s %d", &frames);
+		if (frames < 0 || frames > 100000)
+			return reply(fd, "ERR step N (N >= 0)\n");
+		{
+			std::lock_guard<std::mutex> l(seqMx);
+			if (cur || !pending.empty())
+				return reply(fd, "ERR step: sequencia em andamento\n");
+		}
+		if (frames == 0)
+		{
+			// so garante que esta parado
+			std::lock_guard<std::mutex> l(seqMx);
+			stepFramesLeft = 0;
+			return reply(fd, std::string("ok ") + (frozen ? "step (pausado)" : "andando") + "\n");
+		}
+		// anda N leituras a partir da proxima
+		u32 start = pollCount;
+		stepFramesStart = start;
+		stepFramesLeft = (u32)frames;
+		frozen = false;
+		{
+			std::lock_guard<std::mutex> l(seqMx);
+			seqCv.notify_all();
+		}
+		// espera a emu thread andar os N quadros e o freezeIfIdle() parar de novo
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!frozen && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		if (!frozen)
+			return reply(fd, "ERR step: nao parou em 30 s\n");
+		std::vector<u8> img;
+		{
+			std::lock_guard<std::mutex> sl(shotMx);
+			img = lastPpm;
+		}
+		char h[64];
+		snprintf(h, sizeof(h), "PPM %zu ok step %d\n", img.size(), frames);
+		return reply(fd, h) && sendAll(fd, img.data(), img.size());
 	}
 	if (!strcmp(cmd, "shot"))
 	{
@@ -611,7 +667,7 @@ bool handle(int fd, const char *line)
 		snprintf(h, sizeof(h), "BIN %u\n", len);
 		return reply(fd, h) && sendAll(fd, copy.data(), copy.size());
 	}
-	return reply(fd, "ERR comandos: do mode shot set status pc mem press hold release stick wait\n");
+	return reply(fd, "ERR comandos: do mode step shot set status pc mem press hold release stick wait\n");
 }
 
 void serve(int port)
@@ -660,7 +716,8 @@ void serve(int port)
 }
 
 // Modo step: pede um quadro ao render e, quando ele chega, para a emu thread
-// ate chegar a proxima sequencia (ou "mode live"). Devolve com a fila nao vazia.
+// ate chegar a proxima sequencia (ou "mode live", ou o "step N" acabar).
+// Devolve com a fila nao vazia.
 void freezeIfIdle()
 {
 	if (!stepMode)
@@ -670,6 +727,9 @@ void freezeIfIdle()
 		if (!pending.empty())
 			return;
 	}
+	// "step N": ainda tem quadros para andar antes de parar
+	if (stepFramesLeft.load() > 0)
+		return;
 	{
 		std::lock_guard<std::mutex> l(shotMx);
 		if (!freezeFrame)
@@ -683,8 +743,10 @@ void freezeIfIdle()
 	std::unique_lock<std::mutex> l(seqMx);
 	frozen = true;
 	doneCv.notify_all();
-	while (stepMode && pending.empty())
-		seqCv.wait_for(l, std::chrono::milliseconds(200));
+	// Congela aqui ate (a) chegar uma sequencia ("do"), (b) sair do modo step
+	// ("mode live") ou (c) um "step N" pedir quadros.
+	while (stepMode && pending.empty() && stepFramesLeft.load() == 0)
+		seqCv.wait_for(l, std::chrono::milliseconds(20));
 	frozen = false;
 	l.unlock();
 	std::lock_guard<std::mutex> sl(shotMx);
@@ -714,6 +776,16 @@ void ctrl_socket_apply(u32 port, u32 &kcode, s8 &joyx, s8 &joyy, s8 &joyrx, s8 &
 	if (!active || port != 0)
 		return;
 	u32 n = ++pollCount;
+
+	// "step N": conta as leituras que o emu thread andou desde o comando. Ao
+	// chegar em zero, freezeIfIdle() congela de novo (a nao ser que chegue
+	// sequencia antes).
+	u32 left = stepFramesLeft.load();
+	if (left > 0)
+	{
+		if (n - stepFramesStart.load() >= left)
+			stepFramesLeft = 0;
+	}
 
 	if (!cur)
 	{

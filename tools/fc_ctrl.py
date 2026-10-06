@@ -3,10 +3,11 @@
 
   fc_ctrl.py [--host 192.168.0.14] [--port 5555] shot tela.png
   fc_ctrl.py do "LS(up,35):2s; A; wait:1s; A+B*3/100ms"   sequencia (docs/ctrl_socket.md)
-  fc_ctrl.py mode step              pausa; cada "do" anda, pausa e devolve a tela
+  fc_ctrl.py mode step              pausa; cada "do"/"step" anda, pausa e devolve a tela
   fc_ctrl.py do "A; DOWN > menu.png"   no modo step salva a tela do resultado
                                        (sem "> arquivo": passo_001.png, passo_002.png...)
-  fc_ctrl.py mode live
+  fc_ctrl.py step 60 > cut.png      modo step: anda 60 quadros (cutscene) e para
+  fc_ctrl.py mode live              (o jogo volta a andar sozinho)
   fc_ctrl.py run "mode step | do A > a.png | do DOWN; A > b.png | mode live"
   fc_ctrl.py mem 8C200000 20000 > sofdec.bin   le a RAM do jogo (hex)
   fc_ctrl.py                        modo interativo (um comando por linha)
@@ -72,6 +73,12 @@ class Ctrl:
             seq, _, path = line.partition('>')
             self.step += 1
             path = path.strip() or 'passo_%03d.png' % self.step
+            return self.shot(path, seq.strip())
+        if p[0] == 'step':
+            # "step N > arquivo.png": anda N quadros no modo step (resposta traz a tela)
+            seq, _, path = line.partition('>')
+            self.step += 1
+            path = path.strip() or 'step_%03d.png' % self.step
             return self.shot(path, seq.strip())
         return self.cmd(line)
 
