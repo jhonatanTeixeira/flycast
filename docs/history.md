@@ -3510,3 +3510,21 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   lista de outro `platform=`.
 - Skill nova **`rodar-debug`**: como rodar um jogo no device com savestate, config
   separada por teste, benchmark e dumper do JIT.
+
+## 2026-10-06 (noite) — `div32` nativo no backend ARM64 (4.111)
+
+- Investigando o Napple pelo dump: a rotina quente de `jsr` (wrapper `8C113F1A`) é um
+  **helper de divisão** — li os literais pela RAM do jogo (socket `mem`):
+  `[8C11401C] = 8C0AC924` e `[8C114020] = 8C0AC7B4`, ambas funções de **divisão por
+  software** do SH4 (`div0u`/`div1`/`rotcl`, 32 iterações).
+- O flycast já conhece o idioma (o decoder casa e emite `shop_div32u/div32s`), mas o
+  backend ARM64 **não tinha `case`** → caía no `default` e fazia uma **chamada C++ por
+  divisão**. Implementado inline (`udiv`/`sdiv` + `msub`) em `rec_arm64.cpp` (4.111).
+- **Validação:** `FC_STATE_HASH` (tier2 off, savestate Napple, `FC_RTC_FIXED` +
+  `FC_INPUT_NEUTRAL`) **idêntico em 979 linhas**; **controle** com bug proposital
+  (+1 no quociente) diverge já na linha 1 → prova que o caminho é exercido e o hash é
+  sensível. Smoke com tier2 on ok.
+- **Medição (Napple, tier2 on, 45 s):** 26,42 → 26,36 fps = **empate** (a divisão é
+  ~0,8% da thread de emu aqui). O ganho é **geral** (todo jogo que divide — 3D, física).
+- Nota: o tier2 **não suporta** `div32u` (rejeita a região, `tier2.cpp:272`), então a
+  divisão sempre roda no tier1. Adicionar `div32u/div32s` ao tier2 fica como próximo.

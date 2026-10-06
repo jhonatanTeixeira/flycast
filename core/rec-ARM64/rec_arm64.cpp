@@ -1596,6 +1596,79 @@ public:
 				}
 				break;
 
+			case shop_div32u:
+			case shop_div32s:
+				{
+					// Divisao do SH4 (idioma div0u + 32x div1) que o decoder agrega em
+					// shop_div32u/s. Antes caia no default -> chamada C++ (shil_chf);
+					// aqui emitimos a divisao nativa direto (udiv/sdiv+msub). Mesma
+					// semantica da impl canonica (core/hw/sh4/dyna/shil_canonical.h):
+					// rd = quociente (low32), rd2 = resto (high32); divisor 0 -> quo 0.
+					// rs1 = dividendo baixo, rs2 = divisor, rs3 = dividendo alto.
+					Register r2, r3;
+					if (op.rs2.is_imm()) { Mov(w0, op.rs2.imm_value()); r2 = w0; }
+					else r2 = regalloc.MapRegister(op.rs2);
+					if (op.rs3.is_imm()) { Mov(w1, op.rs3.imm_value()); r3 = w1; }
+					else r3 = regalloc.MapRegister(op.rs3);
+					Register r1 = regalloc.MapRegister(op.rs1);
+					Register outq = regalloc.MapRegister(op.rd);
+					Register outr = regalloc.MapRegister(op.rd2);
+					Label divzero, have_quo;
+					if (op.op == shop_div32u)
+					{
+						Mov(w4, r1);							// x4 = (u64)(u32)rs1
+						Mov(w5, r3);							// x5 = (u64)(u32)rs3
+						Orr(x4, x4, Operand(x5, LSL, 32));		// x4 = dividendo 64/32
+						Mov(w6, r2);							// x6 = (u64)(u32)divisor
+						Cbz(w6, &divzero);
+						Udiv(x7, x4, x6);
+						Msub(x8, x7, x6, x4);
+						Mov(w8, w8);							// resto (u32)
+						B(&have_quo);
+						Bind(&divzero);
+						Mov(w7, wzr);							// quo = 0
+						Mov(w8, w4);							// rem = dividendo (u32)
+						Bind(&have_quo);
+					}
+					else
+					{
+						// dividendo = ((s64)(s32)rs3 << 32) | (u64)(u32)rs1
+						Mov(w4, r1);
+						Sxtw(x5, r3);
+						Orr(x4, x4, Operand(x5, LSL, 32));
+						// 1's complement -> 2's complement
+						Asr(x5, x4, 63);
+						And(x5, x5, 1);
+						Add(x4, x4, x5);
+						Sxtw(x6, r2);							// divisor (s64)
+						Cbz(w6, &divzero);
+						Sdiv(x7, x4, x6);
+						Mov(w7, w7);							// quo (s32)
+						B(&have_quo);
+						Bind(&divzero);
+						Mov(w7, wzr);							// quo = 0
+						Bind(&have_quo);
+						Sxtw(x9, w7);							// (s64)(s32)quo
+						Msub(x8, x9, x6, x4);					// rem = dividendo - quo*divisor
+						Mov(w8, w8);							// rem (s32)
+						// negative = (rs3 ^ divisor) & 0x80000000
+						Eor(w11, r3, r2);
+						Label quo_dec, rem_dec, done2;
+						Tbnz(w11, 31, &quo_dec);
+						Tbnz(r3, 31, &rem_dec);
+						B(&done2);
+						Bind(&quo_dec);
+						Sub(w7, w7, 1);							// quo--
+						B(&done2);
+						Bind(&rem_dec);
+						Sub(w8, w8, 1);							// rem--
+						Bind(&done2);
+					}
+					Mov(outq, w7);
+					Mov(outr, w8);
+				}
+				break;
+
 			case shop_pref:
 				{
 					Label not_sqw;

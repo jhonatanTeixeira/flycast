@@ -6,6 +6,16 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-10-06, noite): div32 nativo no backend ARM64 (4.111)
+
+**done** — o `rec-ARM64` não tinha `case` para `shop_div32u/div32s` (o decoder casa o
+idioma `div0u`+32×`div1` e emite o op, mas o backend caía no `default` → chamada C++
+por divisão). Agora emite `udiv`/`sdiv` + `msub` inline, com a semântica canônica.
+Validado por `FC_STATE_HASH` (tier2 off): idêntico em 979 linhas, com **controle**
+(bug proposital diverge). **Sem ganho medido no Napple** (a divisão é ~0,8% da thread
+de emu aqui) — ganho **geral** (todo jogo que divide). Próximo: adicionar
+`div32u/div32s` ao tier2 (hoje ele rejeita a região, `tier2.cpp:272`).
+
 ## Agora (2026-10-06, tarde): apresentação de frames — o core mede o fps do jogo
 
 **done** — o `FC_FRAME_WAIT_MS` fixo (20 ms) fazia a main devolver repetido para
