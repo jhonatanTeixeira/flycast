@@ -6,6 +6,23 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-10-06): método — dump do JIT → nativo por assinatura (DC)
+
+O ajuste no Dreamcast segue o ciclo: **dumper leve do JIT → análise estática do
+código gerado → reescrever o trecho quente em nativo → plugar por assinatura dos
+bytes SH4** (`core/rec-ARM64/hle_fn.cpp`), validado por `FC_STATE_HASH` antes de
+medir. Não é profiling em volta do tier2. Detalhe no `CLAUDE.md` e na skill
+**`jit-nativo`**.
+
+- **Feito (Napple Tale):** `lightxf` (`8C14DDC0`, 4.101, +4,5 pts de VEL) e o
+  emissor de strips (`8C14D440`, 4.106, VEL 77 → 87%).
+- **Base levantada (dumper leve + perf):** Napple, DOA2, Shenmue, Shenmue II — o
+  laço de vértices → SQ domina nos quatro (DOA2: região tier2 #1 = 14% da emu;
+  Shenmue II: 7,5%).
+- **Próximos alvos nativos:** laços de vértice do DOA2/Shenmue II/Shenmue;
+  controle do AICA; IDCT da Sofdec (`docs/fmv_plan.md`).
+- **Pendente (projeto, sem código):** otimizador de região estilo LTO (2026-09-24).
+
 ## Agora (2026-10-02): FMVs do DC
 
 - **in progress** — melhorar as FMVs (Sofdec) com o tier2. Abertura do RE: Code
@@ -31,8 +48,15 @@ cont. 6.
   destruída, não boota). **Decisão: no Naomi o tier2 não vale a pena** — é perda
   líquida. (O tier2 mira os 3D do Dreamcast.)
 - **Pendências:** (1) investigar 4.94/4.95 (tier2 OFF); (2) suavização de
-  movimentação (`capsnk`/`cvs2`, cache de paletas + wait-curto); (3) 4.96 —
-  benchmark mais longo/pegar a cena pesada.
+  movimentação (`capsnk`/`cvs2`, cache de paletas + wait-curto).
+- **Resolvidos na própria bateria (docs sincronizados 2026-10-06):**
+  - **4.89/4.91 (GD-ROM)** — lazy loading por segmentos; `cvs2` e `sfz3ugd`
+    **perfeitos** e `meltyb` **perfeito até a luta** (revalidação concluída).
+  - **4.90 (freezes pós-boot)** — os travamentos de `azumanga`, `ggx`, `ggxx`,
+    `ggxxsla` eram **sintoma do tier2**; com tier2 OFF os quatro são **perfeitos**.
+    Não é bug próprio.
+  - **4.96 (benchmark curto)** — resolvido com a janela rolante do retrorun
+    (2026-09-29).
 - **Possível próximo:** decidir se desliga o tier2 por padrão no Naomi (system
   gate) ou se mantém só no Dreamcast.
 
@@ -51,23 +75,25 @@ os de performance, `mbaa` primeiro.** Resultado visual completo e categorias em
   `0C020000`). O `0x1B16` (callback **periódico** da BIOS, roda antes do handover)
   e o 1º render **quebravam o cold boot** (tela preta) — removidos.
   `asndynmt` boota até a atração/jogo com tier2 ligado.
-- **GD-ROM (`cvs2`, `meltyb`, `sfz3ugd`) — corrigido (4.89/4.91):** lazy loading por
-  segmentos (boot 22 s → ~1 s). `cvs2` 60 fps cravados, menor suavidade.
-  **`meltyb`/`sfz3ugd` pendentes de re-validar** com o lazy loading.
+- **GD-ROM (`cvs2`, `meltyb`, `sfz3ugd`) — corrigido (4.89/4.91) e revalidado:**
+  lazy loading por segmentos (boot 22 s → ~1 s). Na bateria tier2 OFF: `cvs2` e
+  `sfz3ugd` **perfeitos**; `meltyb` **perfeito até a luta começar** (4.95).
 - **`asndynmt` — triângulo laranja: parked (4.93 revertido).** A correção (padrão
   `region-bad-ftrv-delayslot`) ficou no mesmo edit da mudança de exceção de FPU do
   decode (4.92) e foi revertida junto; **reaplicar depois** (a exceção de FPU volta
   a ser tomada no decode, o padrão `ftrv` volta a ser adicionado). Restam também
   listras brancas/triângulos prateados em outra cena (parked).
-- **Bootam mas congelam:** `azumanga`, `ggx`, `ggxx`, `ggxxsla` — 4.90 (telas de
-  aviso/região que pedem input; próximo foco).
+- **Bootam mas congelam:** `azumanga`, `ggx`, `ggxx`, `ggxxsla` — 4.90 **resolvido**:
+  eram sintoma do tier2; com tier2 OFF os quatro rodam **perfeitos**.
 - **Perf (depois):** `mbaa` e `cvs2` (menor suavidade), referência `meltybld`.
 
 **Deploy:** `flycast2026_libretro.so` = `4c46a0cae79a7e85e1fd5a6eb01abd07` (backup
 do anterior em `flycast2026_libretro.so.bak-pre-handover`).
 
-**Próximo passo:** retomar a bateria Naomi cold boot (parou no `asndynmt`); depois
-atacar os freezes pós-boot (4.90) — `ggx` tem savestate criado.
+**Próximo passo:** a bateria Naomi cold boot **completa** (tier2 OFF) já rodou —
+19/20, **17 jogáveis/perfeitos** (ver `game_status.md`). O que sobra no Naomi:
+**4.94 (`asndynmt`)** e **4.95 (`meltyb`)**, ambos com tier2 OFF, e a suavização
+de movimentação (`capsnk`/`cvs2`).
 
 ## Agora (2026-09-27, noite): untwiddle Morton na GPU + no-wait + wait-curto
 

@@ -45,6 +45,35 @@ dois é uma ferramenta de investigação legítima.
    CPU plana no benchmark e hicup claro jogando (MBAA). Atualizar quando o
    usuário reavaliar.
 
+## Ciclo de otimização atual: dump do JIT → função nativa por assinatura
+
+O método vigente no Dreamcast (pedido do usuário; ver `history.md` 2026-10-01 e
+`tech_debits.md` 4.100/4.101/4.106) **não** é profiling em volta do tier2: é
+**dumpar o código que o JIT gera → ler como análise estática → reescrever o
+trecho quente em nativo → plugar a correção por assinatura dos bytes SH4**.
+
+1. **Dump leve:** `FC_JIT_DUMP=<dir> FC_JIT_DUMP_LITE=1` (custo ~2,4 pts de VEL; o
+   `FC_JIT_DUMP` completo derruba o jogo — 4.98). No device, a captura
+   (`tools/rr_capture.sh`, chamada pelo `dreamcast.sh`) grava **uma pasta por
+   sessão** em `/roms2/dcbat/<data-hora>_<jogo>/` (`jit-*.txt` +
+   `samples.txt.gz` + `sync-stats` + `bench.json` + `live.log`).
+2. **Leitura:** `tools/jit_lite_report.py` resolve amostra do `perf` → bloco e
+   separa regiões do tier2 de stubs; `tools/sh4dis.py` desmonta o SH4 do dump.
+3. **Nativo:** `core/rec-ARM64/hle_fn.cpp` (`hle_fn_lookup`/`hle_fn_run`). Mesmas
+   operações de float na ordem/fusão do JIT (NEON, `fp-contract=off`) e **mesma
+   contabilidade de ciclos** (desconta os ciclos por bloco e faz `UpdateSystem` na
+   mesma fronteira).
+4. **Plug por assinatura:** o JIT, ao compilar o bloco de entrada com os **bytes
+   SH4 batendo**, chama a versão nativa. Casos: `lightxf` do Napple (`8C14DDC0`) e
+   o emissor de strips (`8C14D440`).
+5. **Validar antes de medir:** `FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL`
+   com tier2 desligado, frame a frame **idêntico**. Só então medir A/B (fps + VEL%
+   + p50/p95/p99, mesma cena).
+6. **Commitar o marco** assim que validado.
+
+Detalhe operacional na skill **`jit-nativo`**. Alvos abertos do DC: laços de
+vértice do DOA2/Shenmue II/Shenmue e a IDCT da Sofdec (`docs/fmv_plan.md`).
+
 ## Regras de ouro
 
 - **Código não se reverte — se corrige. O projeto só anda pra frente.** Quando uma
