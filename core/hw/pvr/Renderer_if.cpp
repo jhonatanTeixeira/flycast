@@ -389,6 +389,27 @@ bool g_syncPagesArmed;			// emu thread (lido no fault, que roda na emu)
 u32 g_syncPagesCount, g_syncPagesTexCount;	// emu thread
 u8 g_syncPageSeen[8 * 1024 * 1024 / 4096];
 
+// Intervalo entre frames NOVOS do jogo (EMA), medido na main. A main usa esse
+// valor para esperar o proximo frame REAL (FC_FRAME_WAIT_MS=auto, o padrao) em
+// vez de devolver repetido na hora: jogo de 30 fps apresenta 30, o de 60
+// apresenta 60, e o que alterna acompanha. Sem isso o retrorun apresenta
+// ~50-60/s com ~40% de repetidos e a imagem fica irregular (a "regressao" de
+// velocidade do Grandia II). Ver docs/sync_emu_render.md.
+static std::atomic<u32> g_gameFrameUsEma{0};
+static u64 g_lastNewFrameUs = 0;
+static void note_new_frame()
+{
+	u64 now = rend_now_us();
+	if (g_lastNewFrameUs != 0)
+	{
+		u32 d = (u32)std::min<u64>(now - g_lastNewFrameUs, 500000);
+		u32 ema = g_gameFrameUsEma.load(std::memory_order_relaxed);
+		ema = ema == 0 ? d : (u32)((ema * 7 + d) / 8);
+		g_gameFrameUsEma.store(ema, std::memory_order_relaxed);
+	}
+	g_lastNewFrameUs = now;
+}
+
 static bool sync_stats_on()
 {
 	if (g_syncStats < 0)
@@ -494,6 +515,7 @@ void sync_dump_stats(const char *path)
 	fprintf(f, "queued\t%u\tdropped\t%u\tdropped_busy_after_early_release\t%u\tdropped_slot_busy\t%u\tqueue_waits\t%u\n",
 			g_queueOk, g_queueDrops, g_queueBusyDrops, g_queueDrops - g_queueBusyDrops, g_queueWaits);
 	fprintf(f, "new_frames\t%u\tsecs\t%.1f\tnew_fps\t%.2f\n", g_syncNewFrames, secs, secs > 0 ? g_syncNewFrames / secs : 0);
+	fprintf(f, "game_frame_ema\t%.3f\tms\n", g_gameFrameUsEma.load(std::memory_order_relaxed) / 1000.0);
 	sync_dist(f, "latency_queue_to_dequeue", lat, 0.001, "ms");
 	sync_dist(f, "process_dequeue_to_reset", proc, 0.001, "ms");
 	sync_dist(f, "render", rd, 0.001, "ms");
@@ -628,14 +650,18 @@ bool rend_single_frame(void)
 				}
 #endif
 				_pvrrc = DequeueRender();
-				if (_pvrrc != NULL && g_syncStats == 1)
-					sync_frame_dequeued();
+				if (_pvrrc != NULL)
+				{
+					note_new_frame();
+					if (g_syncStats == 1)
+						sync_frame_dequeued();
+				}
 
 				if (!settings.rend.ThreadedRendering && _pvrrc == NULL)
 					return false;
 				// Modelo novo (docs/frame_pacing_plan.md): a emu nunca espera a
 				// main. Mas a MAIN, sem frame pronto, espera o proximo com prazo
-				// curto (FC_FRAME_WAIT_MS, padrao 20 ms, como o upstream) em vez
+				// curto (FC_FRAME_WAIT_MS; padrao = o intervalo medido do jogo) em vez
 				// de devolver duplicado na hora. Devolver na hora fazia o frontend
 				// reapresentar o repetido: em FIFO os repetidos enchiam a fila do
 				// apresentador e cada retro_run() ficava ~13 ms preso no vblank,
@@ -644,19 +670,39 @@ bool rend_single_frame(void)
 				// do QueueRender acorda esta espera. 0 = comportamento antigo.
 				if (settings.rend.ThreadedRendering && g_emuNeverWaits && _pvrrc == NULL)
 				{
-					static int frameWaitMs = -1;
-					if (frameWaitMs < 0)
+					// Espera pelo proximo frame REAL: FC_FRAME_WAIT_MS fixa o prazo
+					// em ms (0 = comportamento antigo, devolve repetido na hora); sem
+					// a variavel, o prazo e o intervalo MEDIDO do jogo (EMA em
+					// g_gameFrameUsEma) -- 30 fps espera ~30 ms, 60 fps ~16 ms, e o
+					// que alterna acompanha. Assim a main so devolve frame novo na
+					// taxa do jogo: o contador nao infla com repetidos e o retrorun
+					// nao se perde.
+					static int frameWaitMs = -2;	// -2 = nao lido; -1 = auto
+					if (frameWaitMs == -2)
 					{
 						const char *e = getenv("FC_FRAME_WAIT_MS");
-						frameWaitMs = e != nullptr ? std::max(0, atoi(e)) : 20;
+						frameWaitMs = e != nullptr ? std::max(0, atoi(e)) : -1;
+					}
+					u64 waitUs;
+					if (frameWaitMs >= 0)
+						waitUs = (u64)frameWaitMs * 1000;
+					else
+					{
+						u32 ema = g_gameFrameUsEma.load(std::memory_order_relaxed);
+						if (ema == 0)
+							ema = 20000;	// ainda sem medicao
+						// Margem generosa (2x o intervalo medido): cobre os frames
+						// que atrasam (p95/p99 do intervalo). A espera termina no
+						// rs quando o frame chega, entao o prazo so limita o stall.
+						waitUs = (u64)std::min<u32>(std::max<u32>(ema * 2, 20000), 150000);
 					}
 					// Ate um PRAZO: o rs fica sinalizado quando a main pega um
 					// frame sem ter esperado por ele; esse sinal velho fazia o
 					// Wait voltar na hora sem frame -> repetido -> a fila do
 					// apresentador continuava cheia. Repete a espera ate o prazo.
-					if (frameWaitMs > 0)
+					if (waitUs > 0)
 					{
-						const u64 deadline = rend_now_us() + (u64)frameWaitMs * 1000;
+						const u64 deadline = rend_now_us() + waitUs;
 						for (;;)
 						{
 							const u64 now = rend_now_us();
@@ -668,6 +714,7 @@ bool rend_single_frame(void)
 							_pvrrc = DequeueRender();
 							if (_pvrrc != NULL)
 							{
+								note_new_frame();
 								if (g_syncStats == 1)
 									sync_frame_dequeued();
 								break;

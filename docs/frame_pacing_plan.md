@@ -148,6 +148,16 @@ com o split (wait/process/render/present) e identificar o culpado.
 - Alvo: **reduzir `hiccup_rate` e a cauda (p95/p99)** mantendo VEL e a média
   de fps; a média sozinha não vale.
 - Sensação: o usuário avalia no device (a tela é o juiz final).
+
+## Resultado (2026-10-06) — o prazo da main vira o fps MEDIDO do jogo
+
+A fase 3 (`FC_FRAME_WAIT_MS` fixo em 20 ms) resolveu os 60 fps, mas **não** os 30: o
+prazo de 20 ms < o intervalo de 33 ms, então a main estourava o prazo e devolvia
+repetido, e o retrorun reapresentava (Grandia II: ~50/s com 40% de dupes, apesar da
+VEL 100%). Correção (4.110): o core mede o intervalo entre frames novos (EMA) e a main
+espera o frame real por 2× o intervalo — **30 fps apresenta 30, 60 apresenta 60**.
+Detalhe e tabela em `docs/sync_emu_render.md` §10. Isto **encerra o item**: o pacing
+deixou de ser um prazo fixo e passou a acompanhar o jogo (que alterna) sozinho.
 - Registrar em `tech_debits.md` (status) e `history.md` (timestamp).
 
 ## 7. Ordem

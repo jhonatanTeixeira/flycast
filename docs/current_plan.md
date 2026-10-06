@@ -6,6 +6,15 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-10-06, tarde): apresentação de frames — o core mede o fps do jogo
+
+**done** — o `FC_FRAME_WAIT_MS` fixo (20 ms) fazia a main devolver repetido para
+jogos de 30 fps: o Grandia II apresentava ~50/s com 40% de dupes (sensação
+< 100%, apesar da emulação a VEL 100%). Agora o core **mede o intervalo entre
+frames novos** (EMA) e a main espera o frame real por **2× o intervalo**. Grandia:
+29,9/s, 0,08% de dupes; mbaa/kofxi/cvs2 (60 fps) sem regressão. Os dupes eram a
+causa de artefatos do mbaa. Ver 4.110 e `history.md` 2026-10-06.
+
 ## Agora (2026-10-06): método — dump do JIT → nativo por assinatura (DC)
 
 O ajuste no Dreamcast segue o ciclo: **dumper leve do JIT → análise estática do

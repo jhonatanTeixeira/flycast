@@ -3484,3 +3484,29 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   de hoje não ajuda. Sofdec MPV 1.14 mapeada: a IDCT do macrobloco come ~25% da thread
   de emulação. Socket ganhou `mem ADDR LEN` (lê a RAM do jogo); `tools/sh4raw.py`
   desmonta o dump cru. Próximo: IDCT nativa exata por assinatura.
+
+## 2026-10-06 — apresentação de frames: o core mede o fps do jogo e não devolve mais repetido
+
+- **Regressão reportada (Grandia II):** "rodava 100% a 30 fps, agora a 45-50 fps e
+  com sensação < 100%". Medido no savestate: a **emulação estava a 100%** (VEL 100%,
+  ~30 frames novos/s); o que inflava era a **apresentação** — o `FC_FRAME_WAIT_MS`
+  fixo em 20 ms (menor que o intervalo de 33 ms de um jogo de 30 fps) fazia a main
+  estourar o prazo e devolver `video_cb(0)`, e o retrorun reapresentava o último
+  frame: contador ~50, 40% de repetidos.
+- **Correção (4.110):** o core **mede o intervalo entre frames novos** (EMA,
+  `g_gameFrameUsEma`, em `core/hw/pvr/Renderer_if.cpp`) e a main espera o próximo
+  frame **real** por **2× esse intervalo**. Sem `FC_FRAME_WAIT_MS` = auto (novo
+  padrão); `=N` fixa o prazo (A/B); `=0` = comportamento antigo.
+- **Medido (Grandia II, savestate, 40 s por rodada):** apresentado **50,3 → 29,9/s**;
+  dupes **40,5% → 0,08%**; VEL 100%. (A/B: 20 ms = 50,3/40,5%; 40 ms = 31,3/4,5%;
+  auto 2×EMA = 29,9/0,08%.)
+- **60 fps validados (sem regressão):** mbaa **60,0** (1,0% dupes), kofxi **58,9**
+  (1,1%), cvs2 **59,8** (0,4%). O usuário confirmou no device: "ficaram mais
+  perfeitos" e os **dupes eram a causa de artefatos do mbaa**.
+- Core novo instalado como oficial (`flycast2026_libretro.so`, backup
+  `bak-pre-framewait-2026-10-06` em `/roms2/backups`). **Nota de build:** o port x64
+  (descartado) tinha deixado objetos **EM:62** parados — o link arm64 falhou
+  (`arm_mem.o` x86-64) até `find . -name '*.o' -delete`; o `make clean` não pega a
+  lista de outro `platform=`.
+- Skill nova **`rodar-debug`**: como rodar um jogo no device com savestate, config
+  separada por teste, benchmark e dumper do JIT.

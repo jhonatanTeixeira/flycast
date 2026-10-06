@@ -968,3 +968,31 @@ página saiu em `ea0414f3c`, sem registro) — fazer junto do commit deste docum
   prazo; antes um sinal sobrando fazia o Wait voltar na hora e gerar repetido) e a
   regra de descarte "render ocupado após liberação antecipada" (ainda ~90% dos
   descartes).
+
+## 10. Resultado (2026-10-06): o prazo da main passa a ser o fps MEDIDO do jogo (4.110)
+
+A fase 3 fixou o prazo em `FC_FRAME_WAIT_MS=20` ms. Isso resolveu o caso de 60 fps,
+mas **não** o de 30 fps: o prazo de 20 ms é menor que o intervalo de 33 ms, então a
+main estourava o prazo, devolvia `video_cb(0)` e o retrorun reapresentava o repetido.
+Medido no Grandia II (savestate): emulação a **VEL 100%** (30 frames novos/s), mas a
+apresentação a **~50/s com 40% de dupes** — o contador subia e a imagem ficava
+irregular (p95 do intervalo entre frames novos 47 ms).
+
+**Correção:** o core mede o **intervalo entre frames novos** (EMA, `g_gameFrameUsEma`
+em `Renderer_if.cpp`, alimentado por `note_new_frame()` a cada dequeue) e a main espera
+o próximo frame **real** por **2× esse intervalo** (prazo generoso; a espera termina no
+`rs` quando o frame chega, o prazo só limita o stall). `FC_FRAME_WAIT_MS=N` fixa; sem a
+variável = auto. Resultado por jogo (savestate, 40 s, `perfmax performance`):
+
+| jogo | fps do jogo | apresentado/s | dupes | EMA do intervalo |
+|---|---|---|---|---|
+| Grandia II | 30 | 50,3 → **29,9** | 40,5% → **0,08%** | 35,1 ms |
+| mbaa | 60 | **60,0** | **1,0%** | 15,9 ms |
+| kofxi | 60 | **58,9** | **1,1%** | 16,7 ms |
+| cvs2 | 60 | **59,8** | **0,4%** | 16,7 ms |
+
+Ou seja: a apresentação passa a casar com a taxa real do jogo (30 apresenta 30, 60
+apresenta 60) e **acaba o custo de reapresentar repetido**. Os dupes eram também a
+**causa dos artefatos do mbaa** (confirmado pelo usuário no device). A EMA de
+`new_frame_interval` continua no `FC_SYNC_STATS`, que agora também imprime
+`game_frame_ema`.

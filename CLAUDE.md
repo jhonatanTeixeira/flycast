@@ -165,6 +165,11 @@ vértice do DOA2/Shenmue II/Shenmue e a IDCT da Sofdec (`docs/fmv_plan.md`).
   do benchmark JSON, core+vídeo combinados) é mais fiel ao que se sente na tela
   do que `core_*` isolado. Ao comparar A/B, sempre puxar a tabela completa dos
   dois lados antes de concluir qualquer coisa.
+- **Olhar sempre apresentado × frames novos × dupes.** O contador do retrorun e o
+  `presented_frames` do benchmark contam frames **repetidos**; `new_fps` (do
+  `FC_SYNC_STATS`) é a taxa **real** do jogo. Dupes altos = apresentação inflada
+  (não é lentidão de emulação — a VEL fica 100%) e causam artefatos (era a causa dos
+  artefatos do mbaa). O core casa a apresentação com o fps **medido** do jogo (4.110).
 - **Não use `-j$(nproc)` nesta máquina.** É compartilhada com várias outras sessões
   de Claude Code + Docker + Grafana/Tempo rodando ao mesmo tempo; builds grandes
   são derrubados por um watchdog de baixa-memória do sistema (não é o build en si

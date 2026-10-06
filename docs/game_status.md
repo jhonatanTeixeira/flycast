@@ -9,6 +9,20 @@
 > hicup mesmo quando a média está boa. "retrorun salva" = o frameskip
 > adaptativo do frontend compensa parte do problema.
 
+## 2026-10-06 — apresentação casada com o fps do jogo (dupes fora)
+
+Medido e confirmado jogando: a apresentação agora casa com a taxa **real** do jogo.
+Antes, jogos de 30 fps (Grandia II) apresentavam ~50/s com ~40% de frames repetidos
+(o `FC_FRAME_WAIT_MS` fixo em 20 ms) — o que **não** era lentidão de emulação (a VEL
+já estava 100%), mas dava sensação < 100% e artefatos. Agora o core **mede o intervalo
+entre frames novos** e a main espera o frame real (4.110). Confirmado pelo usuário no
+device ("ficaram mais perfeitos"):
+
+- **Grandia II** (DC): **30 fps lisos**, ~0% de dupes (era ~50/s com 40%).
+- **mbaa** (Naomi): **60 fps**, 1,0% de dupes — **sumiram os artefatos** (eram os dupes).
+- **kofxi** (Atomiswave): **58,9/s**, 1,1% de dupes.
+- **cvs2** (DC): **59,8/s**, 0,4% de dupes.
+
 ## Resumo
 
 | Jogo | FPS observado | Cauda longa | Veredito |
