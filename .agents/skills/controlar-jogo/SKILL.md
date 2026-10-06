@@ -1,14 +1,18 @@
 ---
 name: controlar-jogo
-description: Controlar um jogo rodando no device R36 pelo socket do core (FC_CTRL_PORT) — ver a tela, apertar botões, mexer analógicos com força, jogar pausado passo a passo e amostrar onde o SH4 está girando. Use quando precisar reproduzir um bug no device sem o usuário segurar o controle (ex.: chegar numa tela que trava), navegar menus, levar o personagem a um ponto, conferir visualmente o efeito de uma mudança, ou quando o usuário pedir para "jogar", "apertar", "ir até", "abrir o menu" ou "ver a tela" do jogo.
+description: Ensinar a jogar/controlar um jogo rodando no emulador pelo socket do core (FC_CTRL_PORT) — ver a tela, apertar botões, mexer nos analógicos, pausar e despausar o jogo, avançar N quadros (cutscenes) e conferir cada passo por imagem. Use sempre que precisar pilotar um jogo sem ninguém segurando o controle: navegar menus, andar até um ponto, avançar uma cutscene, apertar um botão e ver o resultado, ou quando o usuário pedir "joga", "aperta", "vai até", "abre o menu", "passa essa cena" ou "mostra a tela" do jogo.
 ---
 
 # Controlar o jogo pelo socket do core
 
 O core flycast deste repositório tem um servidor TCP opcional
 (`core/libretro/ctrl_socket.cpp`, referência completa em `docs/ctrl_socket.md`).
-Com ele você vê a tela e mexe no controle 1 do jogo rodando no device. O controle
-físico continua valendo: o socket soma botões com ele.
+Com ele você **vê a tela** e **mexe no controle 1** do jogo que está rodando. É a
+base para uma LLM jogar sozinha. O controle físico continua valendo: o socket
+**soma** os botões com ele.
+
+A ideia central: você age em passos pequenos e **olha a imagem depois de cada
+passo**. É assim que se joga — não tem como saber o que aconteceu sem ver a tela.
 
 ## 1. Abrir o jogo com o socket
 
@@ -35,21 +39,24 @@ timeout 60 sshpass -p ark ssh ark@192.168.0.14 '
   savestate é `/roms2/dreamcast/<jogo>.fc2021-rrstate.auto`.
 - Para fechar o jogo, use **`pkill -x retrorun3`**. Nunca `pkill -f "retrorun3 ..."`:
   o `-f` casa com a linha de comando do próprio ssh e mata a sua sessão no meio.
+- **Volte para `mode live` antes de fechar** (com a emulação parada o fechamento
+  pode travar).
 - Espere ~25-30 s depois de abrir antes de conectar. A linha
   `ctrl socket: ouvindo na porta 5555` aparece no log.
 
-## 2. Cliente
+## 2. Cliente (`tools/fc_ctrl.py`)
 
 ```bash
 P=/home/jhonatanteixeira/.pyenv/shims/python3   # o python do PATH (venv) não tem Pillow
 $P tools/fc_ctrl.py shot tela.png
 $P tools/fc_ctrl.py do "LS(up,40):1s; A"
-$P tools/fc_ctrl.py run "mode step | do A > a.png | do DOWN; A > b.png | mode live"
+$P tools/fc_ctrl.py step 120            # modo step: anda 120 quadros (cutscene)
+$P tools/fc_ctrl.py run "mode step | do A > a.png | step 60 | do DOWN; A > b.png | mode live"
 ```
 
 `run` separa comandos com `|`, porque o `;` pertence à sequência. Depois de cada
-`shot` ou passo, **olhe a imagem** (Read no PNG). É a única forma de saber o que
-aconteceu.
+`shot`, `do` ou `step`, **olhe a imagem** (Read no PNG). É a única forma de saber
+o que aconteceu.
 
 ## 3. Linguagem de sequência (`do`)
 
@@ -71,45 +78,55 @@ apertado + 6 solto (`set tap ON OFF` muda isso).
 O tempo em `s`/`ms` é o tempo **emulado**: com o jogo lento, o passo dura mais na
 parede e o mesmo no jogo. `f` = leituras do controle (~1 por quadro).
 
-## 4. Modo pausado (o laço de quem está jogando)
+## 4. Modo pausa: ligar, andar e desligar
+
+O jeito de jogar sem pressa é **pausar** o jogo; cada ação sua anda o jogo o
+necessário e pausa de novo, devolvendo a tela pronta.
 
 ```
-mode step                      -> jogo congela
-do LS(ur,100):800ms > p1.png   -> anda, congela de novo, a resposta JÁ É a tela
-do A > p2.png
-mode live                      -> SEMPRE antes de fechar o jogo
+mode step                      -> pausa o jogo (congela)
+do "A" > a.png                 -> aperta A, o jogo anda sozinho o necessário e pausa;
+                                  a resposta JÁ É a tela do resultado
+step 60 > cut.png              -> anda 60 quadros (cutscene/transição) e pausa
+step 0                         -> só garante que está parado
+mode live                      -> despausa: o jogo volta a andar sozinho
 ```
 
-No modo step, `do` bloqueia até a sequência terminar e o jogo parar, e responde
-`PPM <bytes> ok N leituras` + a imagem do resultado (~0,5 s por ciclo). Com a
-emulação parada o som fica mudo, e fechar o jogo nesse estado pode travar.
+- **Ligar:** `mode step`. **Desligar:** `mode live` (SEMPRE antes de fechar).
+- No modo step, `do` bloqueia até a sequência terminar e o jogo parar, e responde
+  `PPM <bytes> ok N leituras` + a imagem do resultado (~0,5 s por ciclo).
+- **`step N`** (só no modo step): deixa o jogo andar **N quadros** e pausa de
+  novo, devolvendo a tela. Use para deixar cutscenes/transições andarem sozinhas
+  sem sair do step. `step 0` só congela.
+- `step` fora do modo step responde `ERR step so no modo step`.
+- Com a emulação parada o som fica mudo, e fechar o jogo nesse estado pode travar.
 
-## 5. Para debugar
+## 5. O laço de quem está jogando
 
-- `pc 2000` amostra PC e PR do SH4 a cada 1 ms e lista os mais frequentes. Serve
-  para ver onde o jogo gira quando trava (tela preta, laço de espera). Compare
-  com a mesma amostra antes do problema. O PC do contexto só muda quando o JIT
-  passa pelo despachante; o PR (endereço de retorno) costuma ser mais estável.
-- Reproduzir um bug: chegue no ponto pelo socket uma vez, anote a sequência que
-  funcionou e repita em cada build/opção (A/B com tier2 ligado/desligado, core
-  antigo de `/home/ark/.config/retroarch/cores/*.bak-*`, etc.).
-- O `perf` da captura (`rr_capture.sh`) ocupa o processo. Um segundo
-  `perf record -p` falha; nesse caso use `pc`.
-- Status e fila: `status`.
+1. **Veja a tela** (`shot`) e entenda onde você está.
+2. **Pause** (`mode step`) para agir com calma.
+3. **Dê um passo curto** (`do "..."` ou `step N`) e **olhe a imagem** que voltou.
+4. **Repita** até chegar onde queria; a cada passo, reavalie pela imagem.
+5. **Despause** (`mode live`) quando quiser deixar o jogo correr (cutscene longa,
+   espera) e para fechar.
 
-## 6. Lições de quem já usou (Grandia II, 2026-10-02)
+Dicas que economizam tentativa e erro:
 
 - **Ande em passos curtos e confira a tela a cada um.** O personagem anda em
-  relação à câmera, e a câmera segue o personagem. Chutar a distância inteira de
-  uma vez erra por "alguns centímetros".
+  relação à câmera, e a câmera segue o personagem (Grandia II, 2026-10-02).
+  Chutar a distância inteira de uma vez erra por "alguns centímetros".
 - Para interagir com objetos (cristal de save, NPC), o personagem precisa estar
-  **dentro/colado**. Se A não faz nada, chegue mais perto antes de trocar de botão.
+  **dentro/colado**. Se `A` não faz nada, chegue mais perto antes de trocar de botão.
 - Os nomes são os botões do Dreamcast. No Grandia II, `A` abre/confirma e o `Y`
   troca a câmera ("FORWARD"). Não deduza o mapeamento do botão físico do R36 pela
   tabela do core sem testar (isso já deu errado).
 - Toque curto (4 leituras) às vezes não registra em jogos com lógica a 30 fps.
   Use o padrão (6) ou `:10f`.
+- Cutscene/tela parada no tempo: `mode live` deixa correr; se quiser controlar,
+  `step N` avança N quadros por vez.
 - Se o usuário estiver segurando o device, avise antes de mexer. Os dois
   controles somam.
 - Identificar objetos na tela costuma funcionar bem. Posição exata, tempo e
   botão certo se acertam tentando e olhando de novo.
+- `status` mostra a leitura atual, o modo (live/step pausado) e a fila — útil para
+  conferir se está pausado antes de fechar.
