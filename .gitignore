@@ -56,3 +56,10 @@ reicast-ios.xccheckout
 *.a
 .vscode/c_cpp_properties.json
 
+# Screenshots/capturas de tela soltas na raiz (as da bateria ficam versionadas em docs/batery/)
+/*.ppm
+/*.png
+/*.jpg
+/*.jpeg
+/*.bmp
+
