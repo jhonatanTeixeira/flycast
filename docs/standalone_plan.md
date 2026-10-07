@@ -1,7 +1,7 @@
 # Plano: flycast standalone — frontend SDL próprio (absorver o retrorun)
 
-> Documento de planejamento. **Só plano por enquanto — nada de código.**
-> Decisão registrada em 2026-10-07.
+> Documento de planejamento. **Só plano — nada de código.** É um **plano para o
+> futuro**, não uma execução imediata. Decisão registrada em 2026-10-07.
 
 ## 1. Objetivo e decisão
 
@@ -99,15 +99,14 @@ flycast/
 | **settings** | core options → `settings` | **acesso direto a `settings`** (base do menu) |
 | savestate | `retro_serialize`/`unserialize` | `core/serialize.cpp` direto |
 
-Duas sub-abordagens (decidir na fase 1):
-- **B1 — reaproveitar a glue**: compilar as funções `retro_*` no binário e
-  chamá-las in-process. Chega rápido a um standalone funcional.
-- **B2 — chamadas diretas ao core**: substituir a glue por `dc_*` + acesso
-  direto a `settings`/serialize. Mais limpo; é o que permite o **menu com todas
-  as configs**.
+Abordagem **decidida: B1** — **reaproveitar a glue**: compilar as funções
+`retro_*` no binário e chamá-las **in-process** (sem `dlopen`). Chega rápido a um
+standalone funcional reusando o que já funciona.
 
-Sugestão: começar **B1** (rápido, reusa o que já funciona) e migrar para **B2**
-onde o menu/hooks exigem.
+> B2 (chamadas diretas ao core, `dc_*` + acesso direto a `settings`/serialize)
+> fica como evolução futura possível, **não** é o alvo agora. O **menu com todas
+> as configs** (seção 6.7) é o ponto onde o B2 tende a ser necessário — decidir
+> quando chegar lá.
 
 ## 6. Features a portar (copy-paste adaptado do SDL do retrorun)
 
@@ -134,8 +133,8 @@ onde o menu/hooks exigem.
 
 | fase | entrega | critério de aceite |
 |---|---|---|
-| **0** | Confirmar escopo (seção 9) + decidir B1 × B2 | você confirma |
-| **1** | `frontend/` compilando e **bootando um jogo** (vídeo+input+áudio+config), core in-process | Napple abre e roda com som |
+| **0** | Escopo e abordagem confirmados (seção 9); inventário congelado | feito (plano aprovado) |
+| **1** | `frontend/` compilando e **bootando um jogo** (vídeo+input+áudio+config), **glue `retro_*` in-process (B1)** | Napple abre e roda com som |
 | **2** | Apresentação em thread (FIFO/mailbox, depth, vsync) + **WSOLA** | mesmo comportamento do `retrorun3` (4.105/4.110/4.113) |
 | **3** | **Frameskip adaptativo** portado (com base de fps correta) | fps/suavidade ≥ retrorun3; sem regressão |
 | **4** | Saves (SRAM/savestate, auto, slots) + menu (subconjunto) | load/save no device |
@@ -166,10 +165,12 @@ Registradas:
 - ✅ **Escopo enxuto:** sem RetroAchievements, sem decorações/bezel, sem go2,
   sem netplay — só o essencial do R36.
 
+- ✅ **Abordagem B1**: reaproveitar as funções `retro_*` **in-process** (sem
+  `dlopen` da `.so`). B2 (direto no core) fica como evolução futura.
+- ✅ **É plano para o futuro** — não executar agora.
+
 Abertas (propostas para OK):
-1. **B1 × B2** na fase 1 — *proposto:* começar **B1** (glue in-process) e migrar
-   para **B2** (chamadas diretas) onde o menu/hooks exigirem.
-2. **Nome/instalação** — *proposto:* binário `flycast` no `/usr/local/bin`,
+1. **Nome/instalação** — *proposto:* binário `flycast` no `/usr/local/bin`,
    convivendo com o `flycastsa` do upstream; o ES passa a oferecê-lo ao lado do
    `retrorun3` durante a transição (o usuário escolhe qual lançar).
 
