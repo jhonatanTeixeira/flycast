@@ -3528,3 +3528,38 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   ~0,8% da thread de emu aqui). O ganho é **geral** (todo jogo que divide — 3D, física).
 - Nota: o tier2 **não suporta** `div32u` (rejeita a região, `tier2.cpp:272`), então a
   divisão sempre roda no tier1. Adicionar `div32u/div32s` ao tier2 fica como próximo.
+
+## 2026-10-07 — som desafinado do DC: WSOLA (time-stretch) no backend SDL do retrorun (4.113)
+
+- **Pedido:** "som desafinado em qualquer jogo que não atinge a velocidade
+  máxima, e só no DC". **Diagnóstico:** o `AudioRateControl` do backend **SDL**
+  do retrorun (o que o `retrorun3` usa) reamostra o áudio a `1/velocidade`
+  (`audio_rate_control.h:89`, velocidade medida pela taxa de produção de áudio),
+  então todo jogo DC abaixo de 100% toca ~`ratio` semitons abaixo. Dados das
+  capturas: DC abaixo de 100% → ratio 1,07-1,28 (Grandia 1,11-1,28; DOA2 1,07;
+  Shenmue 1,13; RE:CV 1,09; Napple 1,15); Naomi a 100% → ratio 1,000. O projeto
+  **já tinha WSOLA**, mas só no backend **go2** (`src/go2/audio.cpp`, batch +
+  OpenAL, perfis `lowend_*`/`doa_*`) — o caminho SDL nunca recebeu.
+- **Correção:** `AudioTimeStretch` (WSOLA streaming, Verhelst & Roelands) em
+  `audio_rate_control.h`, usado pelo `process()`; flag
+  `RETRORUN_AUDIO_TIME_STRETCH` (default on; `=0` volta o resampler antigo, A/B).
+  Janela Hann **512** / hop **256**, busca **±64**, correlação a cada 2 amostras,
+  overlap-add com hop de análise `= hop/ratio`, estado carregado entre chunks. O
+  tom fica preservado; só o tempo muda (slow motion em vez de desafinado).
+- **Bug de integração (achado no device):** `output()` devolvia o buffer do
+  resampler antigo; no caminho novo o backend chamava
+  `SDL_QueueAudio(ptr vazio, len>0)` e **derrubava o processo** (SIGSEGV na
+  thread de áudio) no primeiro áudio. Corrigido; coberto por teste
+  (`tests/audio_time_stretch_test.cpp`, caminho `process()`+`output()`).
+- **Validação no device (Napple, R36):** cold boot (cena leve) exit 0, sem crash,
+  ratio 0,999 (não estica — 100%); savestate pesado (~88%) exit 0, ratio **1,125**,
+  underruns **15** (controle com `=0`: ratio 1,139, 7 underruns; hop 512 dava 42 →
+  hop 256 resolveu), overruns 9, 26,4 fps. **Falta o veredito audível do usuário.**
+- **Deploy:** `retrorun3` md5 `53040f37` (backup `retrorun3.bak-pre-wsola` em
+  `/roms2/backups`); `dreamcast.sh` ganhou `RETRORUN_AUDIO_TIME_STRETCH=1` no
+  `env` do `rr_capture.sh` (backup `dreamcast.sh.bak-pre-wsola`). Commits
+  `cb28fea`/`7776b7c` no fork `retrorun` (push ok).
+- **Também anotado:** 4.112 (o retrorun nunca sabe o fps real do jogo — usa o
+  refresh de 60; contador/frameskip dependem disso) e o Napple no
+  `game_status.md` (savestate agora na área pesada: ~86-88%/27 fps; dungeon
+  batia 100%/30).

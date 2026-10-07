@@ -690,3 +690,24 @@ todos duplicados, isso é o "340 fps"), áudio esticado em média 1,33x pelo ret
 | B dump JIT | 23,8 | 7,1 | 662 | 0,71 / 0,30 / 0,41 / 22,6 | 1,03 / 1,56 / 23,7 | 61 |
 
 (p50/média de frame time não valem aqui: as voltas com frame duplicado dominam.)
+
+### Napple Tale (DC) — o savestate mudou de área: cena pesada a ~86% (2026-10-06)
+
+O savestate atual está na **área mais pesada** (fora da dungeon): a emulação é
+genuinamente a ~86% (25,8 frames novos/s de 30; core ~36-37 ms/quadro; VEL 85,9%)
+— "27 fps" no contador do retrorun, quase lá mas não full speed. Em áreas leves
+(interior da dungeon) o **mesmo jogo bate 100% / 30 fps** (captura de 2026-10-02:
+29,8 novos/s, core 17,9 ms, VEL 99,6%). Não é regressão: é a cena.
+
+- O **som desafinava** nessa cena porque o `retrorun` reamostrava o áudio a
+  `1/velocidade` (ratio medido 1,15 → ~2,4 semitons abaixo; `tech_debits` 4.97).
+  Vale para **qualquer jogo DC abaixo de 100%**; em Naomi/Atomiswave os jogos
+  batem 100% (ratio 1,000) e não desafinam — daí a impressão de "só no DC".
+- **Corrigido (2026-10-07, 4.113):** o backend SDL do retrorun agora faz
+  **time-stretch preservando o tom** (WSOLA) — a música desacelera junto com o
+  jogo mas fica **afinada** (ratio 1,125 na cena pesada, underruns 15 vs 7 do
+  resampler antigo). Falta o veredito audível do usuário.
+- O retrorun não sabe que o jogo é de 30 fps: o core declara sempre o refresh de
+  vídeo (60) em `retro_get_system_av_info`. Isso não é a causa do desafinado (a
+  taxa que ele mede vem do áudio), mas afeta o contador e o frameskip (que no
+  build SDL nem é compilado). Ver `docs/tech_debits.md` 4.97/4.112.
