@@ -6,6 +6,23 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-10-07): o core reporta o fps NATURAL do jogo ao frontend (4.112)
+
+**done** — o retrorun só conhecia o refresh de vídeo (60) via
+`retro_get_system_av_info` e o usava como `max_fps`; num jogo de 30 fps isso
+fazia o frameskip adaptativo comparar contra 1/60. Correção **no core** (o
+cálculo do retrorun ficou intacto): mede o **período natural em vblanks
+EMULADOS por frame** (janela de 1 s) e reporta `timing.fps = refresh/vblanks`
+por `SET_SYSTEM_AV_INFO`. Napple (savestate pesado): `declared_fps` 60 → **30**,
+1 aplicação de AV, sem regressão. Também destravado o `#ifndef RR_PLATFORM_SDL`
+do frameskip no fork `retrorun`. Ver 4.112 (atualizado).
+
+- **Aberto:** o frameskip só roda com `retrorun_loop_declared_fps=true` (device
+  `false`) e mede só o trabalho da iteração (sem o sleep) — decisão do usuário
+  sobre ajustar isso ou não.
+- **Achado à parte:** `retrorun_loop_declared_fps=true` levou o Napple a
+  **VEL ~100%** (contra ~89% com `false`) nos dois cores — pacing, não report.
+
 ## Agora (2026-10-06, noite): div32 nativo no backend ARM64 (4.111)
 
 **done** — o `rec-ARM64` não tinha `case` para `shop_div32u/div32s` (o decoder casa o

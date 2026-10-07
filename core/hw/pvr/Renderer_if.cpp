@@ -397,6 +397,13 @@ u8 g_syncPageSeen[8 * 1024 * 1024 / 4096];
 // velocidade do Grandia II). Ver docs/sync_emu_render.md.
 static std::atomic<u32> g_gameFrameUsEma{0};
 static u64 g_lastNewFrameUs = 0;
+// Total de frames NOVOS (retro_run com frame real, nao duplicado) desde o inicio.
+// O libretro.cpp combina isso com spg_vblank_count() para medir, numa janela de
+// 1s, quantos vblanks EMULADOS o jogo gasta por frame -- o periodo NATURAL dele.
+// Medido em tempo emulado, nao cresce quando a emulacao fica lenta (um jogo de
+// 30 fps continua dando 2,0 vblanks por frame mesmo a 50% de velocidade). So
+// leitura: nao altera a emulacao nem o frame-wait.
+static std::atomic<u64> g_newFrameCount{0};
 static void note_new_frame()
 {
 	u64 now = rend_now_us();
@@ -408,6 +415,13 @@ static void note_new_frame()
 		g_gameFrameUsEma.store(ema, std::memory_order_relaxed);
 	}
 	g_lastNewFrameUs = now;
+	g_newFrameCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Contador de frames NOVOS apresentados desde o inicio (para o report de fps).
+u64 rend_new_frame_count()
+{
+	return g_newFrameCount.load(std::memory_order_relaxed);
 }
 
 static bool sync_stats_on()

@@ -3564,3 +3564,49 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   refresh de 60; contador/frameskip dependem disso) e o Napple no
   `game_status.md` (savestate agora na área pesada: ~86-88%/27 fps; dungeon
   batia 100%/30).
+
+## 2026-10-07 (cont.) — o core passa a reportar o fps NATURAL do jogo (4.112) + frameskip destravado no SDL
+
+- **Pedido do usuário:** "colocar o frameskip adaptativo no SDL do retrorun".
+  Ao investigar, a causa raiz apareceu **no core**: o retrorun só conhece o
+  refresh de vídeo (60) pelo `retro_get_system_av_info` e o usa como `max_fps`;
+  num jogo de 30 fps isso faz o frameskip adaptativo comparar contra 1/60 (pula
+  mesmo a 100%) — e o device tem `retrorun_loop_declared_fps=false`, então o
+  frameskip nem roda. Decisão do usuário: **corrigir o report no CORE**, sem
+  mexer no cálculo do retrorun (para ele continuar compatível com outros cores),
+  e sem tocar nas nossas otimizações internas.
+- **Implementado (só report):** o core mede o **período NATURAL em vblanks
+  EMULADOS por frame** numa janela de 1 s (`spg_vblank_count()` em
+  `core/hw/pvr/spg.*`; `rend_new_frame_count()` em
+  `core/hw/pvr/Renderer_if.*`) e reporta `timing.fps = refresh / vblanks` pelo
+  canal padrão `RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO` (`libretro.cpp`),
+  estabilizado (arredonda para 0,5 e só reporta quando o valor se repete na
+  janela seguinte — cada report faz o retrorun reaplicar geometria + flush de
+  áudio). Em tempo emulado o alvo não acompanha a lentidão: fica 30 mesmo com o
+  jogo a 15.
+- **1ª tentativa (descartada por medição):** EMA do delta de vblanks por frame —
+  **oscilava 30↔32** (a main dequeua vários frames no mesmo vblank), gerando
+  churn (7 aplicações em ~15 s, underruns 8→21). Trocado pela média em janela de
+  1 s → estável.
+- **Validado no device (Napple, savestate pesado, 20 s+8 s; A/B):**
+
+  | run | core | `loop_declared_fps` | `declared_fps` | VEL% | new_fps | skip_adapt |
+  |---|---|---|---|---|---|---|
+  | A | oficial `961f9a55` | false | 60 | 89,4 | 26,8 | 0 |
+  | B | novo `6f3ceb1d` | false | **30** | 89,0 | 26,7 | 0 |
+  | C | novo | true | 30 | 99,5 | 29,8 | 0 |
+  | D | oficial | true | 60 | 100,0 | 30,1 | 0 |
+
+  B: **1** aplicação de AV (`Runtime AV timing applied: fps=30.000000`), sem
+  regressão vs. A. **Achado à parte:** com `loop_declared_fps=true` o Napple foi
+  a **VEL ~100%** (C/D) contra ~89% (A/B) — o ganho é do pacing, não do report.
+- **Frameskip:** removido o `#ifndef RR_PLATFORM_SDL` (compila no SDL agora).
+  Mas ele **não disparou** em nenhum run (`skipped_adaptive: 0`): só roda com
+  `loop_declared_fps=true` e mede só o **trabalho** da iteração (retro_run+present,
+  sem o sleep do pacing) — com o trabalho abaixo do orçamento não há o que pular
+  (correto). Limitação registrada em 4.112; decisão do usuário sobre ajustar.
+- **Arquivos:** `core/hw/pvr/spg.{h,cpp}`, `core/hw/pvr/Renderer_if.{h,cpp}`,
+  `core/libretro/libretro.cpp`; no fork `retrorun`: `src/main.cpp`,
+  `src/video/video.cpp` (un-guard). Build aarch64 limpo (md5 `6f3ceb1d`),
+  deployado como `/home/ark/flycast_report.so` (o oficial `flycast2026` não foi
+  tocado).

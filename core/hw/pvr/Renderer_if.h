@@ -16,6 +16,10 @@ void rend_swap_frame();
 void rend_set_fb_scale(float x,float y);
 void rend_resize(int width, int height);
 
+// Total de frames NOVOS apresentados desde o inicio. So leitura: usado pelo
+// report de fps do libretro.cpp (ver Renderer_if.cpp).
+u64 rend_new_frame_count();
+
 /* forward declaration */
 void dc_stop();
 

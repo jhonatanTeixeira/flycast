@@ -32,6 +32,13 @@ static u64 cpu_cycles[4];
 static u32 cpu_time_idx;
 bool SH4FastEnough;
 
+// Leitura do contador de vblank (monotonico). Chamado da main thread apenas
+// para o report de fps (ver Renderer_if.cpp / libretro.cpp); nao muda nada.
+u32 spg_vblank_count(void)
+{
+	return vblk_cnt;
+}
+
 void CalculateSync(void)
 {
 	const u32 pixel_clock = PIXEL_CLOCK / (FB_R_CTRL.vclk_div ? 1 : 2);

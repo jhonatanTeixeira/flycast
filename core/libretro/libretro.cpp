@@ -189,6 +189,14 @@ static u64 g_hicCount = 0, g_hicFrames = 0;
 // core/rend/transform_matrix.h. 0 until the first ~1s window completes.
 float g_measuredFps = 0.0f;
 
+// Ultimo retro_system_av_info entregue ao frontend (geometria/sample_rate).
+// Reusado no report de fps em runtime (SET_SYSTEM_AV_INFO) para nao recalcular
+// a geometria (e nao repetir os efeitos do cheat de widescreen).
+static struct retro_system_av_info g_lastAvInfo = {};
+static bool g_lastAvInfoValid = false;
+// Ultimo fps-alvo reportado em runtime (0 = nenhum ainda).
+static double g_reportedTargetFps = 0.0;
+
 // Callbacks
 retro_log_printf_t         log_cb = NULL;
 retro_video_refresh_t      video_cb = NULL;
@@ -1734,6 +1742,63 @@ void retro_run (void)
          g_measuredFps = (float)ceil((double)windowFrameCount / windowElapsed);
          windowFrameCount = 0;
          windowStart = std::chrono::steady_clock::now();
+
+         // Reporta ao frontend o fps NATURAL do jogo (o "alvo"), nao o refresh
+         // de video. O retrorun so conhece o refresh pelo retro_get_system_av_info
+         // (60/59.94/50) e o usa como max_fps -- num jogo de 30 fps isso faz o
+         // frameskip adaptativo comparar contra 1/60 e pular apresentacao mesmo a
+         // 100% de velocidade. O periodo natural e medido em vblanks EMULADOS por
+         // frame numa janela de 1s (spg_vblank_count / rend_new_frame_count),
+         // entao o alvo continua 30 mesmo com o jogo a 15. Canal padrao
+         // (RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO) -- o mesmo que o retrorun ja
+         // consome; nao muda o calculo dele nem a emulacao.
+         {
+            extern u64 rend_new_frame_count();
+            extern u32 spg_vblank_count();
+            static bool winValid = false;
+            static u64 winFrames = 0;
+            static u32 winVblk = 0;
+            static double winPending = -1.0;
+            const u64 framesNow = rend_new_frame_count();
+            const u32 vblkNow = spg_vblank_count();
+            if (winValid && g_lastAvInfoValid && g_declaredFps > 1.0f)
+            {
+               const u64 df = framesNow - winFrames;
+               const u32 dv = vblkNow - winVblk;
+               // Periodo natural: vblanks EMULADOS por frame nesta janela de 1s.
+               if (df >= 5 && dv >= df)
+               {
+                  double targetFps = (double)g_declaredFps * (double)df / (double)dv;
+                  // Arredonda para 0,5 e so reporta quando o valor se repete na
+                  // janela seguinte -- cada report faz o retrorun reaplicar a
+                  // geometria e dar flush no audio, entao nao pode haver churn.
+                  double rounded = floor(targetFps * 2.0 + 0.5) / 2.0;
+                  if (rounded < 1.0)
+                     rounded = 1.0;
+                  if (rounded > (double)g_declaredFps)
+                     rounded = (double)g_declaredFps;
+                  if (rounded == winPending &&
+                      (g_reportedTargetFps == 0.0 ||
+                       fabs(rounded - g_reportedTargetFps) >= 1.0))
+                  {
+                     struct retro_system_av_info info = g_lastAvInfo;
+                     info.timing.fps = rounded;
+                     info.timing.sample_rate = 44100.0;
+                     if (environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &info))
+                     {
+                        g_reportedTargetFps = rounded;
+                        NOTICE_LOG(RENDERER, "Game target fps reported: %.3f (display %.2f, %.4f vblanks/frame over %llu frames)",
+                                   rounded, (double)g_declaredFps,
+                                   (double)dv / (double)df, (unsigned long long)df);
+                     }
+                  }
+                  winPending = rounded;
+               }
+            }
+            winFrames = framesNow;
+            winVblk = vblkNow;
+            winValid = true;
+         }
       }
    }
 
@@ -2886,6 +2951,9 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
 
    info->timing.sample_rate = 44100.0;
    g_declaredFps = (float)info->timing.fps;
+   // Guarda a ultima geometria/timing para o report de fps em runtime.
+   g_lastAvInfo = *info;
+   g_lastAvInfoValid = true;
 }
 
 unsigned retro_get_region (void)
