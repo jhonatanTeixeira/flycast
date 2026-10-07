@@ -705,8 +705,8 @@ genuinamente a ~86% (25,8 frames novos/s de 30; core ~36-37 ms/quadro; VEL 85,9%
   batem 100% (ratio 1,000) e não desafinam — daí a impressão de "só no DC".
 - **Corrigido (2026-10-07, 4.113):** o backend SDL do retrorun agora faz
   **time-stretch preservando o tom** (WSOLA) — a música desacelera junto com o
-  jogo mas fica **afinada** (ratio 1,125 na cena pesada, underruns 15 vs 7 do
-  resampler antigo). Falta o veredito audível do usuário.
+  jogo mas fica **afinada** (ratio 1,116-1,125 na cena pesada, underruns 15 vs 7
+  do resampler antigo). **Veredito do usuário (2026-10-07): corrigiu.**
 - O retrorun não sabe que o jogo é de 30 fps: o core declara sempre o refresh de
   vídeo (60) em `retro_get_system_av_info`. Isso não é a causa do desafinado (a
   taxa que ele mede vem do áudio), mas afeta o contador e o frameskip (que no

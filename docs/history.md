@@ -3554,7 +3554,8 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Validação no device (Napple, R36):** cold boot (cena leve) exit 0, sem crash,
   ratio 0,999 (não estica — 100%); savestate pesado (~88%) exit 0, ratio **1,125**,
   underruns **15** (controle com `=0`: ratio 1,139, 7 underruns; hop 512 dava 42 →
-  hop 256 resolveu), overruns 9, 26,4 fps. **Falta o veredito audível do usuário.**
+  hop 256 resolveu), overruns 9, 26,4 fps. **Veredito do usuário (device,
+  savestate pesado, ouvindo ao vivo): "corrigiu"** — ratio 1,116 na escuta.
 - **Deploy:** `retrorun3` md5 `53040f37` (backup `retrorun3.bak-pre-wsola` em
   `/roms2/backups`); `dreamcast.sh` ganhou `RETRORUN_AUDIO_TIME_STRETCH=1` no
   `env` do `rr_capture.sh` (backup `dreamcast.sh.bak-pre-wsola`). Commits
