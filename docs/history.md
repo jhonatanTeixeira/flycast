@@ -3610,3 +3610,32 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   `src/video/video.cpp` (un-guard). Build aarch64 limpo (md5 `6f3ceb1d`),
   deployado como `/home/ark/flycast_report.so` (o oficial `flycast2026` não foi
   tocado).
+
+## 2026-10-07 (cont. 2) — extensão do RetroRun no nosso core: probe do product number
+
+- **Contexto:** o catálogo de perfis por jogo do retrorun estava **inert** com o
+  nosso core — o retrorun faz `dlsym` de `flycast_retrorun_get_product_number_v1`
+  (gate em `main.cpp:443` + `core_loader.cpp:728`) e o nosso core não exportava
+  nada (`flycast_retrorun_*`). Sem isso: "this core/content cannot provide a
+  Product number before launch; no profile applied".
+- **Feito:** `core/libretro/retrorun_ext.cpp` implementa
+  `flycast_retrorun_get_product_number_v1(filename, out, size)`: abre a imagem
+  pelo imgread (`OpenDisc`, pré-boot, sem `libCore_gdrom_disc_change`), lê o
+  IP.BIN na área de baixa densidade (FAD 45150 no GD-ROM; sessão nos demais) e
+  devolve o product number (offset `0x40`, 10 bytes, trim) — ex.: `HDR-0079`
+  (Napple) / `MK-51117` (SA2). Fecha a imagem no fim.
+- **Bloqueio achado no caminho:** o `link.T` exportava **só `retro_*`** (todo o
+  resto `local: *`). Sem liberar `flycast_retrorun_*`, o `dlsym` do retrorun
+  falharia mesmo com a função pronta. `link.T` atualizado.
+- **Validado no device (Napple, `retrorun_flycast_game_profile=best_performance`):**
+  o log agora mostra `Flycast game catalog: device='RG351MP', chip='RK3326'` e
+  `Product number 'HDR-0079' is not cataloged ...; normal configuration retained`.
+  O probe lê o disco certo; o Napple simplesmente não tem perfil no catálogo.
+- **Aberto:** o retrorun traduz as options do catálogo (`reicast_*`) para o
+  prefixo do core — `flycast_` para um core chamado "Flycast" — mas o nosso é
+  `flycast2026_` (`CORE_OPTION_NAME`). O `GET_VARIABLE` do retrorun casa a chave
+  exata, então as options do catálogo seriam ignoradas. Decisão pendente (o mais
+  limpo: o retrorun mapear para `flycast2026_` no nosso core).
+- **Também:** `flycast_retrorun_core_variant_v1` e
+  `flycast_retrorun_set_audio_queue_status_v1` ainda não existem (o segundo é a
+  integração de pressão de áudio).
