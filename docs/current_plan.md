@@ -6,6 +6,16 @@
 
 Status possíveis: `pendente` · `in progress` · `done` · `bloqueado`
 
+## Agora (2026-10-07, noite): plano de ataque da bateria DC + Naomi
+
+**plano ativo** — bateria completa pelo ES (core oficial `961f9a55`, `retrorun3`
+`53040f37`): 27 pastas de captura, 3 jogos crashando, 2 presos num teto de ~90-150 ms,
+áudio estourado em 2, memory card reclamando de espaço, e regressões suspeitas (MvC2).
+Plano priorizado (P0 crashes/freezes → P1 áudio/dupes/regressões → P2 otimização) em
+**`docs/bateria_2026-10-07_plan.md`**; números + observações do usuário em
+`game_status.md`. **Primeiro passo: 0.1 (`SH4ThrownException` não tratada — Napple,
+Shenmue, SA2)** e, em paralelo, 0.3 (EGG/Macross, teto de tempo de frame).
+
 ## Agora (2026-10-07): o core reporta o fps NATURAL do jogo ao frontend (4.112)
 
 **done** — o retrorun só conhecia o refresh de vídeo (60) via

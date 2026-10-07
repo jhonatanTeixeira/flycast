@@ -711,3 +711,68 @@ genuinamente a ~86% (25,8 frames novos/s de 30; core ~36-37 ms/quadro; VEL 85,9%
   vídeo (60) em `retro_get_system_av_info`. Isso não é a causa do desafinado (a
   taxa que ele mede vem do áudio), mas afeta o contador e o frameskip (que no
   build SDL nem é compilado). Ver `docs/tech_debits.md` 4.97/4.112.
+
+## Bateria DC + Naomi — 2026-10-07, pelo ES (core oficial `flycast2026` md5 `961f9a55`, retrorun3 `53040f37`)
+
+**Método:** o **usuário** rodou pelo ES (cold boot, sem savestate), jogou e anotou a
+impressão; os números vêm das capturas em `/roms2/dcbat/20261007-15xx…16xx_<jogo>/`
+(dump leve do JIT + sync-stats + perf + benchmark rolante, via `rr_capture.sh`).
+Naomi e Atomiswave passaram a usar `rr_capture.sh` nesta data (antes iam direto no
+`retrorun3`, sem captura). `exit 134` = SIGABRT, `133` = SIGTRAP (crash). "no-json" =
+fechou antes de gravar.
+
+| jogo | VEL% | fps | core avg | p50 | p95 | p99 | dupes | und/ovr | obs (usuário) |
+|---|---|---|---|---|---|---|---|---|---|
+| cvs2 (Naomi) | 99,6 | 58,3 | 15,1 | 11,8 | 30,8 | 35,0 | 8 | 40/3898 | "rodou muito bem, mas notei **hickups** que antes não tinha" |
+| DOA2 | 88,3 | 31,0 | 31,0 | 35,4 | 38,6 | 41,9 | 6 | 112/1238 | "slow downs; às vezes bem, às vezes muito lento; hickups; quase jogável" |
+| EGG | 86,1 | **11,0** | **89,6** | 89,5 | 89,8 | 90,6 | 442 | 40/516 | "travou: tela preta após load do save, ficou 12 fps e travou" |
+| Evolution 2 | 97,3 | 27,7 | 34,7 | 31,7 | 52,0 | 81,6 | 17 | 66/2533 | "jogável a 30, quedas p/ 24; nunca tínhamos aberto; frameskip dá uma melhorada; save/load a ver" |
+| Evolution | 99,2 | 30,1 | 31,8 | 36,1 | 46,6 | 64,3 | 21 | 47/1539 | "roda muito bem, sempre 30 fps; um pouquinho de erro gráfico" |
+| Grandia II | 99,3 | 29,9 | 32,1 | 36,3 | 46,2 | 59,5 | 11 | 72/**8278** | "FMV 42 fps (dupes→desafinado); gameplay 30 cravado; **som estourado** (música/efeitos) e **vozes baixas**" |
+| Macross M3 | 97,3 | **6,8** | **144,7** | 150,4 | 151,3 | 151,5 | 271 | 20/1103 | "tela preta; travado para sempre depois do logo ShoEISHA" |
+| MvC2 | 99,9 | 47,1 | 20,0 | 17,6 | 39,0 | 44,4 | 7 | 32/3218 | "33-45 fps; frameskip tira fluidez; 45 fps sem skip; **glitches**; **regressão**" |
+| Napple (1) | 99,5 | 29,8 | 31,7 | 34,9 | 44,7 | 46,5 | 0 | 59/6580 | "partes pesadas 27, resto 30 cravado; **som desafina** a 27; **som estourado**" |
+| Napple (2) | 98,0 | 29,7 | 32,0 | 34,7 | 44,9 | 65,5 | 11 | 30/3759 | idem |
+| Napple (3) | — | **exit 134** | | | | | | | (crash ao salvar? ver "memory card") |
+| PSO v2 | 98,2 | **16,5** | 59,5 | 71,4 | 71,6 | 71,7 | 466 | 25/1928 | "travou após **load game**; na run anterior abriu new game e salvou; agora travou no load" |
+| Power Stone | 97,1 | 38,2 | 24,9 | 22,2 | 45,0 | 56,5 | 36 | 13/1371 | "parece 100% como sempre, mas a 45 fps — dupes ou frameskip?" |
+| Project Justice | 91,2 | 55,0 | 16,8 | 14,0 | 35,7 | 44,6 | **118** | 47/1041 | "sempre perfeito; agora sinto dupes, às vezes passa de 60; no special, slow down e hickups" |
+| RE:CV | 94,4 | 28,8 | 33,4 | 32,9 | 50,9 | 79,8 | 28 | 82/3450 | "perfeito; slow downs em explosões/fogo perto da tela" |
+| Shenmue | — | **exit 134** | | | | | | | "**crash no loading entre lugares**; load game normal; 30 fps dentro da casa" |
+| Shenmue II | 93,6 | 28,0 | 34,3 | 34,0 | 45,1 | 55,5 | 0 | **278**/3843 | "reclama de **espaço no memory card**; 19-30 fps; a ≥25 fica jogável" |
+| Skies Disc 2 | — | **exit 133** | | | | | | | "não boota (disc 2); acho que o CHD está com problema" |
+| Skies Disc 1 | 99,6 | 29,8 | 32,3 | 34,0 | 45,6 | 54,2 | 3 | 95/12550 | "30 cravados, rodando muito bem" |
+| SA2 | — | **exit 134** | | | | | | | "**crash após os logos** (justo o que usei p/ validar o catálogo)" |
+| Sonic Shuffle | 68,1 | **14,8** | 65,8 | 53,0 | **141,3** | 147,9 | 21 | 105/128 | "deixei savestate numa cena com **7 fps**; padrão desconhecido; talvez HLE/tier2" |
+| Soulcalibur | 88,8 | 53,5 | 17,4 | 13,8 | 33,6 | 73,8 | 84 | 58/787 | "60 fps cravados" |
+| Le Mans | 95,2 | 28,4 | 33,5 | 32,7 | 42,3 | 52,4 | 0 | **208**/1175 | "load muito demorado; menus meio lentos; corrida jogável; 26-30 fps; frameskip salva em alguns momentos" |
+| KOF Evolution | 97,7 | 51,4 | 15,9 | 15,5 | 24,8 | 31,2 | 7 | 65/1079 | "60 fps; cenário da **chuva** causa instabilidade e hickups; 54 com quedas p/ 32 (novo savestate na chuva)" |
+| TR Chronicles | — | no-json | | | | | | | "demora p/ sair da BIOS (é diferente, 'powered by Windows CE'); depois trava em **tela preta**" |
+
+### Padrões e achados desta bateria
+
+1. **Crashes (5 pastas, 3 jogos):** Shenmue (loading entre lugares), SA2 (após os logos),
+   Skies Disc 2 (não boota) + Napple (ao salvar). Todos `exit 134` (SIGABRT) ou `133`
+   (SIGTRAP) — **prioridade máxima** (a regra da bateria é parar e corrigir).
+2. **Presos num teto de tempo de frame:** EGG (89,6 ms/frame, 442/443 dupes) e Macross M3
+   (144,7 ms, 271/275 dupes) — assinatura de **espera/timeout**, não custo de CPU (mesma
+   cara do achado 4.73: "100,5 ms cravado = espera de 100 ms"). EGG "travou após load do
+   save"; Macross "tela preta após o logo". Suspeitos: `rs.Wait`/timeout do render, CHD,
+   ou o laço preso.
+3. **Sonic Shuffle:** 68% VEL, 14,8 fps, p95 **141 ms** — o "7 fps" do savestate do usuário
+   é o mesmo fenômeno. Frente conhecida (skip do laço de varredura escrito, nunca validado).
+4. **Áudio — novo sintoma além do desafinado:** "som **estourado**" (música/efeitos
+   saturando) + "vozes muito baixas" (Grandia II e Napple). O WSOLA preserva o tom, mas
+   algo satura/mistura errado. Grandia II: FMV a 42 fps (dupes) → desafinado; gameplay 30
+   cravado mas som quebrado. **Overruns altíssimos** em Grandia II (8278), Skies D1 (12550).
+5. **Dupes / frameskip:** Power Stone 45 fps (36 dupes), Project Justice 118 dupes e "passa
+   de 60", Soulcalibur 84 dupes, Sonic Shuffle 21 dupes com 141 ms — dupes altos = a
+   apresentação inflada (o `new_fps` real é menor). Casar apresentação × novos × dupes.
+6. **Memory card:** Napple e Shenmue II reclamam de **falta de espaço**; o Napple crashou ao
+   salvar. Achávamos que havia **VMU por jogo** — investigar (o `per_content_vmus` do
+   core + o nome do VMU no save).
+7. **Regressões suspeitas:** MvC2 (glitches + 33-45 fps) e Project Justice (dupes). O usuário
+   aponta o **tier2** e pede: usar o **JIT do MvC2** para achar melhorias de processamento
+   **independentes do peso das chamadas** (talvez via HLE).
+8. **Le Mans:** load muito demorado + menus lentos (I/O/CHD?); corrida ok a 26-30.
+9. **TR Chronicles:** BIOS diferente ("powered by Windows CE") + tela preta após. Hmm.
