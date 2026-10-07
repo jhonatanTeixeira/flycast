@@ -799,3 +799,32 @@ fechou antes de gravar.
 **Estado:** tier2 OFF no oficial; `/roms2/dcbat/` limpo para a nova captura (tier2 OFF).
 **Pendente:** a rodada tier2 OFF (usuário jogando pelo ES) para o A/B e para a segunda
 compilação de disassembly. Ver `docs/tier2_na_bateria_2026-10-07.md`.
+
+## A/B tier2 ON × OFF — rodada do usuário pelo ES (2026-10-07, noite)
+
+Depois de desligar o tier2 no oficial, o usuário rodou 7 jogos pelo ES (cold boot).
+Números da captura nova (`/roms2/dcbat/20261007-18xx…19xx_<jogo>/`, tier2 **OFF**) contra
+a bateria de hoje de manhã (tier2 **ON**). Mesma política (cold boot, `rr_capture.sh`).
+
+| jogo | tier2 ON (VEL% / fps / core p50/p95/p99) | tier2 OFF (VEL% / fps / core p50/p95/p99) | veredito |
+|---|---|---|---|
+| **EGG** | 86,1 / **11,0** / 89,5/89,8/90,6 (travado) | **99,5 / 45,9** / 10,5/41,0/45,2 | **destravou — era o tier2** |
+| **Shenmue** | **crash** (exit 134, `iNimp`) | 83,3 / 25,1 / 36,5/70,5/150,4 | **não crasha — era o tier2** |
+| **SA2** | **crash** (exit 134, `iNimp`) | (não rodado nesta) | **era o tier2** (A/B anterior) |
+| DOA2 | 88,3 / 31,0 / 35,4/38,6/41,9 | **89,1 / 37,0** / 20,5/42,4/53,4 | OFF melhor (+6 fps) |
+| Shenmue II | **93,6 / 28,0** / 34,0/45,1/55,5 | 68,1 / 21,0 / 40,5/90,5/150,5 | **ON melhor** (+7 fps) |
+| MvC2 | **99,9 / 47,1** / 17,6/39,0/44,4 | 99,5 / 44,2 / 20,4/40,7/46,2 | ON um pouco melhor (+3 fps) |
+| Napple | 99,5 / 29,8 / 34,9/44,7/46,5 | 99,5 / 29,8 / 31,0/48,4/61,2 | empate |
+| **TR Chronicles** | tela preta (sem JSON) | **9,0 / 109,0 ms / 146,9/150,5/150,9** | **continua preso → NÃO é tier2** |
+
+**Leitura:**
+- O tier2 era a causa de **3 quebras**: **EGG (trava)**, **Shenmue (crash)** e **SA2 (crash)**.
+- **TR Chronicles continua preso** (teto de ~147-151 ms) → é a **família 0.3** (frame-wait/CHD),
+  **não** o tier2.
+- O ganho de performance do tier2 é **misto e pequeno**: ajuda Shenmue II (+7 fps) e MvC2
+  (+3), mas **piora DOA2 (-6)** e empata no Napple. Não compensa as 3 quebras.
+- **Decisão: aposentar o tier2** (mantido no código como opt-in, desligado por padrão).
+
+**Nota de método:** ON e OFF são rodadas de sessões diferentes (não A/B lado a lado no mesmo
+binário), então a diferença de fps pode ter componente de cena; o que é inequívoco são as
+**3 quebras** (EGG/Shenmue/SA2), todas com tier2 ON e nenhuma com OFF.
