@@ -3659,3 +3659,25 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   `aarch64-linux-gnu-g++-13`. Erros clássicos documentados (glibc 2.41×2.39 misturado,
   `SDL_config.h` do Debian, deps transitivas do libcurl -> `--allow-shlib-undefined`).
   Virou a skill **`cross-compile-r36`** (`.claude/skills/`).
+
+## 2026-10-07 (cont. 4) — perfil do Napple no catálogo do RetroRun
+
+- **Feito (fork `retrorun`, commit `0042d7d`):** adicionado o perfil `HDR-0079`
+  (Napple Tale - Arsia in Daydream) ao catálogo embutido, com a config validada no
+  device: input (`alternative_input_mode`, `swap_l1r1_with_l2r2`, `force_left_analog_stick`,
+  `analog_to_digital`), rumble, áudio (`audio_buffer -1`, `stable_buffer`,
+  `force_audio_multithread`), `adaptive_frameskip`, `loop_declared_fps = false`, e as core
+  options (`reicast_*`: threaded_rendering, internal_resolution 640x480, alpha_sorting
+  per-strip, hle_bios, gdrom_fast_loading, tier2, sh4clock d10, etc.). `catalog_version`
+  → `20261007`.
+- **`allowedSettings()` estendido** (a lista é fechada e meu primeiro perfil foi rejeitado —
+  "built-in catalog is invalid"): `retrorun_alternative_input_mode`, `retrorun_swap_l1r1_with_l2r2`,
+  `retrorun_force_left_analog_stick`, `retrorun_show_loading_screen`, `retrorun_analog_to_digital`,
+  `retrorun_disable_rumble`, `reicast_tier2`, `reicast_frame_budget_skip_translucent`,
+  `reicast_sh4_timeslice`.
+- **Validado no device:** `product='HDR-0079', game='Napple Tale - Arsia in Daydream
+  (aggressive)', requested=best_performance, applied=best_performance, version=20261007`.
+- **Nota:** o catálogo só aplica se `retrorun_flycast_game_profile` estiver num modo
+  (`best_validated`/`best_performance`) — o default é `disabled`. No device o teste rodou
+  com a linha adicionada ao `r_napple_load.cfg`; ela foi removida no fim (device de volta ao
+  default). Ligar globalmente é decisão do usuário.
