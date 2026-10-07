@@ -777,3 +777,25 @@ fechou antes de gravar.
    **independentes do peso das chamadas** (talvez via HLE).
 8. **Le Mans:** load muito demorado + menus lentos (I/O/CHD?); corrida ok a 26-30.
 9. **TR Chronicles:** BIOS diferente ("powered by Windows CE") + tela preta após. Hmm.
+
+## Tier2 — decisão de aposentar (2026-10-07, pós-bateria)
+
+**Decisão do usuário: aposentar o tier2** (`flycast2026_tier2 = disabled` no
+`retrorun.cfg` oficial do device; backup `retrorun.cfg.bak-pre-t2off-20261007`).
+
+**Por quê (evidência da bateria de 2026-10-07, tier2 ON):**
+- Formou **721 regiões** (495 com laço, 414 "ok" quentes) — não é inerte.
+- Mas **todos os efeitos medidos foram negativos**:
+  - **SA2: crash** por `iNimp` **só com tier2 ON** (A/B: ON → exit 134; OFF → sem crash).
+  - **Shenmue e Napple**: 2 `iNimp` cada (mesma família — região executando dados).
+  - **MvC2**: regressão de fps + glitches (suspeita confirmada como plausível).
+- Historicamente o tier2 já era **perda líquida no Naomi** (bateria 2026-09-28) e
+  ajudava em DC 3D — mas nesta bateria DC o balanço também ficou negativo.
+- **Os laços que ele captura são, em boa parte, padrões recorrentes** (700 padrões
+  aparecem dentro de regiões) → melhores candidatos a **HLE por assinatura** (o
+  `hle_fn_lookup` casa por `memcmp` dos bytes SH4), que não recompila região e não tem
+  a classe de bug do 4.74.
+
+**Estado:** tier2 OFF no oficial; `/roms2/dcbat/` limpo para a nova captura (tier2 OFF).
+**Pendente:** a rodada tier2 OFF (usuário jogando pelo ES) para o A/B e para a segunda
+compilação de disassembly. Ver `docs/tier2_na_bateria_2026-10-07.md`.
