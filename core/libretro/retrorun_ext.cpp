@@ -18,6 +18,14 @@
 #include <cstring>
 #include <cstddef>
 
+// Identifica a variante deste core para o RetroRun. Ele usa isto para escolher
+// o prefixo das core options ao aplicar o perfil por jogo: o nosso core usa
+// `flycast2026_` (CORE_OPTION_NAME), nao o `flycast_` de um Flycast "stock".
+extern "C" const char* flycast_retrorun_core_variant_v1(void)
+{
+    return "flycast2026";
+}
+
 // O RetroRun chama isto com o caminho do conteudo ANTES de retro_load_game.
 // Devolve 1 e preenche `out` com o Product number do IP.BIN (ex.: "MK-51117"),
 // sem bootar o jogo. Reusa o mesmo caminho de leitura do boot (imgread): abre a

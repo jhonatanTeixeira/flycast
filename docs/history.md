@@ -3639,3 +3639,23 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **Também:** `flycast_retrorun_core_variant_v1` e
   `flycast_retrorun_set_audio_queue_status_v1` ainda não existem (o segundo é a
   integração de pressão de áudio).
+
+## 2026-10-07 (cont. 3) — catálogo por jogo do RetroRun aplicando no nosso core + skill de cross-compile
+
+- **Feito:** o retrorun agora escolhe o prefixo das core options pela variante que o core
+  declara. O core ganhou `flycast_retrorun_core_variant_v1() -> "flycast2026"`; o retrorun
+  (`applyFlycastGameCatalog`) mapeia `reicast_*` -> `flycast2026_*` quando a variante é
+  essa (um Flycast stock segue `flycast_*`).
+- **Validado no device (SA2, `best_performance`):**
+  `product='MK-51117', game='Sonic Adventure 2 (aggressive)', requested=best_performance,
+  applied=best_performance, version=20261003` — o perfil **aplicou**, e as options dele
+  pegaram (JSON: `audio_buffer: 2048`, `go2_audio_stretch_low_ms: 150`). `skipped_adaptive:
+  47` (o frameskip atuou). Antes, com o prefixo errado, o perfil era aplicado mas as options
+  eram ignoradas pelo core.
+- **Ainda não implementado:** `flycast_retrorun_set_audio_queue_status_v1` (integração de
+  pressão de áudio — o retrorun loga "unavailable").
+- **Cross-compile (regra nova do usuário: NÃO buildar no device):** montado um sysroot
+  local a partir do device (headers de terceiros + `.so`) e cross-compilado com
+  `aarch64-linux-gnu-g++-13`. Erros clássicos documentados (glibc 2.41×2.39 misturado,
+  `SDL_config.h` do Debian, deps transitivas do libcurl -> `--allow-shlib-undefined`).
+  Virou a skill **`cross-compile-r36`** (`.claude/skills/`).
