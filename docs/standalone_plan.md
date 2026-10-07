@@ -22,6 +22,8 @@ Decisões do usuário (2026-10-07):
   4. **Frameskip adaptativo** — que **ainda não existe no SDL do nosso retrorun**
      (hoje é `#ifndef RR_PLATFORM_SDL`, ou seja, compilado fora).
 - **Menu do emu** deve expor **todas as configs do emu** (as `settings` do core).
+- **Escopo enxuto:** **sem RetroAchievements** nem "firulas" (decorações/bezel,
+  backend go2, netplay). Só o **essencial do R36**.
 - Fica como **plano** por enquanto (fases abaixo).
 
 Motivação: um dono só do stack (core + apresentação + áudio + input + config +
@@ -48,14 +50,14 @@ dc_is_running`. Hoje só a glue libretro a usa.
 | módulo | linhas | o que faz | puxar? |
 |---|---|---|---|
 | `platform/` (SDL) | ~3.3k | KMSDRM, **apresentação em thread** (FIFO/mailbox, `RETRORUN_PRESENT_DEPTH`, vsync) | **sim** |
-| `video/` | ~5.4k | escala, tate, aspecto, pixel-perfect, shader, OSD/FPS | sim (decorações: opcional) |
+| `video/` | ~5.4k | escala, tate, aspecto, pixel-perfect, shader, OSD/FPS | sim (**sem decorações/bezel**) |
 | `audio/` | ~1.6k | SDL_QueueAudio, stable buffer, áudio em thread, **rate control + WSOLA** | **sim** |
 | `input/` | ~2.2k | SDL gamepad, mapeamento, hotkeys, rumble, analógico→digital | **sim** |
 | `config/` | ~5k | `retrorun.cfg` + **catálogo por jogo** (product number → perfil) | **sim** |
 | `core/` | ~5.6k | loader libretro, gestão de savestate/slot, disk control | parcial (só saves/disk) |
 | `diagnostics/` | ~1k | **benchmark** (JSON, janela rolante), perf, logger | **sim** |
 | `menu/` | ~1k | menu in-game (load/save, volume, brilho, device, aspecto…) | **sim** (+ settings do emu) |
-| `services/` | ~2k | **RetroAchievements** (rcheevos), file browser | opcional |
+| `services/` | ~2k | RetroAchievements (rcheevos), file browser | **não** (só file browser, se precisar) |
 | `go2/` | ~6.7k | backend ODROID-GO2 (DRM + OpenAL) | **não** (R36 usa SDL) |
 
 Fora do retrorun, hoje: `rr_capture.sh` + envs `FC_*` (captura), `dreamcast.sh`/
@@ -161,12 +163,15 @@ Registradas:
 - ✅ **Copy-paste adaptado** das funcionalidades do SDL do retrorun.
 - ✅ Absorver: **WSOLA, benchmark, melhorias de SDL, frameskip adaptativo**.
 - ✅ **Menu do emu com todas as configs** (plano).
+- ✅ **Escopo enxuto:** sem RetroAchievements, sem decorações/bezel, sem go2,
+  sem netplay — só o essencial do R36.
 
-Abertas:
-1. **B1 × B2** na fase 1 (reaproveitar a glue in-process × chamadas diretas)?
-2. **Escopo extra**: RetroAchievements e decorações/bezel entram? (go2: não.)
-3. **Nome/instalação** do binário (`flycast`? convive com o `flycastsa` do
-   upstream?) e como o ES escolhe entre ele e o `retrorun3`.
+Abertas (propostas para OK):
+1. **B1 × B2** na fase 1 — *proposto:* começar **B1** (glue in-process) e migrar
+   para **B2** (chamadas diretas) onde o menu/hooks exigirem.
+2. **Nome/instalação** — *proposto:* binário `flycast` no `/usr/local/bin`,
+   convivendo com o `flycastsa` do upstream; o ES passa a oferecê-lo ao lado do
+   `retrorun3` durante a transição (o usuário escolhe qual lançar).
 
 ## 10. Regras do projeto que valem aqui
 
