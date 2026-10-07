@@ -12,10 +12,24 @@ estraga a experiência (áudio, dupes), depois o que é otimização.
 
 ## P0 — Crashes e freezes (a regra da bateria manda parar aqui)
 
-### 0.1 `SH4ThrownException` não tratada → SIGABRT (Napple, Shenmue, SA2)
+### 0.1 `SH4ThrownException` não tratada → SIGABRT (SA2, Shenmue) — **SA2 = tier2, CONFIRMADO**
 
-- **Evidência:** os 3 logs terminam com `terminate called after throwing an instance of
-  'SH4ThrownException'` (exit 134). Skies D2 é outra assinatura (ver 0.2).
+- **A/B feito (2026-10-07):** SA2 com `flycast2026_tier2 = enabled` → **exit 134**
+  (`iNimp 0010 @ pc 8c501bba` → `terminate`); com `tier2 = disabled` → **exit 124** (só o
+  timeout de 90 s, **sem crash**). **A causa é o tier2** — uma região que faz o jogo
+  **executar dados** (mesma família do bug 4.74, o laço com store no delay slot).
+- **Evidência completa:** `iNimp 0010 @ pc 8c501bba (illegal instruction -- executing data
+  or stale code?)` + `iNimp ctx: pr=8c062f92 spc=8c023e7c ...`. O PC ruim (`8c501bba`) **não**
+  está em nenhuma das regiões emitidas (#14-17 são 8C0A/8C0C) → vem de um **exit** de região.
+- **Fixes (dois):** (a) **robustez** — pegar o `SH4ThrownException` que escapa e chamar
+  `Do_Exception(epc,0x180,0x100)` em vez de terminar (o guest trata a exceção); (b) **raiz** —
+  achar a região/condição que faz o jogo executar dados e rejeitá-la (como o 4.74 faz com
+  `slotStore`). Sem o A/B original (abaixo).
+
+- **Evidência (histórico):** os logs de SA2/Shenmue terminam com `terminate called after
+  throwing an instance of 'SH4ThrownException'` (exit 134). O **Napple não crashou** (o
+  `exit 134` da pasta dele é suspeito — provavelmente no shutdown). Skies D2 é outra
+  assinatura (ver 0.2).
 - **O que é:** o SH4 lança `SH4ThrownException` (exceção do guest: `sh4_opcodes.cpp:2111`
   `{0x180}`, `mmu.cpp:145`, `sh4_core.h:95` `{0x800}`) e algum caminho **não tem
   try/catch**. Os catch existem no `rec_arm64` (750/766), no interpretador
@@ -48,7 +62,7 @@ estraga a experiência (áudio, dupes), depois o que é otimização.
   laço principal; ver se é CHD (`FC_CHD_PREFETCH`), AICA (`FC_AICA_THREAD`) ou o frame-wait
   (4.110). A/B por env var na mesma build, lendo o `live.log` + o JSON.
 
-### 0.4 TR Chronicles — tela preta após a BIOS
+### 0.4 TR Chronicles — tela preta após a BIOS (**mesma família do 0.3: EGG/Macross**)
 
 - **Evidência:** sem crash (exit 0), sem JSON; log normal. BIOS diferente ("powered by
   Windows CE" — WinCE HLE). "Trava em tela preta".

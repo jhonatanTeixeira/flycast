@@ -733,7 +733,7 @@ fechou antes de gravar.
 | MvC2 | 99,9 | 47,1 | 20,0 | 17,6 | 39,0 | 44,4 | 7 | 32/3218 | "33-45 fps; frameskip tira fluidez; 45 fps sem skip; **glitches**; **regressão**" |
 | Napple (1) | 99,5 | 29,8 | 31,7 | 34,9 | 44,7 | 46,5 | 0 | 59/6580 | "partes pesadas 27, resto 30 cravado; **som desafina** a 27; **som estourado**" |
 | Napple (2) | 98,0 | 29,7 | 32,0 | 34,7 | 44,9 | 65,5 | 11 | 30/3759 | idem |
-| Napple (3) | — | **exit 134** | | | | | | | (crash ao salvar? ver "memory card") |
+| Napple (3) | — | exit 134 | | | | | | | **NÃO crashou na frente do usuário** — reclamou de espaço no memory card; o exit 134 é suspeito (talvez no shutdown). Ver memory card. |
 | PSO v2 | 98,2 | **16,5** | 59,5 | 71,4 | 71,6 | 71,7 | 466 | 25/1928 | "travou após **load game**; na run anterior abriu new game e salvou; agora travou no load" |
 | Power Stone | 97,1 | 38,2 | 24,9 | 22,2 | 45,0 | 56,5 | 36 | 13/1371 | "parece 100% como sempre, mas a 45 fps — dupes ou frameskip?" |
 | Project Justice | 91,2 | 55,0 | 16,8 | 14,0 | 35,7 | 44,6 | **118** | 47/1041 | "sempre perfeito; agora sinto dupes, às vezes passa de 60; no special, slow down e hickups" |
@@ -747,18 +747,19 @@ fechou antes de gravar.
 | Soulcalibur | 88,8 | 53,5 | 17,4 | 13,8 | 33,6 | 73,8 | 84 | 58/787 | "60 fps cravados" |
 | Le Mans | 95,2 | 28,4 | 33,5 | 32,7 | 42,3 | 52,4 | 0 | **208**/1175 | "load muito demorado; menus meio lentos; corrida jogável; 26-30 fps; frameskip salva em alguns momentos" |
 | KOF Evolution | 97,7 | 51,4 | 15,9 | 15,5 | 24,8 | 31,2 | 7 | 65/1079 | "60 fps; cenário da **chuva** causa instabilidade e hickups; 54 com quedas p/ 32 (novo savestate na chuva)" |
-| TR Chronicles | — | no-json | | | | | | | "demora p/ sair da BIOS (é diferente, 'powered by Windows CE'); depois trava em **tela preta**" |
+| TR Chronicles | — | no-json | | | | | | | "demora p/ sair da BIOS (é diferente, 'powered by Windows CE'); depois trava em **tela preta**" — **mesma família do EGG/Macross (0.3)** |
 
 ### Padrões e achados desta bateria
 
-1. **Crashes (5 pastas, 3 jogos):** Shenmue (loading entre lugares), SA2 (após os logos),
-   Skies Disc 2 (não boota) + Napple (ao salvar). Todos `exit 134` (SIGABRT) ou `133`
-   (SIGTRAP) — **prioridade máxima** (a regra da bateria é parar e corrigir).
-2. **Presos num teto de tempo de frame:** EGG (89,6 ms/frame, 442/443 dupes) e Macross M3
-   (144,7 ms, 271/275 dupes) — assinatura de **espera/timeout**, não custo de CPU (mesma
-   cara do achado 4.73: "100,5 ms cravado = espera de 100 ms"). EGG "travou após load do
-   save"; Macross "tela preta após o logo". Suspeitos: `rs.Wait`/timeout do render, CHD,
-   ou o laço preso.
+1. **Crashes reais (3 jogos, fecharam o emulador na frente do usuário):** Shenmue (loading
+   entre lugares), SA2 (após os logos) e Skies Disc 2 (não boota). SA2 e Shenmue = `exit 134`
+   (`SH4ThrownException` não tratada); Skies D2 = `133` (SIGSEGV no dyna code). **Prioridade
+   máxima.** O Napple **não** crashou (era memory card); o `exit 134` da pasta dele é suspeito.
+2. **Tela preta / presos num teto de tempo de frame:** EGG (89,6 ms/frame, 442/443 dupes), Macross M3
+   (144,7 ms, 271/275 dupes) e **TR Chronicles** (tela preta após a BIOS WinCE, sem JSON) —
+   assinatura de **espera/timeout**, não custo de CPU (mesma cara do 4.73: "100,5 ms cravado =
+   espera de 100 ms"). EGG "travou após load do save"; Macross "tela preta após o logo".
+   Suspeitos: `rs.Wait`/timeout do render, CHD, ou o laço preso.
 3. **Sonic Shuffle:** 68% VEL, 14,8 fps, p95 **141 ms** — o "7 fps" do savestate do usuário
    é o mesmo fenômeno. Frente conhecida (skip do laço de varredura escrito, nunca validado).
 4. **Áudio — novo sintoma além do desafinado:** "som **estourado**" (música/efeitos
