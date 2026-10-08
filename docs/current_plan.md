@@ -37,7 +37,7 @@
 | 1.3 | MvC2 (glitches, 33-45 fps) e Project Justice (118 dupes, "passa de 60") — regressão? Re-testar com tier2 OFF e casar apresentado × novos × dupes — 4.118 | pendente |
 | 1.4 | Le Mans: `declared_fps=7.5` (o core devia reportar 30), áudio quebrado em cold boot, load/menus lentos | pendente |
 | 1.5 | Sonic Shuffle ~7-15 fps: laço de busca linear; dump leve → HLE por assinatura | pendente |
-| 1.6 | `retrorun_loop_declared_fps=true` **ligado no device** (2026-10-08) com o core declarando só 30 ou 60 (histerese 1,6/1,3 vblanks/frame). CvS2 57,4 / KOF Evo 57,8 fps novos (com `false`: 58,4 / 59,3) — confirmar jogando — 4.112 | done (validar sensação) |
+| 1.6 | Ritmo no fps do jogo é **comportamento do core** (sem opção): declara só 30/60 e, com alvo 30, o `retro_run` dorme até o prazo de 1/30 s. `retrorun_loop_declared_fps` voltou a `false` (nos de 60 só custava fps). Napple 30,2 fps novos, KOF Evo 59,0, Shenmue II empate — confirmar jogando — 4.112 | done (validar sensação) |
 | 1.7 | Soulcalibur congela no boot pelo ES (4.30); Evolution 1 (CHD zstd) não abre | não investigado |
 
 ## P2 — otimização (ciclo `jit-nativo`)

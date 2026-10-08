@@ -4,6 +4,7 @@
 #include <execinfo.h>	// FC_TERMINATE_BT: backtrace num std::terminate (diagnostico)
 #include <exception>	// std::set_terminate
 #include <chrono>
+#include <thread>
 #include <atomic>
 #include <unistd.h>	// getpid(), for the opt-in profiling dumps in retro_run()
 #include "types.h"
@@ -1887,6 +1888,41 @@ void retro_run (void)
    {
       render_reduce_translucent_this_frame = false;
       overBudgetStreak = 0;
+   }
+
+   // Ritmo no fps do jogo (4.112), comportamento do core, sem opcao: num jogo
+   // de 30 o frontend com vsync chamaria o retro_run a 60/s e metade das
+   // chamadas seria espera/dupe; aqui o retro_run so devolve no prazo de
+   // 1/30 s (o Napple foi de VEL ~89 a ~100% com esse ritmo). Nos de 60 o
+   // vsync ja da o ritmo e segurar aqui custou fps (KOF Evo 59,3 -> 57,8),
+   // entao so age com o alvo em metade do refresh. Fora em fast-forward.
+   // FC_CORE_PACING=0 desliga (so para A/B).
+   {
+      using namespace std::chrono;
+      static const bool pacingOff = getenv("FC_CORE_PACING") != nullptr && getenv("FC_CORE_PACING")[0] == '0';
+      static steady_clock::time_point paceDeadline;
+      static double paceFps = 0.0;
+      bool fastforward = false;
+      environ_cb(RETRO_ENVIRONMENT_GET_FASTFORWARDING, &fastforward);
+      const double full = fabs(g_declaredFps - 60.0f) < 1.0f ? 60.0 : (double)g_declaredFps;
+      const double fps = g_reportedTargetFps > 0.0 ? g_reportedTargetFps : full;
+      const auto now = steady_clock::now();
+      if (pacingOff || fastforward || fps >= full)
+         paceFps = 0.0;
+      else
+      {
+         const auto period = duration_cast<steady_clock::duration>(duration<double>(1.0 / fps));
+         if (fps != paceFps)
+         {
+            paceDeadline = now;
+            paceFps = fps;
+         }
+         paceDeadline += period;
+         if (paceDeadline > now)
+            std::this_thread::sleep_until(paceDeadline);
+         else if (now - paceDeadline > period)
+            paceDeadline = now;
+      }
    }
 }
 

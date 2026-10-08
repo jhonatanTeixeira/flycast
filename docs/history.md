@@ -301,3 +301,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   declara o refresh ou metade, com histerese; CvS2 e KOF Evo agora declaram 60
   (CvS2 55,6 → 57,4 fps novos com `true`), Shenmue II e Napple 30. Core oficial
   trocado (md5 `39bb9db6`), backups `*-20261008` em `/roms2/backups/`.
+- **Ritmo de 30 fps passa a ser do core, não opção do retrorun** (4.112): com
+  alvo 30 o `retro_run` dorme até o prazo; nos de 60 não segura. Napple 30,2
+  fps novos com `loop_declared_fps=false`, KOF Evo de volta a 59,0. Cfg do
+  device volta a `false`; core oficial md5 `ea43aa08`.
