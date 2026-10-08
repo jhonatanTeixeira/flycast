@@ -37,7 +37,7 @@
 | 1.3 | MvC2 (glitches, 33-45 fps) e Project Justice (118 dupes, "passa de 60") — regressão? Re-testar com tier2 OFF e casar apresentado × novos × dupes — 4.118 | pendente |
 | 1.4 | Le Mans: `declared_fps=7.5` (o core devia reportar 30), áudio quebrado em cold boot, load/menus lentos | pendente |
 | 1.5 | Sonic Shuffle ~7-15 fps: laço de busca linear; dump leve → HLE por assinatura | pendente |
-| 1.6 | `retrorun_loop_declared_fps=true` levou o Napple a VEL ~100% (vs ~89%): decidir se vira padrão no device; frameskip adaptativo do SDL só dispara com essa opção — 4.112 | decisão do usuário |
+| 1.6 | `retrorun_loop_declared_fps=true`: Napple VEL 89→100%, mas A/B de 2026-10-08 sem ganho no Shenmue II (73,5 × 73,0%) e **pior nos de 60** (CvS2 new_fps 58,4→55,6, o core declara 55; KOF Evo 59,3→57,0). Fica `false` global; decidir se o Napple ganha `true` só no perfil dele — 4.112 | decisão do usuário |
 | 1.7 | Soulcalibur congela no boot pelo ES (4.30); Evolution 1 (CHD zstd) não abre | não investigado |
 
 ## P2 — otimização (ciclo `jit-nativo`)

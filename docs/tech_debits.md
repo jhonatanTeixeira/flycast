@@ -40,7 +40,7 @@
 | 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |
-| 4.112 | Retrorun usa o refresh declarado como fps máx. O core já reporta o fps natural; o frameskip adaptativo do SDL compila mas não dispara (mede só trabalho, não o pacing) | parcial |
+| 4.112 | Retrorun usa o refresh declarado como fps máx. O core já reporta o fps natural; o frameskip adaptativo do SDL compila mas não dispara (mede só trabalho, não o pacing). `loop_declared_fps=true` (2026-10-08, savestate, 20 s): CvS2 VEL 102,0/101,0, new_fps 58,4→55,6 (core declara **55** → o pacing trava abaixo de 60), drops 109→159; KOF Evo 59,3→57,0, drops 21→89; Shenmue II empate (73,5/73,0, new_fps 20,0/20,8). Só o Napple ganhou (+10 VEL). Global fica `false` | parcial |
 | 4.97 | Napple: giro do laço do frontend com dupes abaixo de 95% (mailbox); VEL real só pelo áudio | parcial (4.110 mitigou) |
 | 4.98 | `FC_JIT_DUMP` completo derruba o Napple (74,8 → 23,8%); usar o `_LITE` | aceito |
 | 4.9 | Regalloc FPU S16-S31 custa ~3% de core em 2D curto (push/pop caller-saved) | aceito |

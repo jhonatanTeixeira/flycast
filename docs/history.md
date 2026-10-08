@@ -293,3 +293,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   Chronicles é MMU saturada, não frame-wait (4.121). AICA no Shenmue II (4.122).
 - Fixes pequenos: `getenv` por draw no `SetGPState` cacheado; `jit_lite_report.py`
   usa `--freq` (padrão 299, o `-F` do `rr_capture.sh`) e lê `.gz`.
+- **A/B `retrorun_loop_declared_fps` false × true** (savestate, 20 s + 8 s,
+  `perfmax`, core oficial; `/roms2/dcbat/ab_ldf_*`): CvS2 new_fps 58,4 → 55,6 (o
+  core declara 55 e o pacing trava nisso), KOF Evo 59,3 → 57,0, Shenmue II empate
+  (VEL 73,5 × 73,0). Não liga global; o ganho do Napple não generaliza (4.112).
