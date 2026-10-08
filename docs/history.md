@@ -3714,3 +3714,6 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **`docs/padroes_ineficiencia_analise.md`**: documento de análise de padrões do JIT
   (memset/tas.b/jump tables/ocbp/epílogos) produzido em outra sessão; incluído no repo
   a pedido do usuário.
+- **2026-10-07 22:20**: Validação do HLE de `memset` no device (R36S) usando *Dead or Alive 2* e correção no carregamento de save states do `retrorun3`.
+  - Descoberto que a flag `retrorun_auto_load = true` era necessária no `.cfg` usado para os benchmarks; criamos configs locais `r_lemans.cfg` e `r_doa2.cfg` ativando-a.
+  - Teste 20s (DOA2): O tempo mediano que a CPU dedica por frame (`core_p50`) diminuiu significativamente com a otimização de `memset` de **23.03ms** para **20.37ms** (-11.5%), com a taxa real de frames subindo de 33.7 fps para 35.0 fps, e descarte de quadros caindo de 352 para 290. Impacto excelente!
