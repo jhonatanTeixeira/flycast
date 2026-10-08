@@ -448,6 +448,17 @@ extern "C" void ngen_FailedToFindBlock_nommu();
 extern void vmem_platform_flush_cache(void *icache_start, void *icache_end, void *dcache_start, void *dcache_end);
 static void generate_mainloop();
 
+// FC_DYN_CACHE: inline cache do despacho dinamico (opt-in; desligado por
+// padrao). Mede se trocar o Br indireto do hash lookup por um branch direto
+// previsivel compensa as instrucoes extras do teste do cache.
+static bool DynCacheEnabled()
+{
+	static int e = -1;
+	if (e < 0)
+		e = getenv("FC_DYN_CACHE") != nullptr ? 1 : 0;
+	return e != 0;
+}
+
 struct DynaRBI : RuntimeBlockInfo
 {
 	virtual u32 Relink() override;
@@ -2189,7 +2200,44 @@ public:
 				GenCallRuntime(jit_dump_dyn);
 			}
 			Str(w29, sh4_context_mem_operand(&next_pc));
-			if (!mmu_enabled())
+			if (!mmu_enabled() && DynCacheEnabled())
+			{
+				// Inline cache (opt-in FC_DYN_CACHE): se o alvo e o mesmo do
+				// ultimo despacho deste bloco (e nenhum bloco foi descartado
+				// desde entao), salta direto no codigo cacheado -- branch
+				// direto (previsivel) em vez do Br indireto do hash lookup.
+				extern u32 g_dynCacheGen;
+				// Offsets derivados de offsetof (o layout do struct pode mudar).
+				const int kGenOff = 0;
+				const int kPcOff = (int)(offsetof(RuntimeBlockInfo, dyn_cache_pc) - offsetof(RuntimeBlockInfo, dyn_cache_gen));
+				const int kCodeOff = (int)(offsetof(RuntimeBlockInfo, dyn_cache_code) - offsetof(RuntimeBlockInfo, dyn_cache_gen));
+				Label dc_miss;
+				Ldr(x9, (uintptr_t)&block->dyn_cache_gen);
+				Ldr(x10, (uintptr_t)&g_dynCacheGen);
+				Ldr(w11, MemOperand(x9, kGenOff));
+				Ldr(w12, MemOperand(x10));
+				Cmp(w11, w12);
+				B(ne, &dc_miss);
+				Ldr(w11, MemOperand(x9, kPcOff));
+				Cmp(w29, w11);
+				B(ne, &dc_miss);
+				Ldr(x15, MemOperand(x9, kCodeOff));
+				Br(x15);
+				Bind(&dc_miss);
+				Sub(x2, x28, offsetof(Sh4RCB, cntx));
+#if RAM_SIZE_MAX == 33554432
+				Ubfx(w1, w29, 1, 24);
+#else
+				Ubfx(w1, w29, 1, 23);
+#endif
+				Ldr(x15, MemOperand(x2, x1, LSL, 3));	// Get block entry point
+				Str(w29, MemOperand(x9, kPcOff));
+				Str(x15, MemOperand(x9, kCodeOff));
+				Ldr(w12, MemOperand(x10));
+				Str(w12, MemOperand(x9, kGenOff));
+				Br(x15);
+			}
+			else if (!mmu_enabled())
 			{
 				// TODO Call no_update instead (and check CpuRunning less frequently?)
             Sub(x2, x28, offsetof(Sh4RCB, cntx));

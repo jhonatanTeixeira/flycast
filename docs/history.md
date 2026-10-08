@@ -3750,3 +3750,33 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   I-cache (67% das paradas por falta no L1I em `jit_study.md`); trocar o código
   por nativo sem derrubar o tráfego de estado não muda o tempo. Ver
   `tech_debits.md` 5.6.
+
+### 2026-10-08 — Inline cache do despacho dinâmico (`FC_DYN_CACHE`): crash = `.o` velho, 6× = invalidação incompleta; corrigido e bit-exato
+
+- **Contexto:** continuar o trabalho do despacho/jump tables (item 3 da análise
+  de padrões). A regra do projeto é **não reverter**: a implementação do cache
+  tinha sido revertida após um crash; foi **restaurada** e **corrigida**.
+- **Crash (`dec_fallback`/`dec_DecodeBlock`, determinístico):** causa era
+  **build incremental após editar `blockmanager.h`** (header amplamente incluído
+  que mudou o layout de `RuntimeBlockInfo`) — `.o` com layout antigo. `make
+  clean` **com os mesmos argumentos** + rebuild completo resolveu (exit=0, 0
+  SIGSEGV). É exatamente o que o `CLAUDE.md` avisa.
+- **Bug de offset:** o código lia/escrevia `dyn_cache_code` em `x9+8`, mas os
+  offsets reais são `dyn_cache_gen=124`, `dyn_cache_pc=128`, `dyn_cache_code=136`
+  (`+12`; `+8` é padding). Passou a usar `offsetof`.
+- **Bug de invalidação (o 6×):** com `FC_DYN_CACHE=1` o jogo ficava **6× mais
+  lento** (279 vs 1528 frames; 142ms vs 23ms), bit-exato mas travado. Bisect no
+  device: (a) "sempre erra" → normal; (b) setar `x1`/`x2` no hit → ainda lento;
+  (c) hit recarregando da tabela → normal. Ou seja, o **ponteiro cacheado estava
+  obsoleto**. Contador de mismatch: **29% dos acertos** apontavam para entrada
+  errada. A tabela `fpcb` muda **sem `bm_DiscardBlock`** — `bm_AddBlock`
+  (stub `ngen_FailedToFindBlock` → código) e `bm_ResetTempCache` (código →
+  stub). A invalidação só no discard era insuficiente. **Fix:** bump de
+  `g_dynCacheGen` em **toda** escrita da tabela → mismatch **0**, e o "on" volta
+  ao normal (813 frames / 23,5ms em 20s).
+- **Validação:** bit-exato — 0 divergências em **2273** amostras comuns
+  (`FC_STATE_HASH`+`FC_RTC_FIXED`+`FC_INPUT_NEUTRAL`, tier2 off).
+- **Medição (2 rodadas, 40s+8s):** off 1468 frames / `core_average` 23,82ms /
+  p50 19,7 / p95 38,9 / p99 57,1 / VEL 88,8%; on 1635 frames / 22,14ms / 19,6 /
+  39,9 / 47,9 / VEL 82,1%. **Misto:** frames **+11%**, `core_average` **-7%**,
+  p99 **-16%**, mas **VEL -6,7pp**. Taxa de acerto ~60%. Ver `tech_debits.md` 5.7.

@@ -125,6 +125,15 @@ u32 unprotected_blocks;
 
 #define FPCA(x) ((DynarecCodeEntryPtr&)sh4rcb.fpcb[(x>>1)&FPCB_MASK])
 
+// FC_DYN_CACHE: geracao global do inline cache do despacho dinamico. TODA
+// escrita na tabela de dispatch (bm_AddBlock, bm_DiscardBlock,
+// bm_ResetTempCache) incrementa a geracao, invalidando todos os caches. A
+// entrada da tabela muda tambem SEM um discard -- ex.: stub
+// ngen_FailedToFindBlock -> codigo do bloco ao compilar, ou o reset do cache
+// de blocos temporarios -- entao invalidar so em bm_DiscardBlock deixava o
+// codigo cacheado obsoleto (medido: 29% dos acertos com alvo errado).
+u32 g_dynCacheGen = 1;
+
 // addr must be a physical address
 // This returns an executable address
 static DynarecCodeEntryPtr DYNACALL bm_GetCode(u32 addr)
@@ -269,6 +278,7 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 
 	verify((void*)bm_GetCode(block->addr) == (void*)ngen_FailedToFindBlock);
 	FPCA(block->addr) = (DynarecCodeEntryPtr)CC_RW2RX(block->code);
+	g_dynCacheGen++;	// a tabela mudou (stub -> codigo): invalida o cache
 
 #ifdef DYNA_OPROF
 	if (oprofHandle)
@@ -290,6 +300,7 @@ void tier2_on_discard(RuntimeBlockInfo *block) __attribute__((weak));
 
 void bm_DiscardBlock(RuntimeBlockInfo* block)
 {
+	g_dynCacheGen++;
 	if (tier2_on_discard)
 		tier2_on_discard(block);
 	// Remove from block map
@@ -511,6 +522,7 @@ void bm_ResetTempCache(bool full)
 			FPCA(block->addr) = ngen_FailedToFindBlock;
 			blkmap.erase((void*)block->code);
 		}
+		g_dynCacheGen++;	// a tabela mudou (codigo -> stub): invalida o cache
 	}
 	del_blocks.insert(del_blocks.begin(),all_temp_blocks.begin(),all_temp_blocks.end());
 	all_temp_blocks.clear();
