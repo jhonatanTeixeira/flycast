@@ -3778,5 +3778,9 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   (`FC_STATE_HASH`+`FC_RTC_FIXED`+`FC_INPUT_NEUTRAL`, tier2 off).
 - **Medição (2 rodadas, 40s+8s):** off 1468 frames / `core_average` 23,82ms /
   p50 19,7 / p95 38,9 / p99 57,1 / VEL 88,8%; on 1635 frames / 22,14ms / 19,6 /
-  39,9 / 47,9 / VEL 82,1%. **Misto:** frames **+11%**, `core_average` **-7%**,
-  p99 **-16%**, mas **VEL -6,7pp**. Taxa de acerto ~60%. Ver `tech_debits.md` 5.7.
+  39,9 / 47,9 / VEL 82,1%. **Ganho real nos tempos de CPU:** frames **+11%**,
+  `core_average` **-7%**, p99 **-16%** (confirmado pelo usuário jogando no
+  device). O **VEL -6,7pp do retrorun não é confiável** — a medição de
+  velocidade do frontend está errada, não é regressão do cache. Taxa de acerto
+  ~60%. Mantido como opt-in (`FC_DYN_CACHE`, desligado por padrão). Ver
+  `tech_debits.md` 5.7.
