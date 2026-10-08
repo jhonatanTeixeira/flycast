@@ -274,4 +274,10 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   lento era invalidação incompleta (a tabela `fpcb` muda sem discard) → bump da
   geração em toda escrita. Bit-exato; frames +11%, core −7%, p99 −16%. VEL do
   retrorun não confiável aqui. Opt-in.
+- **Deploy oficial:** build do HEAD (HLE do DOA2 + inline cache opt-in)
+  deployado como core oficial do device
+  (`~/.config/retroarch/cores/flycast2026_libretro.so`, md5
+  `dceb2a4cfd691bf21c6d4a6c137f518a`), backup em
+  `.bak-pre-dyncache-20261008` (build anterior de 2026-10-06); boot DOA2
+  validado (exit=0, 0 SIGSEGV). `FC_DYN_CACHE` segue **desligado por padrão**.
 - `history.md` compactado (este arquivo); original em `docs/arquivo/`.
