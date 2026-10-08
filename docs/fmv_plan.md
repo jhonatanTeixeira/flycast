@@ -1,6 +1,6 @@
 # Plano: FMVs (vídeo Sofdec) leves no Dreamcast
 
-Status: **planejado**. Antes disto, tentar melhorar as FMVs pelo tier2 (seção 4).
+Status: **planejado** (o tier2 foi aposentado em 2026-10-07 e não ajudava nas FMVs: ~8% da faixa do decodificador; o caminho é o codec nativo por assinatura).
 
 ## 1. Medição que motivou (2026-10-02)
 

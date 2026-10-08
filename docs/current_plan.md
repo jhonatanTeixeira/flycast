@@ -58,5 +58,3 @@
 - Regenerar os savestates de `ggxx`, `ggxxsla` e `sa2` (V12 antigo) e re-testar.
 - Re-rodar a bateria DC com **tier2 OFF** (skill `bateria`) para fechar as linhas
   de `game_status.md` marcadas com tier2 ON (cvs2, MvC2, SA2, Shenmue II...).
-- Escolher a pasta única `docs/arquivo/` para tudo que for arquivado (índice em
-  `docs/arquivo/README.md`).
