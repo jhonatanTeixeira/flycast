@@ -3719,3 +3719,34 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   - Como diagnosticado anteriormente, o opcode não tinha tradução nativa e quebrava o fluxo de compilação caindo de volta pro emulador em C (fallback).
   - Adicionada rotina de decodificação direta via SHIL em `decoder.cpp` (`shop_readm` + `shop_seteq` + `shop_or` + `shop_writem`).
   - Validado via benchmark com a flag `FC_IFB_COUNT=1`: as execuções problemáticas do `tas.b` caíram a ZERO, extinguindo a interrupção de blocos neste caso.
+
+### 2026-10-08 (manhã) — HLE do laço de vértices do DOA2 (`hle_fn`): validado bit-exato, ganho marginal (~1%)
+
+- **Objetivo:** reescrever o laço interno de vértices do DOA2 (`8C101BC4`, ~45%
+  dos *host-ops* do JIT na cena do savestate) em nativo, no molde do `lightxf`,
+  e plugar por assinatura dos bytes SH4.
+- **Implementado** (`core/rec-ARM64/hle_fn.cpp`, `doa2_run`): o laço interno
+  (`BC2/BC4 → BE2 → BEC/C0C → BF0/BFE → C20/C26/C2E → C38/C3A → C4E`) com as
+  reentradas do laço externo (`C08/C0E/BF0`) como entradas (15 no total). Base
+  `FPSCR.SZ=1` (os `fmov.s` movem PARES de 8 bytes); o caminho da tabela de cor
+  (`C2E`) lê 4 bytes — os dois `fschg` se cancelam, então não mexe no SZ.
+  `ftrv` = `fmul` + 3 `fmla` (NEON), `fipr` = produtos sem fusão + soma em pares
+  `(p0+p1)+(p2+p3)`, `ftrc` = FCVTZS, `fdiv`/`fmul`/`fadd` em precisão simples,
+  `pref` na SQ = `do_sqw_nommu`. Mesma contabilidade de ciclos do JIT (`ENTER`
+  por bloco).
+- **Validação** (`FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL`, tier2
+  off, 40s do savestate, mesma build com `FC_HLE=0` × `FC_HLE=1`): **IDENTICOS**
+  em **2 pares independentes** (2364 e 2390 pedidos de render em comum, **0
+  diferentes**). O HLE roda ~4M chamadas com **0 recusas**. Achado de implementação:
+  `r14` **não** é ponteiro absoluto nas reentradas do laço externo (é um offset
+  somado a `r4` no `BF0`); a 1ª versão recusava tudo por checar `is_ram(r14)`.
+- **Medição** (2 pares base×hle, 40s+8s): `core_average` **-1,14% / -0,98%**;
+  fps **+0,64% / +1,37%**; VEL **-0,42% / +0,88%**. **Ganho marginal (~1%),
+  dentro do ruído** — a hipótese "45% do custo ⇒ ganho grande" **não se confirmou**.
+- **Por quê:** o laço é ~42% dos *host-ops* do JIT, mas o nativo fica em ~300
+  instr/vértice contra ~390 do JIT (só ~1,3×) por causa do **spilling** do estado
+  a cada fronteira de bloco (o `ENTER` e a chamada `do_sqw_nommu` forçam
+  guardar/recarregar os 16 `fr` + GPRs). O JIT também é limitado por memória/
+  I-cache (67% das paradas por falta no L1I em `jit_study.md`); trocar o código
+  por nativo sem derrubar o tráfego de estado não muda o tempo. Ver
+  `tech_debits.md` 5.6.

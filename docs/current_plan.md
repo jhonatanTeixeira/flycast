@@ -65,8 +65,14 @@ medir. Não é profiling em volta do tier2. Detalhe no `CLAUDE.md` e na skill
 - **Base levantada (dumper leve + perf):** Napple, DOA2, Shenmue, Shenmue II — o
   laço de vértices → SQ domina nos quatro (DOA2: região tier2 #1 = 14% da emu;
   Shenmue II: 7,5%).
-- **Próximos alvos nativos:** laços de vértice do DOA2/Shenmue II/Shenmue;
-  controle do AICA; IDCT da Sofdec (`docs/fmv_plan.md`).
+- **Feito (DOA2):** laço de vértices (`8C101BC4`, `doa2_run` em `hle_fn.cpp`) —
+  validado bit-exato (`FC_STATE_HASH`, 2 pares IDÊNTICOS), mas **ganho marginal
+  (~1%)**: o nativo não ficou muito mais enxuto que o JIT (spilling do estado em
+  cada fronteira de bloco) e o JIT já é limitado por memória/I-cache. Ver
+  `tech_debits.md` 5.6. **Aberto:** reduzir o spilling do `doa2_run` ou mirar
+  laços com blocos mais longos.
+- **Próximos alvos nativos:** laços de vértice do Shenmue II/Shenmue (avaliar se
+  o spilling se aplica); controle do AICA; IDCT da Sofdec (`docs/fmv_plan.md`).
 - **Pendente (projeto, sem código):** otimizador de região estilo LTO (2026-09-24).
 
 ## Agora (2026-10-02): FMVs do DC

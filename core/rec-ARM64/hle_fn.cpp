@@ -924,6 +924,342 @@ out:
 
 
 // ---------------------------------------------------------------------------
+// doa2: transformacao + iluminacao + clamp de vertices (Dead or Alive 2,
+// laco interno 8C101BC4, ~45% do custo do JIT do jogo). Base FPSCR.SZ=1: os
+// fmov.s movem PARES de 8 bytes (dr); o caminho da tabela de cor (8C101C2E)
+// troca SZ por UMA instrucao so para ler 4 bytes (net: SZ volta a 1). Por
+// vertice: carrega 3 pares, ftrv xmtrx, fipr (luz), fdiv (1/w), fcmp/gt +
+// ftrc (clamp por tabela), 4 pares + cabecalho de 32 bytes na SQ, pref
+// (flush). O laco e fechado: as bordas do laco externo (8C101C5C) e o
+// epilogo (8C101C52) ficam no JIT. Entradas: cabeca do laco e reentradas do
+// laco externo (8C101C08/C0E/BF0); qualquer desvio cai no JIT.
+const u16 doa2_s_BC2[] = {
+	0xF4E9, 0xF6E9, 0x6763, 0xF28D, 0xF270, 0xF79D, 0x7640, 0xF38D, 0x7520, 0xF0E9, 0xF5FD, 0xFB8D,
+	0x4310, 0x6046, 0x8D3D, 0x61E3,
+};
+const u16 doa2_s_BC4[] = {
+	0xF6E9, 0x6763, 0xF28D, 0xF270, 0xF79D, 0x7640, 0xF38D, 0x7520, 0xF0E9, 0xF5FD, 0xFB8D, 0x4310,
+	0x6046, 0x8D3D, 0x61E3,
+};
+const u16 doa2_s_BE2[] = { 0xF3ED, 0xC801, 0x6E46, 0x8F10, 0xF79D };
+const u16 doa2_s_BEC[] = {
+	0xF743, 0x0483, 0xF3B5, 0x3E4C, 0xFF1D, 0xF8ED, 0x0E83, 0x8F1D, 0xF20D,
+};
+const u16 doa2_s_BF0[] = { 0xF3B5, 0x3E4C, 0xFF1D, 0xF8ED, 0x0E83, 0x8F1D, 0xF20D };
+const u16 doa2_s_BFE[] = { 0xF230, 0xF38D, 0xA010, 0xFB3D };
+const u16 doa2_s_C08[] = {
+	0x74E4, 0xF79D, 0xF743, 0x7418, 0xF3B5, 0xFF1D, 0xF8ED, 0x6E43, 0x7EE0, 0x0483, 0x8F0C, 0xF20D,
+};
+const u16 doa2_s_C0C[] = {
+	0xF743, 0x7418, 0xF3B5, 0xFF1D, 0xF8ED, 0x6E43, 0x7EE0, 0x0483, 0x8F0C, 0xF20D,
+};
+const u16 doa2_s_C0E[] = {
+	0x7418, 0xF3B5, 0xFF1D, 0xF8ED, 0x6E43, 0x7EE0, 0x0483, 0x8F0C, 0xF20D,
+};
+const u16 doa2_s_C20[] = { 0xF230, 0xFB3D, 0xF38D, 0x005A, 0x3027, 0x4008, 0x8B05 };
+const u16 doa2_s_C26[] = { 0x005A, 0x3027, 0x4008, 0x8B05 };
+const u16 doa2_s_C2E[] = { 0xF3FD, 0xF386, 0xA002, 0xF3FD };
+const u16 doa2_s_C38[] = {
+	0xF38D, 0xF018, 0xF672, 0xF62B, 0xF572, 0xF60B, 0x2338, 0xF66B, 0xF64B, 0x8D02, 0x2672,
+};
+const u16 doa2_s_C3A[] = {
+	0xF018, 0xF672, 0xF62B, 0xF572, 0xF60B, 0x2338, 0xF66B, 0xF64B, 0x8D02, 0x2672,
+};
+const u16 doa2_s_C4E[] = { 0xF4E9, 0xAFB8, 0x0683 };
+const Span doa2_sig[] = {
+	{ 0x8C101BC2, sizeof(doa2_s_BC2) / 2, doa2_s_BC2 },
+	{ 0x8C101BC4, sizeof(doa2_s_BC4) / 2, doa2_s_BC4 },
+	{ 0x8C101BE2, sizeof(doa2_s_BE2) / 2, doa2_s_BE2 },
+	{ 0x8C101BEC, sizeof(doa2_s_BEC) / 2, doa2_s_BEC },
+	{ 0x8C101BF0, sizeof(doa2_s_BF0) / 2, doa2_s_BF0 },
+	{ 0x8C101BFE, sizeof(doa2_s_BFE) / 2, doa2_s_BFE },
+	{ 0x8C101C08, sizeof(doa2_s_C08) / 2, doa2_s_C08 },
+	{ 0x8C101C0C, sizeof(doa2_s_C0C) / 2, doa2_s_C0C },
+	{ 0x8C101C0E, sizeof(doa2_s_C0E) / 2, doa2_s_C0E },
+	{ 0x8C101C20, sizeof(doa2_s_C20) / 2, doa2_s_C20 },
+	{ 0x8C101C26, sizeof(doa2_s_C26) / 2, doa2_s_C26 },
+	{ 0x8C101C2E, sizeof(doa2_s_C2E) / 2, doa2_s_C2E },
+	{ 0x8C101C38, sizeof(doa2_s_C38) / 2, doa2_s_C38 },
+	{ 0x8C101C3A, sizeof(doa2_s_C3A) / 2, doa2_s_C3A },
+	{ 0x8C101C4E, sizeof(doa2_s_C4E) / 2, doa2_s_C4E },
+};
+
+Stats doa2_stats;
+
+u64 doa2_run(s32 c, u32 entry)
+{
+	// base do laco: FPSCR.SZ=1 (fmov.s move pares); precisao simples
+	if (fpscr.PR || fpscr.SZ != 1)
+		return 0;
+	// r4 (dados), r8 (tabela de cor) e r6 (SQ) sao usados como ponteiros
+	// absolutos. r14 NAO: nas reentradas do laco externo ele e um offset
+	// relativo (o `add r4,r14` do 8C101BF0 o torna absoluto) e so e
+	// desreferenciado no fim (8C101C4E). r1 idem (stale ate o 8C101BC4).
+	if (!is_ram(r[4]) || !is_ram(r[8]) || (r[6] >> 26) != 0x38)
+	{
+		if (hleLog())
+		{
+			static u32 n;
+			if (n++ < 20)
+				fprintf(stderr, "hle: doa2 recusou (entrada %u): r4=%08X r6=%08X r8=%08X r14=%08X sz=%u\n",
+						entry, r[4], r[6], r[8], r[14], (u32)fpscr.SZ);
+		}
+		return 0;
+	}
+
+	const float clk = g_lutSh4Clock > 0.f ? g_lutSh4Clock : settings.dreamcast.sh4clock;
+	auto cyc = [clk](u32 n) -> s32 { u32 v = n; v = v * clk; return (s32)std::max(1u, v); };
+	const s32 C_BC4 = cyc(7), C_BE2 = cyc(3), C_BEC = cyc(4), C_BF0 = cyc(3), C_BFE = cyc(1),
+			C_C08 = cyc(6), C_C0C = cyc(5), C_C0E = cyc(5), C_C20 = cyc(4), C_C26 = cyc(4),
+			C_C2E = cyc(1), C_C38 = cyc(3), C_C3A = cyc(3), C_C4E = cyc(2);
+	doa2_stats.calls++;
+	if (hleLog() && (doa2_stats.calls & 0x3FFF) == 1)
+		fprintf(stderr, "hle: doa2 %llu chamadas (entrada %u)\n",
+				(unsigned long long)doa2_stats.calls, entry);
+
+	const u8 *ram = mem_b.data;
+	const u32 ramMask = RAM_MASK;
+	u8 *sq = (u8 *)p_sh4rcb->sq_buffer;
+#define RD32(a) ({ u32 v_; memcpy(&v_, ram + ((a) & ramMask), 4); v_; })
+#define RDF(a) ({ f32 v_; memcpy(&v_, ram + ((a) & ramMask), 4); v_; })
+#define LDP(lo, hi, a) do { lo = RDF(a); hi = RDF(a + 4); } while (0)
+#define SQI(v, a) do { u32 v_ = (v); memcpy(sq + ((a) & 0x3C), &v_, 4); } while (0)
+#define SQP(lo, hi, a) do { SQI(f2u(lo), a); SQI(f2u(hi), (a) + 4); } while (0)
+#define FLUSHSQ(a) do { \
+		sqw_fp *fn_ = do_sqw_nommu; \
+		if ((void *)fn_ == ta_sq_stub) fn_ = (sqw_fp *)&TAWriteSQ; \
+		fn_((a), sq); \
+	} while (0)
+	// pref @a: so tem efeito na SQ (flush de 32 bytes); RAM e prfm
+#define PREF(a) do { if (((a) >> 26) == 0x38) FLUSHSQ(a); } while (0)
+
+	u32 r0, r1, r2, r3, r4, r5, r6, r7, r8, r14, fpulv, T, jd;
+	f32 f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15;
+	float32x4_t m0, m1, m2, m3;
+	u32 next = 0;
+#define RELOAD() do { \
+		r0 = r[0]; r1 = r[1]; r2 = r[2]; r3 = r[3]; r4 = r[4]; r5 = r[5]; r6 = r[6]; r7 = r[7]; r8 = r[8]; r14 = r[14]; \
+		f0 = fr[0]; f1 = fr[1]; f2 = fr[2]; f3 = fr[3]; f4 = fr[4]; f5 = fr[5]; f6 = fr[6]; f7 = fr[7]; \
+		f8 = fr[8]; f9 = fr[9]; f10 = fr[10]; f11 = fr[11]; f12 = fr[12]; f13 = fr[13]; f14 = fr[14]; f15 = fr[15]; \
+		fpulv = fpul; T = sr.T; jd = Sh4cntx.jdyn; \
+		m0 = vld1q_f32(&xf[0]); m1 = vld1q_f32(&xf[4]); m2 = vld1q_f32(&xf[8]); m3 = vld1q_f32(&xf[12]); \
+	} while (0)
+#define FLUSH() do { \
+		r[0] = r0; r[1] = r1; r[2] = r2; r[3] = r3; r[4] = r4; r[5] = r5; r[6] = r6; r[7] = r7; r[8] = r8; r[14] = r14; \
+		fr[0] = f0; fr[1] = f1; fr[2] = f2; fr[3] = f3; fr[4] = f4; fr[5] = f5; fr[6] = f6; fr[7] = f7; \
+		fr[8] = f8; fr[9] = f9; fr[10] = f10; fr[11] = f11; fr[12] = f12; fr[13] = f13; fr[14] = f14; fr[15] = f15; \
+		fpul = fpulv; sr.T = T; Sh4cntx.jdyn = jd; \
+	} while (0)
+#define ENTER(addr, C) do { \
+		c -= (C); \
+		if (__builtin_expect(c < 0, 0)) \
+		{ \
+			c += sh4_sched_timeslice; \
+			FLUSH(); \
+			t2_last_pc = 0; \
+			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
+			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
+			RELOAD(); \
+		} \
+	} while (0)
+	// ftrv: fmul da coluna 0 e tres fmla fundidas, como o JIT
+#define FTRV(a, b, cc, d) do { \
+		float32x4_t acc_ = vmulq_n_f32(m0, a); \
+		acc_ = vfmaq_n_f32(acc_, m1, b); acc_ = vfmaq_n_f32(acc_, m2, cc); acc_ = vfmaq_n_f32(acc_, m3, d); \
+		a = vgetq_lane_f32(acc_, 0); b = vgetq_lane_f32(acc_, 1); cc = vgetq_lane_f32(acc_, 2); d = vgetq_lane_f32(acc_, 3); \
+	} while (0)
+	// fipr: produtos sem fusao, soma em pares (p0+p1)+(p2+p3), como o JIT
+#define FIPR(dst, a0, a1, a2, a3, b0, b1, b2, b3) do { \
+		const float32x4_t va_ = { a0, a1, a2, a3 }; \
+		const float32x4_t vb_ = { b0, b1, b2, b3 }; \
+		const float32x4_t pr_ = vmulq_f32(va_, vb_); \
+		const float32x4_t s_ = vpaddq_f32(pr_, pr_); \
+		dst = vpadds_f32(vget_low_f32(s_)); \
+	} while (0)
+#define FTRC(x) ((u32)(s32)vcvts_s32_f32(x))
+
+	RELOAD();
+	switch (entry)
+	{
+	case 0: goto bc2_body;
+	case 1: goto bc4_body;
+	case 2: goto be2_body;
+	case 3: goto bec_body;
+	case 4: goto bf0_body;
+	case 5: goto bfe_body;
+	case 6: goto c08_body;
+	case 7: goto c0c_body;
+	case 8: goto c0e_body;
+	case 9: goto c20_body;
+	case 10: goto c26_body;
+	case 11: goto c2e_body;
+	case 12: goto c38_body;
+	case 13: goto c3a_body;
+	case 14: goto c4e_body;
+	default: return 0;
+	}
+
+bc2_body:	// 8C101BC2: fmov.s @r14+,fr4 (par) + cabeca do laco (mesmo bloco do BC4)
+	LDP(f4, f5, r14); r14 += 8;
+	goto bc4_body;
+
+bc4_top:
+	ENTER(0x8C101BC4, C_BC4);
+bc4_body:	// 8C101BC4: carrega par, ftrv, dt r3, bt.s 8C101C5C
+	LDP(f6, f7, r14); r14 += 8;
+	r7 = r6;
+	f2 = f7 + 0.f;			// fldi0 fr2 + fadd fr7,fr2 (dobrado pelo JIT)
+	f7 = 1.f;
+	r6 += 64;
+	f3 = 0.f;
+	r5 += 32;
+	LDP(f0, f1, r14); r14 += 8;
+	FTRV(f4, f5, f6, f7);
+	f11 = 0.f;
+	r3 -= 1;
+	T = r3 == 0;
+	r0 = RD32(r4); r4 += 4;
+	r1 = r14;			// slot do bt.s
+	if (T) { next = 0x8C101C5C; goto out_bail; }
+	// cai no 8C101BE2
+
+be2_top:
+	ENTER(0x8C101BE2, C_BE2);
+be2_body:	// 8C101BE2: fipr (luz); tst #1,r0; bf.s 8C101C0C
+	FIPR(f3, f0, f1, f2, f3, f12, f13, f14, f15);
+	T = (r0 & 1) == 0;
+	r14 = RD32(r4); r4 += 4;
+	f7 = 1.f;			// slot do bf.s
+	if (!T) goto c0c_top;
+	// cai no 8C101BEC
+
+bec_top:
+	ENTER(0x8C101BEC, C_BEC);
+bec_body:	// 8C101BEC: fdiv fr4,fr7; pref @r4; cai no 8C101BF0
+	f7 = f7 / f4;
+	PREF(r4);
+	// cai no 8C101BF0
+
+bf0_body:	// 8C101BF0: fcmp/gt; add r4,r14; flds; fipr; pref; bf.s 8C101C38
+	T = f3 > f11;
+	r14 = r14 + r4;
+	fpulv = f2u(f15);
+	FIPR(f11, f8, f9, f10, f11, f0, f1, f2, f3);
+	PREF(r14);
+	f2 = u2f(fpulv);		// slot do bf.s
+	if (!T) goto c38_top;
+	// cai no 8C101BFE
+
+bfe_top:
+	ENTER(0x8C101BFE, C_BFE);
+bfe_body:	// 8C101BFE: fadd fr3,fr2; fldi0 fr3; bra 8C101C26; ftrc
+	f2 = f2 + f3;
+	f3 = 0.f;
+	fpulv = FTRC(f11);		// slot do bra
+	goto c26_top;
+
+c0c_top:
+	ENTER(0x8C101C0C, C_C0C);
+c0c_body:	// 8C101C0C: fdiv fr4,fr7; cai no 8C101C0E
+	f7 = f7 / f4;
+	// cai no 8C101C0E
+
+c0e_body:	// 8C101C0E: add #24,r4; fcmp; flds; fipr; r14=r4-32; pref; bf.s 8C101C38
+	r4 += 24;
+	T = f3 > f11;
+	fpulv = f2u(f15);
+	FIPR(f11, f8, f9, f10, f11, f0, f1, f2, f3);
+	r14 = r4 - 32;
+	PREF(r4);
+	f2 = u2f(fpulv);		// slot do bf.s
+	if (!T) goto c38_top;
+	// cai no 8C101C20
+
+c20_top:
+	ENTER(0x8C101C20, C_C20);
+c20_body:	// 8C101C20: fadd fr3,fr2; ftrc; fldi0; sts; cmp/gt; shll2; bf 8C101C3A
+	f2 = f2 + f3;
+	fpulv = FTRC(f11);
+	f3 = 0.f;
+	r0 = fpulv;
+	T = (s32)r0 > (s32)r2;
+	r0 = r0 << 2;
+	if (!T) goto c3a_top;
+	goto c2e_top;			// cai no 8C101C2E (bf sem delay slot)
+
+c26_top:
+	ENTER(0x8C101C26, C_C26);
+c26_body:	// 8C101C26: sts FPUL,r0; cmp/gt r2,r0; shll2 r0; bf 8C101C3A
+	r0 = fpulv;
+	T = (s32)r0 > (s32)r2;
+	r0 = r0 << 2;
+	if (!T) goto c3a_top;
+	goto c2e_top;			// cai no 8C101C2E
+
+c2e_top:
+	ENTER(0x8C101C2E, C_C2E);
+c2e_body:	// 8C101C2E: fschg; fmov.s @(R0,r8),fr3 (4 bytes); bra 8C101C3A; fschg
+	f3 = RDF(r8 + r0);		// SZ trocado so para esta leitura de 4 bytes
+	goto c3a_top;			// bra 8C101C3A
+
+c38_top:
+	ENTER(0x8C101C38, C_C38);
+c38_body:	// 8C101C38: fldi0 fr3; cai no corpo do 8C101C3A (mesmo bloco)
+	f3 = 0.f;
+	goto c3a_body;
+
+c3a_top:
+	ENTER(0x8C101C3A, C_C3A);
+c3a_body:	// 8C101C3A: 2 fmul, 4 pares + cabecalho de 32 bytes na SQ; bt.s 8C101C52
+	LDP(f0, f1, r1);
+	f6 = f6 * f7;
+	r6 -= 8; SQP(f2, f3, r6);
+	f5 = f5 * f7;
+	r6 -= 8; SQP(f0, f1, r6);
+	T = r3 == 0;
+	r6 -= 8; SQP(f6, f7, r6);
+	r6 -= 8; SQP(f4, f5, r6);
+	SQI(r7, r6);			// slot do bt.s
+	if (T) { next = 0x8C101C52; goto out_bail; }
+	// cai no 8C101C4E
+
+c4e_top:
+	ENTER(0x8C101C4E, C_C4E);
+c4e_body:	// 8C101C4E: fmov.s @r14+,fr4 (par); bra 8C101BC4; pref @r6
+	LDP(f4, f5, r14); r14 += 8;
+	PREF(r6);			// slot do bra
+	goto bc4_top;
+
+c08_body:	// 8C101C08: add #-28,r4; fldi1 fr7; cai no 8C101C0C
+	r4 -= 28;
+	f7 = 1.f;
+	goto c0c_body;
+
+out_bail:
+	FLUSH();
+	next_pc = next;
+	return (1ull << 32) | (u32)c;
+out:
+	// estado ja gravado pelo ENTER (FLUSH antes do UpdateSystem)
+	next_pc = next;
+	return (1ull << 32) | (u32)c;
+#undef RD32
+#undef RDF
+#undef LDP
+#undef SQI
+#undef SQP
+#undef FLUSHSQ
+#undef PREF
+#undef RELOAD
+#undef FLUSH
+#undef ENTER
+#undef FTRV
+#undef FIPR
+#undef FTRC
+}
+
+
+// ---------------------------------------------------------------------------
 // memset16/32: lacos de limpeza (Padroes 1, 2 e 5 do perfil do JIT). O bloco
 // casado e' o cabecalho do laco (store, decremento do contador, avanco do
 // destino, teste e `bf` de volta); a versao nativa roda o laco inteiro e sai
@@ -1040,6 +1376,21 @@ bool hle_fn_lookup(u32 vaddr, u32 *id)
 		{ 0x8C14D440, 0x100, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
 		{ 0x8C14D4F6, 0x101, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
 		{ 0x8C14D472, 0x102, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
+		{ 0x8C101BC2, 0x400, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BC2)" },
+		{ 0x8C101BC4, 0x401, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BC4)" },
+		{ 0x8C101BE2, 0x402, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BE2)" },
+		{ 0x8C101BEC, 0x403, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BEC)" },
+		{ 0x8C101BF0, 0x404, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BF0)" },
+		{ 0x8C101BFE, 0x405, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BFE)" },
+		{ 0x8C101C08, 0x406, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C08)" },
+		{ 0x8C101C0C, 0x407, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C0C)" },
+		{ 0x8C101C0E, 0x408, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C0E)" },
+		{ 0x8C101C20, 0x409, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C20)" },
+		{ 0x8C101C26, 0x40A, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C26)" },
+		{ 0x8C101C2E, 0x40B, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C2E)" },
+		{ 0x8C101C38, 0x40C, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C38)" },
+		{ 0x8C101C3A, 0x40D, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C3A)" },
+		{ 0x8C101C4E, 0x40E, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C4E)" },
 	};
 	for (const Entry &e : entries)
 	{
@@ -1066,6 +1417,7 @@ extern "C" u64 hle_fn_run(s32 cycles, u32 id, u32 vaddr)
 	case 1: return stripemit_run(cycles, id & 0xFF);
 	case 2: return memset_run(cycles, id & 0xFF, vaddr);
 	case 3: return ocbp_run(cycles, id & 0xFF, vaddr);
+	case 4: return doa2_run(cycles, id & 0xFF);
 	default: return 0;
 	}
 }
