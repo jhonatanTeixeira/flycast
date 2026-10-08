@@ -185,8 +185,10 @@ __forceinline
 			&& (gp->tcw.PixelFmt == PixelPal4 || gp->tcw.PixelFmt == PixelPal8)
 			&& rawInfo->pal4 == (gp->tcw.PixelFmt == PixelPal4);
 	{
+		// getenv uma vez so: SetGPState roda ~640x por frame (4.119).
+		static const bool mortonLog = getenv("FC_MORTON_LOG") != nullptr;
 		static int dbgN = 0;
-		if (getenv("FC_MORTON_LOG") && dbgN < 12 && gp->pcw.Texture)
+		if (mortonLog && dbgN < 12 && gp->pcw.Texture)
 		{
 			dbgN++;
 			NOTICE_LOG(RENDERER, "MORTON dbg: texid=%llu raw=%d pix=%d pal4=%d w=%u h=%u filter=%d",

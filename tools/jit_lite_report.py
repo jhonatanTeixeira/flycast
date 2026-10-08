@@ -4,7 +4,7 @@
 Entrada:
   jit-<pid>.txt   FC_JIT_DUMP=<dir> FC_JIT_DUMP_LITE=1 (linhas B = bloco
                   compilado com endereco do host; t = relogio; Z = limpeza)
-  samples.txt     perf record -F 999 -k mono -p <pid>; depois
+  samples.txt     perf record -F 299 -k mono -p <pid> (rr_capture.sh); depois
                   perf script -F comm,tid,time,ip,sym --ns > samples.txt
 
 O cache de codigo e um array dentro do .so (simbolo SH4_TCB), entao o perf
@@ -15,11 +15,13 @@ Uso:
   jit_lite_report.py jit-<pid>.txt samples.txt [--top 30]
                      [--window INI FIM]      segundos desde a 1a amostra
                      [--at HH:MM:SS --span S] janela centrada na hora local
+                     [--freq HZ]             o -F do perf record (padrao 299)
 """
 import argparse
 import bisect
 import collections
 import datetime
+import gzip
 import re
 
 
@@ -88,6 +90,7 @@ def main():
     ap.add_argument('--window', nargs=2, type=float)
     ap.add_argument('--at')
     ap.add_argument('--span', type=float, default=10.0)
+    ap.add_argument('--freq', type=int, default=299, help='-F do perf record (rr_capture.sh usa 299)')
     ap.add_argument('--log', help='live.log do retrorun (regioes do tier2, em ordem de emissao)')
     ap.add_argument('--tcb-off', default='0x3a2568', help='offset do simbolo SH4_TCB no .so (nm)')
     a = ap.parse_args()
@@ -116,7 +119,8 @@ def main():
     res = Resolver(blocks)
 
     rows = []
-    with open(a.samples, errors='replace') as f:
+    opener = gzip.open if a.samples.endswith('.gz') else open
+    with opener(a.samples, 'rt', errors='replace') as f:
         for line in f:
             m = SAMPLE.match(line)
             if m:
@@ -146,11 +150,11 @@ def main():
     jit_tid = collections.Counter(r[0] for r in rows if r[3].startswith('SH4_TCB'))
     emu = jit_tid.most_common(1)[0][0] if jit_tid else per_tid.most_common(1)[0][0]
 
-    print('janela: %.1f s, %d amostras (perf a ~999 Hz por thread)' % (dur, len(rows)))
-    print('\n--- Threads (amostras ~ ms de CPU; %% de um core) ---')
+    print('janela: %.1f s, %d amostras (perf a ~%d Hz por thread)' % (dur, len(rows), a.freq))
+    print('\n--- Threads (amostras; % de um core) ---')
     for tid, n in per_tid.most_common(8):
         tag = ' <- emu (SH4 JIT)' if tid == emu else ''
-        print('  tid %-7d %6d  %5.1f%% de um core%s' % (tid, n, 100.0 * n / (dur * 999), tag))
+        print('  tid %-7d %6d  %5.1f%% de um core%s' % (tid, n, 100.0 * n / (dur * a.freq), tag))
 
     emu_rows = [r for r in rows if r[0] == emu]
     by_block = collections.Counter()
@@ -192,7 +196,7 @@ def main():
         print('\n--- JIT sem bloco, por lugar ---')
         for k, n in unres_kind.most_common(12):
             print('  %5.2f%%  %s' % (100.0 * n / n_emu, k))
-    print('\n--- Blocos mais caros (tempo real, %% da thread de emulacao) ---')
+    print('\n--- Blocos mais caros (tempo real, % da thread de emulacao) ---')
     acc = 0
     for va, n in by_block.most_common(a.top):
         acc += n

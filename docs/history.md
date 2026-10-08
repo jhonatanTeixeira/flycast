@@ -281,3 +281,15 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   `.bak-pre-dyncache-20261008` (build anterior de 2026-10-06); boot DOA2
   validado (exit=0, 0 SIGSEGV). `FC_DYN_CACHE` segue **desligado por padrão**.
 - `history.md` compactado (este arquivo); original em `docs/arquivo/`.
+
+### 2026-10-08 (noite) — revisão: prioridade por tempo amostrado
+
+- Revisão (sem mudar código) dos commits de JIT recentes contra as 7 capturas
+  `dcbat_off` (com `samples.txt.gz`): `tas.b` 0,0% da emu, `ocbp` ≤1%, `memset`
+  2-6%; blocos com FPU são a maior categoria nos jogos <100%. O ranking estático do
+  `padroes_ineficiencia.txt` foi aposentado como fonte de prioridade (lição em
+  `tech_debits.md`, Método).
+- HLE `memset`/`ocbp` e `FC_DYN_CACHE` voltam a "validar" (4.119, 4.120). TR
+  Chronicles é MMU saturada, não frame-wait (4.121). AICA no Shenmue II (4.122).
+- Fixes pequenos: `getenv` por draw no `SetGPState` cacheado; `jit_lite_report.py`
+  usa `--freq` (padrão 299, o `-F` do `rr_capture.sh`) e lê `.gz`.

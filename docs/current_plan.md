@@ -11,8 +11,10 @@
 - Core oficial `flycast2026` com funções nativas por assinatura (`hle_fn.cpp`),
   espera do frame com prazo = 2× intervalo medido (4.110), core reporta fps natural
   (4.112), `div32` nativo. **Tier2 aposentado** (opt-in, OFF no `retrorun.cfg`).
-- Opt-in ainda não promovidos: `FC_DYN_CACHE` (5.7, frames +11%), `FC_TEX_GPU_MORTON`
-  (4.103).
+- Opt-in ainda não promovidos: `FC_DYN_CACHE` (5.7, frames +11% mas VEL caiu — 4.120),
+  `FC_TEX_GPU_MORTON` (4.103). HLE `memset`/`ocbp` (5.4) ligado mas não validado (4.119).
+- **Prioridade = tempo amostrado** (bloco × amostras do `perf`), nunca proporção
+  estática; `padroes_ineficiencia.txt` aposentado como fonte de prioridade.
 - Método vigente no DC: **dump leve do JIT → análise estática → nativo por
   assinatura → `FC_STATE_HASH` → A/B** (skill `jit-nativo`).
 
@@ -22,7 +24,8 @@
 |---|------|--------|
 | 0.1 | `SH4ThrownException` não tratada (Shenmue no loading, SA2 após logos; Napple suspeito). SA2 e Shenmue só crasham com tier2 ON → **reconferir com OFF** e, se sumir, fechar; senão pegar o `throw` que escapa (backtrace em `samples.txt.gz`). Robustez: converter em `Do_Exception(epc,0x180,0x100)` (tentativa anterior não validada) — 4.114 | pendente |
 | 0.2 | Skies Disc 2 não boota (`SIGSEGV ... was not in vram`, exit 133): validar o CHD com o core upstream; se bom, `FC_JIT_TRACE` | pendente |
-| 0.3 | Teto de frame ~90-150 ms com ~100% dupes: Macross M3, TR Chronicles (BIOS WinCE), PSO após load. EGG já resolvido. Olhar `rs.Wait`/timeout, CHD (`FC_CHD_PREFETCH`), AICA thread; comparar com upstream — 4.115 | pendente |
+| 0.3 | Teto de frame ~90-150 ms com ~100% dupes: Macross M3, PSO após load. EGG já resolvido. Olhar `rs.Wait`/timeout, CHD (`FC_CHD_PREFETCH`), AICA thread; comparar com upstream — 4.115 | pendente |
+| 0.3b | **TR Chronicles não espera, está saturado** (emu ~95% de um core): 26% `bm_GetCodeByVAddr` + 12% `mmu_full_lookup` → lookup de bloco por vaddr com MMU (ex-1.5 "nunca investigado") — 4.121 | pendente |
 | 0.4 | `asndynmt` crasha após escolher personagem; `meltyb` trava quando a luta começa (tier2 OFF) — 4.94/4.95 | pendente |
 
 ## P1 — estraga a experiência
@@ -39,13 +42,20 @@
 
 ## P2 — otimização (ciclo `jit-nativo`)
 
-- **Alvos nativos:** laços de vértices do **Shenmue II / Shenmue / MvC2**; controle
-  do AICA; IDCT da Sofdec (`docs/fmv_plan.md`, ~25% da emu no RE CV); cópias de
-  words e dispatch indireto (nº1 do consolidado, `docs/padroes_ineficiencia_analise.md`).
-  Antes de reescrever, medir o spilling de estado por fronteira de bloco: o HLE do
-  DOA2 deu ~1% porque o nativo ainda guarda/recarrega o estado (5.6).
-- **Despacho:** validar `FC_DYN_CACHE` em mais jogos e promover a padrão se confirmar
-  (5.7); o VEL do retrorun não é confiável nessa medição.
+- **Validar antes de manter/promover:** HLE `memset`/`ocbp` com `FC_STATE_HASH` +
+  rever o `UpdateSystem` único por laço (4.119); `FC_DYN_CACHE` com `new_fps`/dupes
+  + VEL na mesma cena (4.120).
+
+- **Alvos nativos (por tempo amostrado):** blocos com FPU são a maior categoria nos
+  jogos <100% (Shenmue II 28%, Shenmue 24%, DOA2 43% da emu) → laços de vértices do
+  **Shenmue II / Shenmue**; **spill do HLE do DOA2** (cluster `8C101BC4..C4E` ~15% da
+  emu, rendeu ~1% por guardar/recarregar estado a cada fronteira — 5.6); AICA/ARM7
+  no Shenmue II (>8%, 4.122); IDCT da Sofdec (`docs/fmv_plan.md`). `tas.b`, `ocbp`,
+  `div1` e jmp `@rn` pesam ≤3% cada — não são alvo.
+- **Despacho:** stubs/despachante 2-9% e blocos com `rts`/`jsr` 10-25% da emu;
+  `FC_DYN_CACHE` é a direção certa, mas só promover após 4.120.
+- **MvC2 (VEL 99,5%):** emulação não é o limite; glitches/dupes são apresentação e
+  render (thread principal ~42% de um core, quase tudo no driver Mali) — não o JIT.
 - **Render (Mali):** ~640 draws × ~34 µs; só atlas/menos draws ajuda (4.37). Pool de
   RTT (item 3 do antigo plano de render) segue possível, sem medição que o priorize.
 - **Morton na GPU:** rodar a bateria Naomi + mslug6 antes de promover (4.103).

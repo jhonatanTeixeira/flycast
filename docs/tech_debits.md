@@ -17,7 +17,8 @@
 | # | Item | Status |
 |---|------|--------|
 | 4.114 | `SH4ThrownException` não tratada → SIGABRT (Napple, Shenmue, SA2). `try/catch` em `dc_run`/`rdv_BlockCheckFail` não pegou; com tier2 OFF some | confirmado, sem fix |
-| 4.115 | Teto de tempo de frame com ~100% dupes: Macross M3 ~145 ms, TR Chronicles ~147 ms (EGG era o tier2) — família frame-wait/CHD | não corrigido |
+| 4.115 | Teto de tempo de frame com ~100% dupes: Macross M3 ~145 ms, TR Chronicles ~147 ms (EGG era o tier2) — família frame-wait/CHD. **TR Chronicles não é espera: ver 4.121** | não corrigido |
+| 4.121 | TR Chronicles (WinCE/MMU) **saturado, não esperando**: thread de emulação a ~95% de um core, 26% em `bm_GetCodeByVAddr` + 12% em `mmu_full_lookup` (todo despacho cai na busca lenta por vaddr). É o item 1.5 (MMU) — captura `dcbat_off` 2026-10-07 | confirmado, sem fix |
 | 4.116 | Áudio estourado (saturação) + vozes baixas (Grandia II, Napple) | não investigado |
 | 4.117 | Memory card "falta de espaço" (Napple, Shenmue II) + crash do Napple ao salvar | não investigado |
 | 4.118 | MvC2 (glitches, 33-45 fps) e Project Justice (118 dupes) — suspeita de regressão | não investigado |
@@ -34,6 +35,9 @@
 
 | # | Item | Status |
 |---|------|--------|
+| 4.119 | HLE `memset`/`ocbp` (5.4) **não validado**: sem `FC_STATE_HASH`; tempo não é bit-exato por construção (laço inteiro com um só `UpdateSystem` → interrupções atrasadas; o HLE do DOA2 faz ENTER por bloco); o "Le Mans `core_p95` 95→58 ms" veio de cold boot (cenas diferentes) e a rodada seguinte com o mesmo HLE deu p95 150 ms + `declared_fps` 7,5 + áudio em loop, sem separar do HLE. Teto do ganho: memset 2-6%, ocbp ≤1% da emu | validar |
+| 4.120 | Inline cache (`FC_DYN_CACHE`, 5.7): frames +11% mas **VEL 88,8 → 82,1%** — é o padrão "mais fps, jogo mais lento". VEL foi descartada sem prova; conferir `new_fps`/dupes (`FC_SYNC_STATS`) + VEL antes de promover | validar |
+| 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |
 | 4.112 | Retrorun usa o refresh declarado como fps máx. O core já reporta o fps natural; o frameskip adaptativo do SDL compila mas não dispara (mede só trabalho, não o pacing) | parcial |
@@ -78,6 +82,24 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
 - Dumper completo derruba o jogo; usar `_LITE` + perf. `bm_WriteBlockMap`/gdb
   servem para inspecionar blocos sem rebuild; endereço de amostra do perf em região
   JIT pode vir com 2 bits baixos errados.
+
+- **Priorizar por tempo amostrado, nunca por proporção estática.** O
+  `padroes_ineficiencia.txt` (`consolidar.py`/`cluster_blocks.py`) pesava
+  instr host/SH4 × nº de blocos parecidos — mede quanto o padrão *aparece*, não
+  quanto *roda*; o filtro "≥3 jogos" ainda descartava os laços quentes (específicos
+  de cada jogo). Pelo `perf` (7 capturas `dcbat_off`, % da emu): `tas.b` 0,0 em
+  todos; `ocbp` ≤1; laço em si mesmo 2-6; `div1` ≤2,6; epílogo `lds.l PR`+`rts`
+  1,5-7; blocos com FPU 9-43 (a maior categoria nos jogos <100%); fora do JIT
+  26-46. "Sem FPU ⇒ não é 3D" era artefato do filtro. Aposentado como fonte de
+  prioridade (2026-10-08).
+- `jit_lite_report.py` dividia por 999 Hz mas o `rr_capture.sh` grava com
+  `perf -F 299` → "% de um core" saía ~3,3× menor. Corrigido (`--freq`, padrão
+  299; lê `.gz` direto). Emu real nas capturas `dcbat_off`: EGG 36, MvC2 57,
+  Shenmue 72, DOA2 83, Napple 83, Shenmue II 89, TR Chronicles 95%. Conclusões
+  antigas que usaram esse % merecem segundo olhar.
+- `getenv("FC_MORTON_LOG")` dentro do `SetGPState` (~640×/frame) custava 1,4% da
+  thread de render no Shenmue II (o `rr_capture.sh` exporta muitas `FC_*`).
+  Cacheado em `static`. Nada de `getenv` em caminho quente.
 
 ### JIT / CPU
 - O gargalo típico é throughput do SH4 (~9-11 ciclos host/instr, IPC ~0,45; L1I na
