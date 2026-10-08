@@ -367,7 +367,7 @@ bool tier2_owns_pc(uintptr_t pc);
 bool tier2_sampling();
 bool tier2_configured();
 bool hle_fn_lookup(u32 vaddr, u32 *id);
-extern "C" u64 hle_fn_run(s32 cycles, u32 id);
+extern "C" u64 hle_fn_run(s32 cycles, u32 id, u32 vaddr);
 void tier2_note_slowmem(u32 vaddr);
 extern uintptr_t t2_last_pc;
 
@@ -1047,6 +1047,7 @@ public:
 			{
 				Mov(w0, w27);
 				Mov(w1, hleId);
+				Mov(w2, block->vaddr);	// HLE de laco precisa saber onde o bloco esta
 				GenCallRuntime(hle_fn_run);
 				Label hle_declined;
 				Tbz(x0, 32, &hle_declined);

@@ -924,66 +924,77 @@ out:
 
 
 // ---------------------------------------------------------------------------
-// memset16/32: Padrões dinâmicos (1, 2, 5) identificados pelo perfil do JIT
-u64 memset_run(s32 c, u32 entry)
+// memset16/32: lacos de limpeza (Padroes 1, 2 e 5 do perfil do JIT). O bloco
+// casado e' o cabecalho do laco (store, decremento do contador, avanco do
+// destino, teste e `bf` de volta); a versao nativa roda o laco inteiro e sai
+// logo depois dele. entry 0: contador r6/passo 2 (mov.w); 1: r5/passo 2;
+// 2: r6/passo 4 (mov.l). Valor em r7, destino em r4.
+u64 memset_run(s32 c, u32 entry, u32 vaddr)
 {
-	u32 val = r[7];
-	u32 dest = r[4];
-	u32 cnt_reg = (entry == 1) ? 5 : 6;
-	u32 cnt = r[cnt_reg];
-	u32 step = (entry == 2) ? 4 : 2;
-	bool is32 = (entry == 2);
-	
-	if (cnt > 0)
+	const u32 val = r[7];
+	const u32 dest = r[4];
+	const u32 cntReg = (entry == 1) ? 5 : 6;
+	const u32 cnt = r[cntReg];
+	const u32 step = (entry == 2) ? 4 : 2;
+	const bool is32 = (entry == 2);
+
+	// Contador zero: o laco SH4 e' do-while (store antes do teste) e daria a
+	// volta em 2^32. Declina e deixa o JIT rodar o bloco, como faria sem HLE.
+	if (cnt == 0)
+		return 0;
+
+	// Escrita pelo mesmo caminho do JIT (WriteMem16/32 cuida de SMC/MMIO).
+	for (u32 i = 0; i < cnt; i++)
 	{
-		if (is_ram(dest))
-		{
-			u8* ptr = &mem_b.data[dest & RAM_MASK];
-			if (is32) {
-				u32 v = val;
-				for (u32 i = 0; i < cnt; i++) {
-					memcpy(ptr + i*4, &v, 4);
-				}
-			} else {
-				u16 v = val & 0xFFFF;
-				for (u32 i = 0; i < cnt; i++) {
-					memcpy(ptr + i*2, &v, 2);
-				}
-			}
-		}
+		if (is32)
+			WriteMem32(dest + i * 4, val);
 		else
-		{
-			// Fallback lento seguro
-			if (is32) {
-				for (u32 i = 0; i < cnt; i++) WriteMem32(dest + i*4, val);
-			} else {
-				for (u32 i = 0; i < cnt; i++) WriteMem16(dest + i*2, val);
-			}
-		}
+			WriteMem16(dest + i * 2, val & 0xFFFF);
 	}
-	
-	// Atualiza registradores para refletir o fim do loop
+
 	r[4] = dest + cnt * step;
-	r[cnt_reg] = 0;
-	sr.T = 1; // tst 0,0 seta T=1 (o que causa a saida do bf)
-	
-	// Desconta os ciclos (o laco SH4 gastaria 5 ciclos por iteracao)
-	c -= cnt * 5;
-	
+	r[cntReg] = 0;
+	sr.T = 1;	// tst <contador>,<contador> com 0 seta T
+
+	// O JIT ja descontou a fatia de ciclos deste bloco (uma volta do laco)
+	// antes de chamar o HLE; desconta as voltas restantes. 5 por volta =
+	// mov(1)+add(1)+add(1)+tst(1)+bf(1).
+	c -= (cnt - 1) * 5;
+	next_pc = vaddr + 10;
 	if (__builtin_expect(c < 0, 0))
 	{
 		c += sh4_sched_timeslice;
-		if (UpdateSystem() != 0) {
-			next_pc = rdv_DoInterrupts_pc(t2_last_pc + 10);
-			return (1ull << 32) | (u32)c;
-		}
-		if (!Sh4cntx.CpuRunning) {
-			next_pc = t2_last_pc + 10;
-			return (1ull << 32) | (u32)c;
-		}
+		if (UpdateSystem() != 0)
+			next_pc = rdv_DoInterrupts_pc(vaddr + 10);
 	}
-	
-	next_pc = t2_last_pc + 10;
+	return (1ull << 32) | (u32)c;
+}
+
+// ---------------------------------------------------------------------------
+// ocbp: expurgo de cache (Padrao 23). Bloco = `ocbp @r4 / dt r5 / bf.s /
+// add #32,r4`. O JIT trata o ocbp como no-op (dec vazio, o dado ja esta na
+// memoria do host), entao o nativo so avanca o ponteiro e zera o contador.
+u64 ocbp_run(s32 c, u32 entry, u32 vaddr)
+{
+	const u32 dest = r[4];
+	const u32 cnt = r[5];
+
+	if (cnt == 0)
+		return 0;	// dt daria a volta em 2^32: deixa o JIT rodar
+
+	r[4] = dest + cnt * 32;
+	r[5] = 0;
+	sr.T = 1;	// dt r5 com 0 seta T
+
+	// 4 por volta = ocbp(1)+dt(1)+bf.s(1)+add(1); uma volta ja foi descontada.
+	c -= (cnt - 1) * 4;
+	next_pc = vaddr + 8;
+	if (__builtin_expect(c < 0, 0))
+	{
+		c += sh4_sched_timeslice;
+		if (UpdateSystem() != 0)
+			next_pc = rdv_DoInterrupts_pc(vaddr + 8);
+	}
 	return (1ull << 32) | (u32)c;
 }
 
@@ -1000,17 +1011,25 @@ bool hle_fn_lookup(u32 vaddr, u32 *id)
 	const u16 memset16_r6_ops[] = { 0x2471, 0x76FF, 0x7402, 0x2668, 0x8BFA };
 	const u16 memset16_r5_ops[] = { 0x2471, 0x75FF, 0x7402, 0x2558, 0x8BFA };
 	const u16 memset32_r6_ops[] = { 0x2472, 0x76FF, 0x7404, 0x2668, 0x8BFA };
+	const u16 ocbp_r5_ops[] = { 0x04A3, 0x4510, 0x8FFC, 0x7420 };
 	
 	const u8 *mem = GetMemPtr(vaddr, 10);
 	if (mem != nullptr) {
 		if (memcmp(mem, memset16_r6_ops, 10) == 0) {
+			if (hleLog()) fprintf(stderr, "hle: memset16 r6 @ %08X instalada\n", vaddr);
 			*id = 0x200; return true;
 		}
 		if (memcmp(mem, memset16_r5_ops, 10) == 0) {
+			if (hleLog()) fprintf(stderr, "hle: memset16 r5 @ %08X instalada\n", vaddr);
 			*id = 0x201; return true;
 		}
 		if (memcmp(mem, memset32_r6_ops, 10) == 0) {
+			if (hleLog()) fprintf(stderr, "hle: memset32 r6 @ %08X instalada\n", vaddr);
 			*id = 0x202; return true;
+		}
+		if (memcmp(mem, ocbp_r5_ops, 8) == 0) {
+			if (hleLog()) fprintf(stderr, "hle: ocbp r5 @ %08X instalada\n", vaddr);
+			*id = 0x300; return true;
 		}
 	}
 
@@ -1039,13 +1058,14 @@ bool hle_fn_lookup(u32 vaddr, u32 *id)
 
 // Retorno: bit 32 = tratou (w27 = 32 bits baixos, next_pc no contexto);
 // 0 = nao tratou, o bloco do JIT segue normalmente.
-extern "C" u64 hle_fn_run(s32 cycles, u32 id)
+extern "C" u64 hle_fn_run(s32 cycles, u32 id, u32 vaddr)
 {
 	switch (id >> 8)
 	{
 	case 0: return lightxf_run(cycles, id & 0xFF);
 	case 1: return stripemit_run(cycles, id & 0xFF);
-	case 2: return memset_run(cycles, id & 0xFF);
+	case 2: return memset_run(cycles, id & 0xFF, vaddr);
+	case 3: return ocbp_run(cycles, id & 0xFF, vaddr);
 	default: return 0;
 	}
 }

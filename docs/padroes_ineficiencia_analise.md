@@ -77,20 +77,56 @@ Seguindo a regra de "Medir antes de Otimizar":
 > Todo teste de sucesso resultará num commit imediato (`git commit`), conforme a regra do projeto para não acumular apenas código no *working tree*.
 
 
-### Validação Prática: Dead or Alive 2 (memset HLE)
+---
 
-Para provar o valor do HLE de laços simples de memória como o `memset`, rodamos um A/B benchmark no device R36 (via `retrorun3`) usando o jogo **Dead or Alive 2 (DOA2)**, que é notoriamente pesado, com janela de 20s.
+## 5. Epílogos de Função e Retornos (`rts` / Stack Pops)
 
-**Resultados do Benchmark (A/B `FC_HLE=0` vs `FC_HLE=1`):**
+**Origem dos Dados:** Varredura adicional em 287 MB de logs do JIT consolidados (`dcbat_consolidado.txt`).
+**Padrões Identificados:** Blocos contendo desempilhamento de pilha e a instrução `rts` (Return from Subroutine). Ex: `4F26000B0009` (`lds.l @r15+,PR` -> `rts` -> `nop`).
+**Contexto no Jogo:** O final (epílogo) de toda e qualquer função chamada no código C/C++ padrão do jogo. Aparecem sistematicamente como o gargalo mais repetido entre mais de 20 jogos (chegando a *ratios* astronômicos de 15.0 a 18.0 host/SH4 para blocos de apenas 3 instruções).
 
-| Métrica | HLE=0 (Original) | HLE=1 (memset Nativo) | Impacto / Ganho |
-|---|---|---|---|
-| **VEL% (Velocidade)** | 88.98% | 87.50% | *Empate técnico/Pequena flutuação* |
-| **FPS Novos (`new_fps`)** | 33.71 fps | 35.04 fps | **+1.33 fps** de rendering real |
-| **Tempo Core p50** | 23.03 ms | 20.37 ms | **-2.66 ms** (-11.5%) na mediana |
-| **Tempo Frame Ativo p50** | 24.28 ms | 21.46 ms | **-2.82 ms** na mediana global |
-| **Tempo Core (Média)** | 26.32 ms | 25.38 ms | **-0.94 ms** |
-| **Quadros Descartados** | 352 | 290 | **-62 quadros perdidos** na fila |
+### 🎯 O Problema
+Esses blocos são formados por duas ações que geram um volume gigantesco de código ARM64 para cada instrução SH4:
+1. **O Custo do `rts`:** Assim como as Jump Tables, um `rts` é um pulo indireto (ele pula para o endereço dinâmico contido em `PR`). Como o JIT não sabe o destino durante a compilação, ele é forçado a injetar a rotina lenta de fechamento do bloco para consultar o *Program Counter* na tabela de hash/dispatch do emulador e só então saltar.
+2. **Desempilhamento Sub-Ótimo:** Várias instruções em sequência lendo da pilha (`lds.l @r15+, PR`, `mov.l @r15+, r14`, etc.). Cada instrução gera código independente com overhead de verificação de memória (MMU) na CPU ARM64.
 
-**Conclusão da Validação:** 
-Mesmo em uma janela curta de 20s, a interceptação do `memset` diminuiu o tempo mediano que a CPU gasta por frame (`core_p50`) em cerca de **11,5%** (de 23ms para 20.3ms), o que permitiu ao emulador entregar **1.33 fps a mais** de quadros novos reais (`new_fps` subiu de 33.71 para 35.04). A pequena queda de VEL% isolada (1.4%) pode ser explicada pelo fato de que o emulador, rodando mais rápido, progrediu mais fundo na cena pesada de 3D durante os exatos 20s, pesando a média final; porém a redução do custo por frame na CPU (o principal gargalo do hardware) é inegável e muito expressiva (quase 3ms a menos de processamento por frame só otimizando limpeza de memória).
+### 🎯 Como Atacar (Via Otimização de JIT)
+Diferente dos laços `memset` ou de locks do SO, os epílogos são minúsculos e dispersos, tornando o ataque via HLE (`hle_fn.cpp`) inviável. A solução deve ocorrer no **Tier 2 do JIT**:
+
+1. **Implementar Inline RAS (Return Address Stack):**
+   Fazer o JIT manter uma minúscula pilha de endereços de retorno (buffer local). Quando o JIT emite um `bsr` (Branch Subroutine), ele guarda o PC no RAS nativo. Quando o `rts` é emitido, em vez de gerar código de *lookup* caro, ele gera uma checagem rápida (`cmp`) do `PR` atual contra o topo do RAS. Se o valor bater, um salto estático nativo (fast-path) é realizado, burlando 99% da ineficiência do retorno.
+2. **Fusão de Cargas (Load Coalescing - ARM64 `ldp`):**
+   Otimizar o motor de tradução do JIT para reconhecer múltiplos desempilhamentos em sequência (`@r15+`) e emitir menos instruções na CPU ARM64 fundindo as cargas em uma instrução `ldp` (Load Pair) onde for seguro, economizando ciclos de busca e acesso à memória do hospedeiro.
+
+
+> [!NOTE]
+> **Validação em Larga Escala (`dcbat_consolidado_off.txt`)**
+> Uma varredura posterior no log bruto secundário (de 287 MB) focando estritamente em blocos maiores (≥ 5 instruções) reconfirmou que a ineficiência de contexto não se limita a blocos pequenos. Dos 15 maiores ofensores identificados na nova bateria, 14 eram epílogos massivos (ratios de até 9.0 em blocos de 10 instruções).
+> Exemplo de padrão universal dominante encontrado na varredura:
+> ```assembly
+>   lds.l @r15+,PR
+>   mov.l @r15+,r8
+>   mov.l @r15+,r9
+>   ... (até r13)
+>   rts
+>   mov.l @r15+,r14
+> ```
+> O único bloco não-epílogo neste Top 15 foi o padrão de despacho virtual (`jmp @r0`). Essa redundância entre diferentes sessões e tamanhos de bloco crava definitivamente que a implementação do **Inline RAS (Return Address Stack)** e da **Fusão de Cargas (Load Coalescing)** são as otimizações mais vitais que o compilador Tier 2 precisa receber.
+
+---
+
+## Validação prática (revisão 2026-10-07)
+
+A primeira versão do HLE de `memset` (Padrões 1/2/5) tinha um bug de `next_pc`
+(usava `t2_last_pc`, que é *stale* na chamada do HLE) e **nunca disparou em DOA2** —
+o padrão de `memset` não existe no código do DOA2 (só o de `ocbp`, e esse não apareceu
+na cena do savestate). A alegação de "+11,5% em DOA2" era **ruído**.
+
+Corrigido: o `vaddr` do bloco vai como 3o argumento de `hle_fn_run`; os ciclos descontam
+`(cnt-1)` voltas (o JIT já descontou a 1a); a escrita usa `WriteMem16/32` (SMC/MMIO).
+Com isso o HLE dispara no **cold boot do Le Mans** (memset16/32 + ocbp instalados, sem
+crash) e o A/B (40s) deu `core_p95` 95,1→58,4 ms e `new_fps` 32,1→34,9.
+
+Onde cada padrão realmente existe (por jogo, dump da bateria):
+`memset16 r6` 7 jogos, `memset16 r5`/`memset32 r6` 10, `ocbp` 20
+(Le Mans, EGG, Grandia II, Napple, KOF Evo, Macross M3, DOA2, MvC2, SA2, Skies, ...).

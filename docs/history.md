@@ -3714,9 +3714,7 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
 - **`docs/padroes_ineficiencia_analise.md`**: documento de análise de padrões do JIT
   (memset/tas.b/jump tables/ocbp/epílogos) produzido em outra sessão; incluído no repo
   a pedido do usuário.
-- **2026-10-07 22:20**: Validação do HLE de `memset` no device (R36S) usando *Dead or Alive 2* e correção no carregamento de save states do `retrorun3`.
-  - Descoberto que a flag `retrorun_auto_load = true` era necessária no `.cfg` usado para os benchmarks; criamos configs locais `r_lemans.cfg` e `r_doa2.cfg` ativando-a.
-  - Teste 20s (DOA2): O tempo mediano que a CPU dedica por frame (`core_p50`) diminuiu significativamente com a otimização de `memset` de **23.03ms** para **20.37ms** (-11.5%), com a taxa real de frames subindo de 33.7 fps para 35.0 fps, e descarte de quadros caindo de 352 para 290. Impacto excelente!
+- **2026-10-07 22:20 (revisado na sessão seguinte)**: HLE de `memset`/`ocbp` — a medição original em DOA2 **não se sustenta**: o padrão de `memset` não existe no código do DOA2 (só o de `ocbp`, que não apareceu na cena do savestate), então o HLE **nunca instalou** nessa rodada e a diferença de números era ruído/cena. A revisão achou e corrigiu um **bug real**: o `next_pc` usava `t2_last_pc` (stale na chamada do HLE); agora o `vaddr` do bloco vai como 3o argumento de `hle_fn_run`. Com a correção, o HLE dispara no cold boot do Le Mans (memset16/32 + ocbp instalados, sem crash) e o A/B deu `core_p95` 95,1→58,4 ms. Ver `tech_debits` 5.4.
 - **2026-10-07 22:38**: Implementação da tradução nativa do opcode `tas.b` (Test and Set Byte) no JIT SH4.
   - Como diagnosticado anteriormente, o opcode não tinha tradução nativa e quebrava o fluxo de compilação caindo de volta pro emulador em C (fallback).
   - Adicionada rotina de decodificação direta via SHIL em `decoder.cpp` (`shop_readm` + `shop_seteq` + `shop_or` + `shop_writem`).
