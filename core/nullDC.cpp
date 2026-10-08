@@ -11,6 +11,7 @@
 #include "hw/flashrom/flashrom.h"
 #include "hw/maple/maple_cfg.h"
 #include "hw/sh4/sh4_mem.h"
+#include "hw/sh4/sh4_core.h"	// SH4ThrownException + Do_Exception (robustez do dc_run)
 #include "hw/arm7/arm7.h"
 
 #include "hw/naomi/naomi_cart.h"
@@ -489,7 +490,23 @@ int dc_init()
 
 void dc_run()
 {
-   sh4_cpu.Run();
+#if !defined(NO_MMU)
+   try {
+#endif
+      sh4_cpu.Run();
+#if !defined(NO_MMU)
+   }
+   catch (SH4ThrownException& ex)
+   {
+      // Robustez: uma excecao do guest (ex.: `iNimp` por uma regiao do tier2
+      // executando dados) que escape de um caminho sem catch chamava
+      // std::terminate e FECHAVA o emulador. Tratamos como o interpretador faz
+      // (Do_Exception -> handler do guest), para o jogo sobreviver; pode virar
+      // glitch, mas nao crash. Ver docs/bateria_2026-10-07_plan.md 0.1.
+      ERROR_LOG(BOOT, "SH4 exception escaped the run loop (epc=%08X evn=%03X) -- handled at the boundary", ex.epc, ex.expEvn);
+      Do_Exception(ex.epc, ex.expEvn, ex.callVect);
+   }
+#endif
 }
 
 void dc_term()

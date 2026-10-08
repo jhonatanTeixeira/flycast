@@ -327,7 +327,26 @@ DynarecCodeEntryPtr DYNACALL rdv_BlockCheckFail(u32 addr)
 		next_pc = addr;
 		recSh4_ClearCache();
 	}
-	return (DynarecCodeEntryPtr)CC_RW2RX(rdv_CompilePC(blockcheck_failures));
+#if !defined(NO_MMU)
+	// Robustez (plano 0.1): a recompilacao do bloco aqui pode executar/decodificar
+	// codigo invalido e lancar SH4ThrownException (ex.: `iNimp` quando uma regiao
+	// do tier2 faz o jogo executar dados -- SA2). Sem catch, a excecao escapava
+	// desta funcao (chamada do stub de check-fail do JIT) e chamava
+	// std::terminate, FECHANDO o emulador. Tratamos como o interpretador faz e
+	// retomamos; pode virar glitch, mas nao crash.
+	try {
+#endif
+		return (DynarecCodeEntryPtr)CC_RW2RX(rdv_CompilePC(blockcheck_failures));
+#if !defined(NO_MMU)
+	}
+	catch (SH4ThrownException& ex) {
+		ERROR_LOG(DYNAREC, "SH4 exception escaped rdv_BlockCheckFail (addr=%08X epc=%08X evn=%03X) -- handled", addr, ex.epc, ex.expEvn);
+		Do_Exception(ex.epc, ex.expEvn, ex.callVect);
+		// A excecao redirecionou next_pc para o handler do guest; devolve o
+		// bloco de entrada desse handler (FindOrCompile compila se faltar).
+		return rdv_FindOrCompile();
+	}
+#endif
 }
 
 DynarecCodeEntryPtr rdv_FindOrCompile()

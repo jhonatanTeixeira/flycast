@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cstdarg>
 #include <math.h>
+#include <execinfo.h>	// FC_TERMINATE_BT: backtrace num std::terminate (diagnostico)
+#include <exception>	// std::set_terminate
 #include <chrono>
 #include <atomic>
 #include <unistd.h>	// getpid(), for the opt-in profiling dumps in retro_run()
@@ -346,6 +348,22 @@ void retro_keyboard_event(bool down, unsigned keycode, uint32_t character, uint1
 // Now comes the interesting stuff
 void retro_init(void)
 {
+   // FC_TERMINATE_BT: diagnostico (opt-in). Uma excecao do guest que escape de
+   // um caminho sem catch chama std::terminate; sem handler, o log so diz
+   // "terminate called after throwing ...". Isto imprime o BACKTRACE da thread
+   // que terminou, para achar de onde a excecao escapou. Ver plano 0.1.
+   {
+      static bool termBt = getenv("FC_TERMINATE_BT") != nullptr;
+      if (termBt)
+         std::set_terminate([]() {
+            void *bt[96];
+            int n = backtrace(bt, 96);
+            fprintf(stderr, "=== TERMINATE backtrace (%d frames) ===\n", n);
+            backtrace_symbols_fd(bt, n, 2);
+            fflush(stderr);
+            abort();
+         });
+   }
    screen_width  = 640;
    screen_height = 480;
    // Logging
