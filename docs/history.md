@@ -3681,3 +3681,36 @@ presença de fila/pacing — a taxa de áudio é. Ver `docs/tech_debits.md` item
   (`best_validated`/`best_performance`) — o default é `disabled`. No device o teste rodou
   com a linha adicionada ao `r_napple_load.cfg`; ela foi removida no fim (device de volta ao
   default). Ligar globalmente é decisão do usuário.
+
+## 2026-10-07 (cont. 5) — A/B do tier2 pelo ES: EGG e Shenmue desquebram com OFF; decisão de aposentar
+
+- Usuário rodou 7 jogos pelo ES (cold boot) com `flycast2026_tier2 = disabled` no
+  `retrorun.cfg` oficial; captura em `/roms2/dcbat/20261007-18xx…19xx_<jogo>/`,
+  puxada pro host em `/mnt/1TB/dcbat_off/`.
+- **A/B tier2 ON × OFF** (ON = bateria de hoje de manhã):
+  - **EGG**: ON 11,0 fps / 89,6 ms **travado** → OFF **45,9 fps / VEL 99,5%**.
+    A trava do EGG era o **tier2**, não o frame-wait.
+  - **Shenmue**: ON **crash** (exit 134, `iNimp`) → OFF 25,1 fps / 83,3%, exit 0.
+  - **SA2**: crash só com ON (A/B anterior) — mesma família.
+  - DOA2: OFF melhor (37 vs 31 fps). Shenmue II: ON melhor (28 vs 21). MvC2: ON
+    um pouco melhor (47 vs 44). Napple: empate.
+  - **TR Chronicles continua preso** (9,0 fps / 147 ms) com OFF → **não é tier2**,
+    é a família 0.3 (frame-wait/CHD).
+- **Decisão: aposentar o tier2** (mantido no código como opt-in, OFF por padrão).
+  Evidência: 3 quebras (EGG/Shenmue/SA2) só com ON; ganho de fps misto e pequeno.
+  Ver `docs/game_status.md` (seções "Tier2 — decisão de aposentar" e "A/B tier2 ON × OFF").
+- **Consolidado dos 7 jogos (tier2 OFF)**: `/mnt/1TB/dcbat_consolidado_off.txt`
+  (51 MB, 170.638 blocos). **Os padrões mais relevantes são os mesmos** do baseline
+  ON: nº1 é o **dispatch indireto** (`d702d0036002402b0009`) nos dois; a **cópia de
+  words** (`247176ff…`, ratio 5,2) aparece em ambos. O tier2 não esconde nem cria
+  padrão — só compila alguns em região.
+- **Robustez (plano 0.1) — tentativa NÃO validada**: `try/catch` de
+  `SH4ThrownException` em `dc_run()` (`core/nullDC.cpp`) e em `rdv_BlockCheckFail`
+  (`core/hw/sh4/dyna/driver.cpp`), + backtrace de `std::terminate` opt-in
+  (`FC_TERMINATE_BT`, `core/libretro/libretro.cpp`). **Nenhum catch pegou** a
+  exceção do SA2; o backtrace é não confiável com `-fomit-frame-pointer` (`-O3`).
+  Fica registrado como diagnóstico, sem valor medido. O fix de verdade é não deixar
+  a região do tier2 executar dados (o tier2 OFF resolve).
+- **`docs/padroes_ineficiencia_analise.md`**: documento de análise de padrões do JIT
+  (memset/tas.b/jump tables/ocbp/epílogos) produzido em outra sessão; incluído no repo
+  a pedido do usuário.
