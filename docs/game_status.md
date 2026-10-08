@@ -828,3 +828,23 @@ a bateria de hoje de manhã (tier2 **ON**). Mesma política (cold boot, `rr_capt
 **Nota de método:** ON e OFF são rodadas de sessões diferentes (não A/B lado a lado no mesmo
 binário), então a diferença de fps pode ter componente de cena; o que é inequívoco são as
 **3 quebras** (EGG/Shenmue/SA2), todas com tier2 ON e nenhuma com OFF.
+
+## Le Mans 24 Hours — cold boot, tier2 OFF + HLE (2026-10-07, noite)
+
+Rodada do usuário no device com o core do HLE (`flycast_hlefix.so`), `r_noload_t2off.cfg`
+(cold boot, `flycast2026_tier2 = disabled`), deixada rodando. **Impressão do usuário:**
+"velocidade perfeita, mas um bug antigo desse game, áudio quebrado, uma única batida em
+loop, mas o jogo 30 fps cravado."
+
+- **HLE dispara e não quebra nada:** 68 instalações (`memset16 r5/r6`, `memset32 r6`,
+  `ocbp r5`), **zero crash**.
+- **Velocidade:** perfeita, 30 fps cravados (o ritmo do console) — igual ao tier2 ON.
+- **Áudio quebrado (bug antigo do jogo):** uma única batida em loop. Já registrado em
+  `tech_debits` 4.81 ("o save antigo tinha som quebrado e bugou") — mas aqui foi **cold
+  boot**, não savestate.
+- **Pista nova (a investigar):** o benchmark JSON do run reporta **`declared_fps = 7.5`**
+  (o core devia reportar o fps natural do jogo, 4.112) e `core_p95 = 150,4 ms` (o teto de
+  frame-wait), com `core_p50 = 7,5 ms` e 408 dupes. Ou seja: emulação rápida, mas a
+  **apresentação/pacing** pode estar sendo calculada em cima de um fps natural errado
+  (7,5 em vez de 30). Métricas de áudio limpas (0 underrun/overrun/drop) — o problema é
+  de **conteúdo** do áudio, não de fila.
