@@ -212,28 +212,6 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       },
       "per-strip (fast, least accurate)",
    },
-   {
-      CORE_OPTION_NAME "_sh4clock",
-      "SH4 CPU under/overclock (Restart)",
-      NULL,
-     "Change the SH4 main CPU clock from the default 200 MHz. Underclocking may help slow platforms. Overclocking may increase the frame rate for some games. Use with caution.",    
-      NULL,
-      NULL,
-      {
-         { "d20", "100mhz" },
-         { "d18", "110mhz" },
-         { "d16", "125mhz" },
-         { "d14", "145mhz" },
-         { "d12", "165mhz" },
-         { "d10", "200mhz" },
-         { "d9",  "220mhz" },
-         { "d8",  "250mhz" },
-         { "d7",  "285mhz" },
-         { "d6",  "333mhz" },
-         { NULL, NULL },
-      },
-      "d12",
-   },
 #if HOST_CPU == CPU_ARM64
    {
       CORE_OPTION_NAME "_tier2",

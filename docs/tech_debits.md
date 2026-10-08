@@ -102,6 +102,9 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   Cacheado em `static`. Nada de `getenv` em caminho quente.
 
 ### JIT / CPU
+- Clock do SH4 fixo em `d10` (nominal), sem core option (2026-10-08): d10 mediu melhor
+  que o d12 antigo (Le Mans 16,1 → 18,8 fps, demais sem perda, 4.39); override por jogo
+  em `lut_games.sh4clock` (4.42). Regra: opção provada boa vira comportamento.
 - O gargalo típico é throughput do SH4 (~9-11 ciclos host/instr, IPC ~0,45; L1I na
   FMV, DRAM no DOA2). Ganho vem de baratear a instrução, não de achar um bug.
 - Travessia JIT→C++ domina o custo de fallbacks (`lds FPSCR` nativo = sem ganho);

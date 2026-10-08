@@ -305,3 +305,9 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   alvo 30 o `retro_run` dorme até o prazo; nos de 60 não segura. Napple 30,2
   fps novos com `loop_declared_fps=false`, KOF Evo de volta a 59,0. Cfg do
   device volta a `false`; core oficial md5 `ea43aa08`.
+- **Opções provadas boas viram comportamento** (levantamento de todas as `FC_*` e
+  core options): quase todas já eram padrão sem variável. Faltava o clock do SH4:
+  core option `sh4clock` removida, clock fixo em `d10` (1,0; override por jogo do
+  `lut_games` continua). KOF Evo idêntico (59,0 novos, VEL 100). Linha
+  `flycast2026_sh4clock` tirada dos cfgs do device; core md5 `7583b53d`.
+  `FC_TEX_GPU_MORTON` (4.103) e `FC_DYN_CACHE` (4.120) seguem opt-in até validar.

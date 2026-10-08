@@ -453,8 +453,6 @@ static void set_variable_visibility(void)
    environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
    option_display.key = CORE_OPTION_NAME "_per_content_vmus";
    environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
-   option_display.key = CORE_OPTION_NAME "_sh4clock";
-   environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
 
    /* only show, if categories not supported */
    option_display.visible = ((settings.System == DC_PLATFORM_DREAMCAST) &&
@@ -652,32 +650,10 @@ static void update_variables(bool first_startup)
       DEBUG_LOG(COMMON, "Got size: %u x %u.\n", screen_width, screen_height);
    }
 
-   var.key = CORE_OPTION_NAME "_sh4clock";
-
-      if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-      {
-
-         if (!strcmp(var.value, "d20"))
-            settings.dreamcast.sh4clock = 2.0;
-         else if (!strcmp(var.value, "d18"))
-            settings.dreamcast.sh4clock = 1.8;
-         else if (!strcmp(var.value, "d16"))
-            settings.dreamcast.sh4clock = 1.6;
-         else if (!strcmp(var.value, "d14"))
-            settings.dreamcast.sh4clock = 1.4;         
-         else if (!strcmp(var.value, "d12"))
-            settings.dreamcast.sh4clock = 1.2;
-         else if (!strcmp(var.value, "d10"))
-            settings.dreamcast.sh4clock = 1.0;
-          else if (!strcmp(var.value, "d9"))
-            settings.dreamcast.sh4clock = 0.9;
-          else if (!strcmp(var.value, "d8"))
-            settings.dreamcast.sh4clock = 0.8;
-          else if (!strcmp(var.value, "d7"))
-            settings.dreamcast.sh4clock = 0.7;
-          else if (!strcmp(var.value, "d6"))
-            settings.dreamcast.sh4clock = 0.6;
-      }
+   // Clock do SH4 nominal (200 MHz, multiplicador 1,0), sem opcao: d10 mediu
+   // melhor que o antigo padrao d12 (Le Mans 16,1 -> 18,8 fps, sem perda nos
+   // demais -- 4.39/4.42). O override por jogo (lut_games.sh4clock) continua.
+   settings.dreamcast.sh4clock = 1.0f;
 
 #if HOST_CPU == CPU_ARM64
    var.key = CORE_OPTION_NAME "_tier2";
