@@ -922,6 +922,71 @@ out:
 #undef ENTER
 }
 
+
+// ---------------------------------------------------------------------------
+// memset16/32: Padrões dinâmicos (1, 2, 5) identificados pelo perfil do JIT
+u64 memset_run(s32 c, u32 entry)
+{
+	u32 val = r[7];
+	u32 dest = r[4];
+	u32 cnt_reg = (entry == 1) ? 5 : 6;
+	u32 cnt = r[cnt_reg];
+	u32 step = (entry == 2) ? 4 : 2;
+	bool is32 = (entry == 2);
+	
+	if (cnt > 0)
+	{
+		if (is_ram(dest))
+		{
+			u8* ptr = &mem_b.data[dest & RAM_MASK];
+			if (is32) {
+				u32 v = val;
+				for (u32 i = 0; i < cnt; i++) {
+					memcpy(ptr + i*4, &v, 4);
+				}
+			} else {
+				u16 v = val & 0xFFFF;
+				for (u32 i = 0; i < cnt; i++) {
+					memcpy(ptr + i*2, &v, 2);
+				}
+			}
+		}
+		else
+		{
+			// Fallback lento seguro
+			if (is32) {
+				for (u32 i = 0; i < cnt; i++) WriteMem32(dest + i*4, val);
+			} else {
+				for (u32 i = 0; i < cnt; i++) WriteMem16(dest + i*2, val);
+			}
+		}
+	}
+	
+	// Atualiza registradores para refletir o fim do loop
+	r[4] = dest + cnt * step;
+	r[cnt_reg] = 0;
+	sr.T = 1; // tst 0,0 seta T=1 (o que causa a saida do bf)
+	
+	// Desconta os ciclos (o laco SH4 gastaria 5 ciclos por iteracao)
+	c -= cnt * 5;
+	
+	if (__builtin_expect(c < 0, 0))
+	{
+		c += sh4_sched_timeslice;
+		if (UpdateSystem() != 0) {
+			next_pc = rdv_DoInterrupts_pc(t2_last_pc + 10);
+			return (1ull << 32) | (u32)c;
+		}
+		if (!Sh4cntx.CpuRunning) {
+			next_pc = t2_last_pc + 10;
+			return (1ull << 32) | (u32)c;
+		}
+	}
+	
+	next_pc = t2_last_pc + 10;
+	return (1ull << 32) | (u32)c;
+}
+
 } // namespace
 
 // Chamado pelo JIT na compilacao do bloco: esta funcao e conhecida aqui?
@@ -930,6 +995,25 @@ bool hle_fn_lookup(u32 vaddr, u32 *id)
 	if (!hleEnabled())
 		return false;
 	// id = (funcao << 8) | entrada
+
+	// Checa padrões dinâmicos (independente de vaddr)
+	const u16 memset16_r6_ops[] = { 0x2471, 0x76FF, 0x7402, 0x2668, 0x8BFA };
+	const u16 memset16_r5_ops[] = { 0x2471, 0x75FF, 0x7402, 0x2558, 0x8BFA };
+	const u16 memset32_r6_ops[] = { 0x2472, 0x76FF, 0x7404, 0x2668, 0x8BFA };
+	
+	const u8 *mem = GetMemPtr(vaddr, 10);
+	if (mem != nullptr) {
+		if (memcmp(mem, memset16_r6_ops, 10) == 0) {
+			*id = 0x200; return true;
+		}
+		if (memcmp(mem, memset16_r5_ops, 10) == 0) {
+			*id = 0x201; return true;
+		}
+		if (memcmp(mem, memset32_r6_ops, 10) == 0) {
+			*id = 0x202; return true;
+		}
+	}
+
 	struct Entry { u32 vaddr, id; const Span *sig; size_t n; const char *name; };
 	static const Entry entries[] = {
 		{ 0x8C14DDC0, 0x000, lightxf_sig, sizeof(lightxf_sig) / sizeof(lightxf_sig[0]), "lightxf (8C14DDC0)" },
@@ -961,6 +1045,7 @@ extern "C" u64 hle_fn_run(s32 cycles, u32 id)
 	{
 	case 0: return lightxf_run(cycles, id & 0xFF);
 	case 1: return stripemit_run(cycles, id & 0xFF);
+	case 2: return memset_run(cycles, id & 0xFF);
 	default: return 0;
 	}
 }
