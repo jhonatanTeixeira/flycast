@@ -25,6 +25,7 @@ sh4dec(i0011_nnnn_mmmm_1000);
 sh4dec(i0011_nnnn_mmmm_1100);
 sh4dec(i0111_nnnn_iiii_iiii);
 sh4dec(i0000_0000_0000_1001);
+sh4dec(i0100_nnnn_0001_1011);
 sh4dec(i0100_nnnn_0110_1010); // lds <REG_N>,FPSCR -- native mov + forced block end, see docs/fpscr_native_translation_plan.md
 sh4dec(i0100_nnnn_0110_0110); // lds.l @<REG_N>+,FPSCR -- idem
 sh4dec(i1111_0011_1111_1101);

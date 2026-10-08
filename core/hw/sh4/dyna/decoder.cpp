@@ -666,6 +666,27 @@ static void dec_write_fpscr()
 	Emit(shop_sync_fpscr, shil_param(), mk_imm(expected_pr_sz), mk_imm(state.cpu.rpc + 2));
 }
 
+//tas.b @<REG_N>
+sh4dec(i0100_nnnn_0001_1011)
+{
+	u32 n = GetN(op);
+	Sh4RegType rn = (Sh4RegType)(reg_r0 + n);
+
+	state.info.has_readm = true;
+	state.info.has_writem = true;
+
+	// Read byte from memory into reg_temp
+	Emit(shop_readm, mk_reg(reg_temp), mk_reg(rn), shil_param(), 1);
+
+	// seteq (T = (temp == 0))
+	Emit(shop_seteq, mk_reg(reg_sr_T), mk_reg(reg_temp), mk_imm(0));
+
+	// temp |= 0x80
+	Emit(shop_or, mk_reg(reg_temp), mk_reg(reg_temp), mk_imm(0x80));
+
+	// Write byte back
+	Emit(shop_writem, shil_param(), mk_reg(rn), mk_reg(reg_temp), 1);
+}
 //lds <REG_N>,FPSCR
 sh4dec(i0100_nnnn_0110_1010)
 {

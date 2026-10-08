@@ -307,7 +307,7 @@ sh4_opcodelistentry opcodes[]=
 	{0                          ,i0100_nnnn_0010_1001   ,Mask_n         ,0x4029 ,Normal         ,"shlr16 <REG_N>"                       ,1,1,EX,fix_none    ,dec_shft(-16,false)},  //shlr16 <REG_N>
 	{dec_i0100_nnnn_0010_1011   ,i0100_nnnn_0010_1011   ,Mask_n         ,0x402B ,Branch_dir_d   ,"jmp @<REG_N>"                         ,2,3,CO,fix_none},  //jmp @<REG_N>
 	{dec_i0100_nnnn_0000_1011   ,i0100_nnnn_0000_1011   ,Mask_n         ,0x400B ,Branch_dir_d   ,"jsr @<REG_N>"                         ,2,3,CO,fix_none},  //jsr @<REG_N>
-	{0                          ,i0100_nnnn_0001_1011   ,Mask_n         ,0x401B ,Normal         ,"tas.b @<REG_N>"                       ,5,5,CO,fix_none},  //tas.b @<REG_N>
+	{dec_i0100_nnnn_0001_1011   ,i0100_nnnn_0001_1011   ,Mask_n         ,0x401B ,Normal         ,"tas.b @<REG_N>"                       ,5,5,CO,fix_none},  //tas.b @<REG_N>
 	{0                          ,i0100_nnnn_mmmm_1100   ,Mask_n_m       ,0x400C ,Normal         ,"shad <REG_M>,<REG_N>"                 ,1,1,EX,fix_none    ,dec_Bin_rNrM(shop_shad)},  //shad <REG_M>,<REG_N>
 	{0                          ,i0100_nnnn_mmmm_1101   ,Mask_n_m       ,0x400D ,Normal         ,"shld <REG_M>,<REG_N>"                 ,1,1,EX,fix_none    ,dec_Bin_rNrM(shop_shld)},  //shld <REG_M>,<REG_N>
 	{0                          ,i0100_nnnn_mmmm_1111   ,Mask_n_m       ,0x400F ,Normal         ,"mac.w @<REG_M>+,@<REG_N>+"            ,2,3,CO,fix_none},  //mac.w @<REG_M>+,@<REG_N>+
