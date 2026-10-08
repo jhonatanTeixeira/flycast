@@ -21,8 +21,8 @@ Antes de começar, leia `rodar-games` (como rodar jogos, backups e logs no devic
    o JSON já é gravado aos 40s).
 3. Quando fechar, **espere o usuário dizer a impressão dele** (fps sentido, suavidade,
    hicups, glitch, se travou). Não avance sem isso.
-4. Leia o JSON e calcule os números. **Grave no `docs/game_status.md`** os números
-   **e** a observação do usuário (ver formato abaixo).
+4. Leia o JSON e calcule os números. **Atualize a linha do jogo no `docs/game_status.md`**
+   (inline, números + observação do usuário; ver formato abaixo).
 5. Vá para o próximo jogo.
 
 **Regra de parada:** se o usuário disser que um jogo **crashou** (ou travou/congelou de
@@ -84,16 +84,12 @@ isso (ex.: "não bootou", "sem JSON") junto com a observação.
 
 ## Formato do registro em `docs/game_status.md`
 
-Acrescente/atualize uma seção por bateria, com data, core e política (cold boot, bench
-N s). Tabela com **números + observação do usuário** na última coluna:
-
-```
-| jogo | sistema | VEL% | fps | core avg | p50 | p95 | p99 | und | obs (usuário) |
-```
-
-A observação é a parte que o benchmark não captura — escreva o que o usuário relatou
-(suavidade, hicups, glitch, freeze, "não boota", crash). Ver os exemplos anteriores em
-`docs/game_status.md`.
+**Atualize a linha do jogo inline** na tabela da plataforma (Naomi / Atomiswave /
+Dreamcast) — **não crie seção nova por bateria nem por data.** A tabela é a fonte da
+verdade do último teste: substitua `Teste` (data), `VEL%`, `fps` e `Estado` com o que
+o usuário relatou (suavidade, hicups, glitch, freeze, "não boota", crash) + a
+condição (cold/savestate, tier2 on/off). Os números detalhados (core avg/p50/p95/p99,
+underruns) ficam no JSON em `/roms2/dcbat/` ou no `docs/history.md`, não na tabela.
 
 ## Ao terminar a bateria
 
