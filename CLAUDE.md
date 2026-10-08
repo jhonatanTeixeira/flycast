@@ -32,9 +32,10 @@ dois é uma ferramenta de investigação legítima.
 1. **`docs/profiling_plan.md`** — auditoria estática completa do código apontando
    onde e por que instrumentar (arquivo:linha, motivo, como medir), ranqueada por
    impacto.
-2. **`docs/tech_debits.md`** — tabela de status de cada achado do plano de
-   profiling (`não investigado` / `instrumentado` / `confirmado` / `descartado` /
-   `corrigido`). Atualizar sempre que um achado for investigado.
+2. **`docs/tech_debits.md`** — só os débitos **abertos** + lições aprendidas dos
+   resolvidos (compactado em 2026-10-08; a tabela completa com todos os números está
+   em `docs/arquivo/`). Itens novos seguem a numeração (próximo: 5.8 / 4.119);
+   ao resolver, remover a linha e, se couber, acrescentar um bullet de lição.
 3. **`docs/current_plan.md`** — o que está sendo trabalhado agora, com status
    (`pendente` / `in progress` / `done` / `bloqueado`).
 4. **`docs/history.md`** — log cronológico com timestamp de tudo que foi feito.
