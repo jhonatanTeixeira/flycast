@@ -40,11 +40,13 @@ dois é uma ferramenta de investigação legítima.
    (`pendente` / `in progress` / `done` / `bloqueado`).
 4. **`docs/history.md`** — log cronológico com timestamp de tudo que foi feito.
    Adicionar uma entrada por sessão/marco relevante.
-5. **`docs/game_status.md`** — estado por jogo do ponto de vista de quem JOGA
-   (fps sentido, cauda longa, hicups, glitches), avaliado pelo usuário no
-   device. É o contraponto ao benchmark: já apareceu jogo com distribuição de
-   CPU plana no benchmark e hicup claro jogando (MBAA). Atualizar quando o
-   usuário reavaliar.
+5. **`docs/game_status.md`** — **tabela por plataforma (Naomi / Atomiswave /
+   Dreamcast) com o ÚLTIMO status de cada jogo; é a fonte da verdade do último
+   teste.** Atualizar a linha do jogo **inline** a cada melhoria/piora reportada
+   (pelo usuário jogando ou por medição) — **não** criar seções novas com data.
+   Não refazer A/B de rotina para jogos já registrados; medir de novo só se o
+   código mudou, o usuário reportou algo diferente ou a linha diz "não testado".
+   O texto antigo (baterias, imagens) está em `docs/arquivo/`.
 
 ## Ciclo de otimização atual: dump do JIT → função nativa por assinatura
 
