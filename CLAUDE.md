@@ -29,24 +29,24 @@ dois é uma ferramenta de investigação legítima.
 
 ## Documentação do projeto (leia nesta ordem)
 
-1. **`docs/profiling_plan.md`** — auditoria estática completa do código apontando
-   onde e por que instrumentar (arquivo:linha, motivo, como medir), ranqueada por
-   impacto.
+1. **`docs/current_plan.md`** — o que está em andamento/na fila (P0 crashes, P1
+   experiência, P2 otimização), compactado; concluído vai para `history.md`.
 2. **`docs/tech_debits.md`** — só os débitos **abertos** + lições aprendidas dos
    resolvidos (compactado em 2026-10-08; a tabela completa com todos os números está
    em `docs/arquivo/`). Itens novos seguem a numeração (próximo: 5.8 / 4.119);
    ao resolver, remover a linha e, se couber, acrescentar um bullet de lição.
-3. **`docs/current_plan.md`** — o que está sendo trabalhado agora, com status
-   (`pendente` / `in progress` / `done` / `bloqueado`).
-4. **`docs/history.md`** — log cronológico com timestamp de tudo que foi feito.
+3. **`docs/history.md`** — log cronológico com timestamp de tudo que foi feito.
    Adicionar uma entrada por sessão/marco relevante.
-5. **`docs/game_status.md`** — **tabela por plataforma (Naomi / Atomiswave /
+4. **`docs/game_status.md`** — **tabela por plataforma (Naomi / Atomiswave /
    Dreamcast) com o ÚLTIMO status de cada jogo; é a fonte da verdade do último
    teste.** Atualizar a linha do jogo **inline** a cada melhoria/piora reportada
    (pelo usuário jogando ou por medição) — **não** criar seções novas com data.
    Não refazer A/B de rotina para jogos já registrados; medir de novo só se o
    código mudou, o usuário reportou algo diferente ou a linha diz "não testado".
    O texto antigo (baterias, imagens) está em `docs/arquivo/`.
+5. **`docs/arquivo/README.md`** — índice do que foi compactado/arquivado e dos
+   planos obsoletos (profiling_plan, tier2_*, fpscr_*, etc.). Não ler por rotina;
+   planos já executados/refutados vão para lá em vez de ficarem em `docs/`.
 
 ## Ciclo de otimização atual: dump do JIT → função nativa por assinatura
 
