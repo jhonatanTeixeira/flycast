@@ -297,3 +297,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   `perfmax`, core oficial; `/roms2/dcbat/ab_ldf_*`): CvS2 new_fps 58,4 → 55,6 (o
   core declara 55 e o pacing trava nisso), KOF Evo 59,3 → 57,0, Shenmue II empate
   (VEL 73,5 × 73,0). Não liga global; o ganho do Napple não generaliza (4.112).
+- **Fps declarado só 30/60 + `loop_declared_fps=true` no device** (4.112): o core
+  declara o refresh ou metade, com histerese; CvS2 e KOF Evo agora declaram 60
+  (CvS2 55,6 → 57,4 fps novos com `true`), Shenmue II e Napple 30. Core oficial
+  trocado (md5 `39bb9db6`), backups `*-20261008` em `/roms2/backups/`.

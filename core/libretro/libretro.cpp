@@ -1784,33 +1784,39 @@ void retro_run (void)
                const u64 df = framesNow - winFrames;
                const u32 dv = vblkNow - winVblk;
                // Periodo natural: vblanks EMULADOS por frame nesta janela de 1s.
+               // So existem dois alvos: o refresh (60) e metade dele (30). Um
+               // valor intermediario (ex.: 55 no CvS2, quando o jogo perde
+               // vblanks em tempo emulado) fazia o retrorun, com
+               // loop_declared_fps=true, travar o jogo abaixo de 60 (4.112).
+               // Histerese: 60 -> 30 so com >= 1,6 vblanks/frame; 30 -> 60 so
+               // com <= 1,3; e o novo alvo precisa se repetir na janela seguinte
+               // -- cada report faz o retrorun reaplicar a geometria e dar flush
+               // no audio, entao nao pode haver churn.
                if (df >= 5 && dv >= df)
                {
-                  double targetFps = (double)g_declaredFps * (double)df / (double)dv;
-                  // Arredonda para 0,5 e so reporta quando o valor se repete na
-                  // janela seguinte -- cada report faz o retrorun reaplicar a
-                  // geometria e dar flush no audio, entao nao pode haver churn.
-                  double rounded = floor(targetFps * 2.0 + 0.5) / 2.0;
-                  if (rounded < 1.0)
-                     rounded = 1.0;
-                  if (rounded > (double)g_declaredFps)
-                     rounded = (double)g_declaredFps;
-                  if (rounded == winPending &&
-                      (g_reportedTargetFps == 0.0 ||
-                       fabs(rounded - g_reportedTargetFps) >= 1.0))
+                  const double full = fabs(g_declaredFps - 60.0f) < 1.0f ? 60.0 : (double)g_declaredFps;
+                  const double half = full / 2.0;
+                  const double vpf = (double)dv / (double)df;
+                  const double current = g_reportedTargetFps == 0.0 ? full : g_reportedTargetFps;
+                  double target = current;
+                  if (current == full && vpf >= 1.6)
+                     target = half;
+                  else if (current != full && vpf <= 1.3)
+                     target = full;
+                  if (target != current && target == winPending)
                   {
                      struct retro_system_av_info info = g_lastAvInfo;
-                     info.timing.fps = rounded;
+                     info.timing.fps = target;
                      info.timing.sample_rate = 44100.0;
                      if (environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &info))
                      {
-                        g_reportedTargetFps = rounded;
+                        g_reportedTargetFps = target;
                         NOTICE_LOG(RENDERER, "Game target fps reported: %.3f (display %.2f, %.4f vblanks/frame over %llu frames)",
-                                   rounded, (double)g_declaredFps,
-                                   (double)dv / (double)df, (unsigned long long)df);
+                                   target, (double)g_declaredFps,
+                                   vpf, (unsigned long long)df);
                      }
                   }
-                  winPending = rounded;
+                  winPending = target;
                }
             }
             winFrames = framesNow;
@@ -2969,6 +2975,8 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
 
    info->timing.sample_rate = 44100.0;
    g_declaredFps = (float)info->timing.fps;
+   // O frontend volta a ter o refresh como alvo; o report recomeca dele.
+   g_reportedTargetFps = 0.0;
    // Guarda a ultima geometria/timing para o report de fps em runtime.
    g_lastAvInfo = *info;
    g_lastAvInfoValid = true;
