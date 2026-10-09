@@ -1748,37 +1748,36 @@ void retro_run (void)
          // (RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO) -- o mesmo que o retrorun ja
          // consome; nao muda o calculo dele nem a emulacao.
          {
-            extern u64 rend_new_frame_count();
-            extern u32 spg_vblank_count();
+            extern void rend_game_frame_counts(u32 *frames, u32 *oneVblank);
             static bool winValid = false;
-            static u64 winFrames = 0;
-            static u32 winVblk = 0;
+            static u32 winFrames = 0;
+            static u32 winOne = 0;
             static double winPending = -1.0;
-            const u64 framesNow = rend_new_frame_count();
-            const u32 vblkNow = spg_vblank_count();
+            u32 framesNow, oneNow;
+            rend_game_frame_counts(&framesNow, &oneNow);
             if (winValid && g_lastAvInfoValid && g_declaredFps > 1.0f)
             {
-               const u64 df = framesNow - winFrames;
-               const u32 dv = vblkNow - winVblk;
-               // Periodo natural: vblanks EMULADOS por frame nesta janela de 1s.
-               // So existem dois alvos: o refresh (60) e metade dele (30). Um
-               // valor intermediario (ex.: 55 no CvS2, quando o jogo perde
-               // vblanks em tempo emulado) fazia o retrorun, com
-               // loop_declared_fps=true, travar o jogo abaixo de 60 (4.112).
-               // Histerese: 60 -> 30 so com >= 1,6 vblanks/frame; 30 -> 60 so
-               // com <= 1,3; e o novo alvo precisa se repetir na janela seguinte
-               // -- cada report faz o retrorun reaplicar a geometria e dar flush
-               // no audio, entao nao pode haver churn.
-               if (df >= 5 && dv >= df)
+               const u32 df = framesNow - winFrames;
+               const u32 d1 = oneNow - winOne;
+               // So existem dois alvos: o refresh (60) e metade dele (30). O que
+               // separa um jogo de 30 de um de 60 lento NAO e a media de vblanks
+               // por frame (o DOA2 a ~40 fps emulados da ~1,5 e era declarado
+               // 30, travando em 28 fps): e a fracao de frames que o jogo
+               // produziu em exatamente 1 vblank emulado. Jogo de 30 quase nunca
+               // tem; jogo de 60, mesmo lento, tem muitos. 60 -> 30 com < 5%;
+               // 30 -> 60 com > 25%; o novo alvo precisa se repetir na janela
+               // seguinte -- cada report faz o retrorun reaplicar a geometria e
+               // dar flush no audio, entao nao pode haver churn.
+               if (df >= 5)
                {
                   const double full = fabs(g_declaredFps - 60.0f) < 1.0f ? 60.0 : (double)g_declaredFps;
                   const double half = full / 2.0;
-                  const double vpf = (double)dv / (double)df;
+                  const double oneFrac = (double)d1 / (double)df;
                   const double current = g_reportedTargetFps == 0.0 ? full : g_reportedTargetFps;
                   double target = current;
-                  if (current == full && vpf >= 1.6)
+                  if (current == full && oneFrac < 0.05)
                      target = half;
-                  else if (current != full && vpf <= 1.3)
+                  else if (current != full && oneFrac > 0.25)
                      target = full;
                   if (target != current && target == winPending)
                   {
@@ -1788,16 +1787,15 @@ void retro_run (void)
                      if (environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &info))
                      {
                         g_reportedTargetFps = target;
-                        NOTICE_LOG(RENDERER, "Game target fps reported: %.3f (display %.2f, %.4f vblanks/frame over %llu frames)",
-                                   target, (double)g_declaredFps,
-                                   vpf, (unsigned long long)df);
+                        NOTICE_LOG(RENDERER, "Game target fps reported: %.3f (display %.2f, %.1f%% of %u game frames in 1 vblank)",
+                                   target, (double)g_declaredFps, oneFrac * 100.0, df);
                      }
                   }
                   winPending = target;
                }
             }
             winFrames = framesNow;
-            winVblk = vblkNow;
+            winOne = oneNow;
             winValid = true;
          }
       }

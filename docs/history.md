@@ -311,3 +311,8 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   `lut_games` continua). KOF Evo idêntico (59,0 novos, VEL 100). Linha
   `flycast2026_sh4clock` tirada dos cfgs do device; core md5 `7583b53d`.
   `FC_TEX_GPU_MORTON` (4.103) e `FC_DYN_CACHE` (4.120) seguem opt-in até validar.
+- **Link direto do despacho dinâmico (4.120)** reimplementado sobre o link dos
+  blocos estáticos (o `FC_DYN_CACHE` antigo não fazia branch direto) e padrão.
+  Corrigido bug de religar bloco morto após limpeza do cache (corrompia código).
+  Bit-exato; DOA2 +4% fps novos, Shenmue II +0,8 VEL. Classificador 30/60 trocado
+  para fração de frames de 1 vblank (o DOA2 era declarado 30). Core md5 `0295f22b`.

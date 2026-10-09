@@ -36,11 +36,10 @@
 | # | Item | Status |
 |---|------|--------|
 | 4.119 | HLE `memset`/`ocbp` (5.4) **não validado**: sem `FC_STATE_HASH`; tempo não é bit-exato por construção (laço inteiro com um só `UpdateSystem` → interrupções atrasadas; o HLE do DOA2 faz ENTER por bloco); o "Le Mans `core_p95` 95→58 ms" veio de cold boot (cenas diferentes) e a rodada seguinte com o mesmo HLE deu p95 150 ms + `declared_fps` 7,5 + áudio em loop, sem separar do HLE. Teto do ganho: memset 2-6%, ocbp ≤1% da emu | validar |
-| 4.120 | Inline cache (`FC_DYN_CACHE`, 5.7): frames +11% mas **VEL 88,8 → 82,1%** — é o padrão "mais fps, jogo mais lento". VEL foi descartada sem prova; conferir `new_fps`/dupes (`FC_SYNC_STATS`) + VEL antes de promover | validar |
 | 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |
-| 4.112 | Fps do jogo: o core declara só o refresh (60) ou metade (30), histerese 1,6/1,3 vblanks/frame em 2 janelas de 1 s. O **ritmo é do core**, sem opção: com alvo 30 o `retro_run` dorme até o prazo de 1/30 s (fim do `retro_run`; fora em fast-forward; `FC_CORE_PACING=0` só para A/B); com alvo 60 não segura (o vsync já dá o ritmo; o pacing do frontend nos de 60 custou fps: KOF Evo 59,3 → 57,8, CvS2 com o report antigo travava em 55). `retrorun_loop_declared_fps=false` no device. Medido (cfg `false`, savestate, 20 s): Napple 30 / VEL 100,1 / 30,2 novos / 0 dupes / overruns 490 → 119; KOF Evo 60 / 100 / 59,0; Shenmue II 30 / 72,6 (empate). **Atenção na medição:** em jogo de 30, o `core_*`/`active_frame_*` do benchmark passa a incluir o sono do ritmo (~33 ms); o custo de trabalho fica no `FC_SYNC_STATS`. Core md5 `ea43aa08` | done (validar jogando) |
+| 4.112 | Fps do jogo: o core declara só o refresh (60) ou metade (30). Critério: fração dos frames que o jogo produz (thread de emulação, sem RTT) em exatamente 1 vblank emulado — 60→30 com <5%, 30→60 com >25%, confirmado em 2 janelas de 1 s. A média de vblanks/frame (1ª versão, limiar 1,6) declarava o DOA2 (~40 fps emulados) como 30 e o travava em 28 fps. O **ritmo é do core**, sem opção: com alvo 30 o `retro_run` dorme até o prazo de 1/30 s (fim do `retro_run`; fora em fast-forward; `FC_CORE_PACING=0` só para A/B); com alvo 60 não segura (o vsync já dá o ritmo; o pacing do frontend nos de 60 custou fps: KOF Evo 59,3 → 57,8, CvS2 com o report antigo travava em 55). `retrorun_loop_declared_fps=false` no device. Medido (cfg `false`, savestate, 20 s): Napple 30 / VEL 100,1 / 30,2 novos / 0 dupes / overruns 490 → 119; KOF Evo 60 / 100 / 59,0; Shenmue II 30 / 72,6 (empate). **Atenção na medição:** em jogo de 30, o `core_*`/`active_frame_*` do benchmark passa a incluir o sono do ritmo (~33 ms); o custo de trabalho fica no `FC_SYNC_STATS`. Core md5 `ea43aa08` | done (validar jogando) |
 | 4.97 | Napple: giro do laço do frontend com dupes abaixo de 95% (mailbox); VEL real só pelo áudio | parcial (4.110 mitigou) |
 | 4.98 | `FC_JIT_DUMP` completo derruba o Napple (74,8 → 23,8%); usar o `_LITE` | aceito |
 | 4.9 | Regalloc FPU S16-S31 custa ~3% de core em 2D curto (push/pop caller-saved) | aceito |
@@ -102,6 +101,20 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   Cacheado em `static`. Nada de `getenv` em caminho quente.
 
 ### JIT / CPU
+- **Link direto do despacho dinâmico (4.120, ex-5.7 `FC_DYN_CACHE`), padrão desde
+  2026-10-08.** A 1ª versão não fazia o que prometia: o acerto terminava no mesmo
+  `Br x15` indireto, com 5 loads em vez de 1, e a falha (~40%) somava 3 stores — o
+  VEL 88,8→82,1% era real. Reimplementado com o mecanismo de link dos blocos
+  estáticos: fim `BET_Dynamic*` em 3 estados de mesmo tamanho (A: stub de link;
+  B: `cmp pc,#ligado` + `b` direto; C: lookup na `fpcb` após o 1º alvo diferente),
+  invalidação por `pre_refs`/`Relink`. **Bug achado no caminho (pré-existente,
+  também nos estáticos):** `rdv_LinkBlock` compila o alvo, a compilação pode limpar
+  o cache de código, e o bloco de origem morto era religado no endereço já
+  reaproveitado → corrompia o 1º bloco novo (DOA2 travava na BIOS). Agora revalida
+  o dono do código após compilar e o descarte faz `RemRef` nos alvos. Bit-exato
+  (DOA2 967 + Shenmue II 582 frames, hash completo); DOA2 35,6→37,2 fps novos (VEL
+  88,4/88,1), Shenmue II VEL 72,8→73,6; boot ok em MvC2, Shenmue, Sonic Shuffle,
+  RE CV, TR Chronicles, cvs2 (Naomi), kofxi (AW). `FC_NO_DYN_LINK=1` desliga (A/B).
 - Clock do SH4 fixo em `d10` (nominal), sem core option (2026-10-08): d10 mediu melhor
   que o d12 antigo (Le Mans 16,1 → 18,8 fps, demais sem perda, 4.39); override por jogo
   em `lut_games.sh4clock` (4.42). Regra: opção provada boa vira comportamento.

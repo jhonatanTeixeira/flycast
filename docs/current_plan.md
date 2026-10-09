@@ -11,8 +11,8 @@
 - Core oficial `flycast2026` com funções nativas por assinatura (`hle_fn.cpp`),
   espera do frame com prazo = 2× intervalo medido (4.110), core reporta fps natural
   (4.112), `div32` nativo. **Tier2 aposentado** (opt-in, OFF no `retrorun.cfg`).
-- Opt-in ainda não promovidos: `FC_DYN_CACHE` (5.7, frames +11% mas VEL caiu — 4.120),
-  `FC_TEX_GPU_MORTON` (4.103). HLE `memset`/`ocbp` (5.4) ligado mas não validado (4.119).
+- Link direto do despacho dinâmico é padrão (4.120, `FC_NO_DYN_LINK=1` só para A/B).
+  Opt-in ainda não promovido: `FC_TEX_GPU_MORTON` (4.103). HLE `memset`/`ocbp` (5.4) ligado mas não validado (4.119).
 - **Prioridade = tempo amostrado** (bloco × amostras do `perf`), nunca proporção
   estática; `padroes_ineficiencia.txt` aposentado como fonte de prioridade.
 - Método vigente no DC: **dump leve do JIT → análise estática → nativo por
@@ -43,8 +43,7 @@
 ## P2 — otimização (ciclo `jit-nativo`)
 
 - **Validar antes de manter/promover:** HLE `memset`/`ocbp` com `FC_STATE_HASH` +
-  rever o `UpdateSystem` único por laço (4.119); `FC_DYN_CACHE` com `new_fps`/dupes
-  + VEL na mesma cena (4.120).
+  rever o `UpdateSystem` único por laço (4.119).
 
 - **Alvos nativos (por tempo amostrado):** blocos com FPU são a maior categoria nos
   jogos <100% (Shenmue II 28%, Shenmue 24%, DOA2 43% da emu) → laços de vértices do
@@ -52,8 +51,9 @@
   emu, rendeu ~1% por guardar/recarregar estado a cada fronteira — 5.6); AICA/ARM7
   no Shenmue II (>8%, 4.122); IDCT da Sofdec (`docs/fmv_plan.md`). `tas.b`, `ocbp`,
   `div1` e jmp `@rn` pesam ≤3% cada — não são alvo.
-- **Despacho:** stubs/despachante 2-9% e blocos com `rts`/`jsr` 10-25% da emu;
-  `FC_DYN_CACHE` é a direção certa, mas só promover após 4.120.
+- **Despacho:** stubs/despachante 2-9% e blocos com `rts`/`jsr` 10-25% da emu; o link
+  direto (4.120) só pega saltos monomórficos — `rts` polimórfico segue no lookup
+  (próximo passo possível: pilha de retorno para `rts`).
 - **MvC2 (VEL 99,5%):** emulação não é o limite; glitches/dupes são apresentação e
   render (thread principal ~42% de um core, quase tudo no driver Mali) — não o JIT.
 - **Render (Mali):** ~640 draws × ~34 µs; só atlas/menos draws ajuda (4.37). Pool de

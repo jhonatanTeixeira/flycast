@@ -448,14 +448,15 @@ extern "C" void ngen_FailedToFindBlock_nommu();
 extern void vmem_platform_flush_cache(void *icache_start, void *icache_end, void *dcache_start, void *dcache_end);
 static void generate_mainloop();
 
-// FC_DYN_CACHE: inline cache do despacho dinamico (opt-in; desligado por
-// padrao). Mede se trocar o Br indireto do hash lookup por um branch direto
-// previsivel compensa as instrucoes extras do teste do cache.
-static bool DynCacheEnabled()
+// Ligacao direta do despacho dinamico (inline cache, 5.7/4.120): o fim de um
+// bloco BET_Dynamic* que sempre vai para o mesmo alvo vira cmp + branch
+// direto, pelo mesmo mecanismo de link dos blocos estaticos (rdv_LinkBlock /
+// pre_refs / Relink). Comportamento padrao; FC_NO_DYN_LINK=1 desliga (A/B).
+bool DynLinkEnabled()
 {
 	static int e = -1;
 	if (e < 0)
-		e = getenv("FC_DYN_CACHE") != nullptr ? 1 : 0;
+		e = getenv("FC_NO_DYN_LINK") != nullptr ? 0 : 1;
 	return e != 0;
 }
 
@@ -2200,42 +2201,46 @@ public:
 				GenCallRuntime(jit_dump_dyn);
 			}
 			Str(w29, sh4_context_mem_operand(&next_pc));
-			if (!mmu_enabled() && DynCacheEnabled())
+			if (!mmu_enabled() && DynLinkEnabled())
 			{
-				// Inline cache (opt-in FC_DYN_CACHE): se o alvo e o mesmo do
-				// ultimo despacho deste bloco (e nenhum bloco foi descartado
-				// desde entao), salta direto no codigo cacheado -- branch
-				// direto (previsivel) em vez do Br indireto do hash lookup.
-				extern u32 g_dynCacheGen;
-				// Offsets derivados de offsetof (o layout do struct pode mudar).
-				const int kGenOff = 0;
-				const int kPcOff = (int)(offsetof(RuntimeBlockInfo, dyn_cache_pc) - offsetof(RuntimeBlockInfo, dyn_cache_gen));
-				const int kCodeOff = (int)(offsetof(RuntimeBlockInfo, dyn_cache_code) - offsetof(RuntimeBlockInfo, dyn_cache_gen));
-				Label dc_miss;
-				Ldr(x9, (uintptr_t)&block->dyn_cache_gen);
-				Ldr(x10, (uintptr_t)&g_dynCacheGen);
-				Ldr(w11, MemOperand(x9, kGenOff));
-				Ldr(w12, MemOperand(x10));
-				Cmp(w11, w12);
-				B(ne, &dc_miss);
-				Ldr(w11, MemOperand(x9, kPcOff));
-				Cmp(w29, w11);
-				B(ne, &dc_miss);
-				Ldr(x15, MemOperand(x9, kCodeOff));
-				Br(x15);
-				Bind(&dc_miss);
-				Sub(x2, x28, offsetof(Sh4RCB, cntx));
+				// Tres estados, todos com o mesmo tamanho (o Relink reescreve no
+				// lugar e o host_code_size encolhe para o ultimo tamanho emitido):
+				//  A) nunca ligado: chama o stub de link -> rdv_LinkBlock liga ao
+				//     alvo atual e reescreve este trecho para B;
+				//  B) ligado: pc == alvo ligado -> branch direto no bloco alvo;
+				//     senao chama o stub, que desliga de vez (relink_data=1) -> C;
+				//  C) alvo variavel: hash lookup na fpcb, como antes.
+				// O descarte do alvo volta este bloco para A (Discard/pre_refs).
+				const ptrdiff_t dynStart = GetBuffer()->GetCursorOffset();
+				if (block->pBranchBlock != nullptr)
+				{
+					Label miss;
+					Mov(w9, block->dyn_link_pc);
+					Cmp(w29, w9);
+					B(ne, &miss);
+					GenBranch(block->pBranchBlock->code);
+					Bind(&miss);
+					GenCallRuntime(ngen_LinkBlock_Generic_stub);
+				}
+				else if (block->relink_data == 0)
+				{
+					GenCallRuntime(ngen_LinkBlock_Generic_stub);
+				}
+				else
+				{
+					Sub(x2, x28, offsetof(Sh4RCB, cntx));
 #if RAM_SIZE_MAX == 33554432
-				Ubfx(w1, w29, 1, 24);
+					Ubfx(w1, w29, 1, 24);
 #else
-				Ubfx(w1, w29, 1, 23);
+					Ubfx(w1, w29, 1, 23);
 #endif
-				Ldr(x15, MemOperand(x2, x1, LSL, 3));	// Get block entry point
-				Str(w29, MemOperand(x9, kPcOff));
-				Str(x15, MemOperand(x9, kCodeOff));
-				Ldr(w12, MemOperand(x10));
-				Str(w12, MemOperand(x9, kGenOff));
-				Br(x15);
+					Ldr(x15, MemOperand(x2, x1, LSL, 3));	// Get block entry point
+					Br(x15);
+				}
+				const ptrdiff_t kDynSlot = 12 * kInstructionSize;
+				verify(GetBuffer()->GetCursorOffset() - dynStart <= kDynSlot);
+				while (GetBuffer()->GetCursorOffset() - dynStart < kDynSlot)
+					Nop();
 			}
 			else if (!mmu_enabled())
 			{

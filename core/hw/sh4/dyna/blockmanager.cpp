@@ -125,14 +125,6 @@ u32 unprotected_blocks;
 
 #define FPCA(x) ((DynarecCodeEntryPtr&)sh4rcb.fpcb[(x>>1)&FPCB_MASK])
 
-// FC_DYN_CACHE: geracao global do inline cache do despacho dinamico. TODA
-// escrita na tabela de dispatch (bm_AddBlock, bm_DiscardBlock,
-// bm_ResetTempCache) incrementa a geracao, invalidando todos os caches. A
-// entrada da tabela muda tambem SEM um discard -- ex.: stub
-// ngen_FailedToFindBlock -> codigo do bloco ao compilar, ou o reset do cache
-// de blocos temporarios -- entao invalidar so em bm_DiscardBlock deixava o
-// codigo cacheado obsoleto (medido: 29% dos acertos com alvo errado).
-u32 g_dynCacheGen = 1;
 
 // addr must be a physical address
 // This returns an executable address
@@ -278,7 +270,6 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 
 	verify((void*)bm_GetCode(block->addr) == (void*)ngen_FailedToFindBlock);
 	FPCA(block->addr) = (DynarecCodeEntryPtr)CC_RW2RX(block->code);
-	g_dynCacheGen++;	// a tabela mudou (stub -> codigo): invalida o cache
 
 #ifdef DYNA_OPROF
 	if (oprofHandle)
@@ -300,7 +291,6 @@ void tier2_on_discard(RuntimeBlockInfo *block) __attribute__((weak));
 
 void bm_DiscardBlock(RuntimeBlockInfo* block)
 {
-	g_dynCacheGen++;
 	if (tier2_on_discard)
 		tier2_on_discard(block);
 	// Remove from block map
@@ -310,6 +300,12 @@ void bm_DiscardBlock(RuntimeBlockInfo* block)
 
 	blkmap.erase(it);
 
+	// Sai do pre_refs dos alvos: senao o descarte de um alvo religaria este
+	// bloco morto, escrevendo num codigo que pode ja ter sido reaproveitado.
+	if (block_ptr->pNextBlock != NULL)
+		block_ptr->pNextBlock->RemRef(block_ptr);
+	if (block_ptr->pBranchBlock != NULL)
+		block_ptr->pBranchBlock->RemRef(block_ptr);
 	block_ptr->pNextBlock = NULL;
 	block_ptr->pBranchBlock = NULL;
 	block_ptr->Relink();
@@ -522,7 +518,6 @@ void bm_ResetTempCache(bool full)
 			FPCA(block->addr) = ngen_FailedToFindBlock;
 			blkmap.erase((void*)block->code);
 		}
-		g_dynCacheGen++;	// a tabela mudou (codigo -> stub): invalida o cache
 	}
 	del_blocks.insert(del_blocks.begin(),all_temp_blocks.begin(),all_temp_blocks.end());
 	all_temp_blocks.clear();
@@ -871,9 +866,11 @@ void RuntimeBlockInfo::Discard()
 	// Update references
 	for (RuntimeBlockInfoPtr& ref : pre_refs)
 	{
-		if (ref->NextBlock == vaddr)
+		if (ref->NextBlock == vaddr || ref->pNextBlock == this)
 			ref->pNextBlock = NULL;
-		if (ref->BranchBlock == vaddr)
+		// Bloco dinamico ligado (dyn_link_pc) nao tem BranchBlock fixo: compara
+		// pelo ponteiro tambem.
+		if (ref->BranchBlock == vaddr || ref->pBranchBlock == this)
 			ref->pBranchBlock = NULL;
 		ref->relink_data = 0;
 		ref->Relink();

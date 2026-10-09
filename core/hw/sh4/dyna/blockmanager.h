@@ -76,15 +76,9 @@ struct RuntimeBlockInfo: RuntimeBlockInfo_Core
 	u32 relink_data;
 	u32 csc_RetCache; /* only for stats for now */
 
-	// Inline cache do despacho dinamico (opt-in FC_DYN_CACHE): ultimo alvo
-	// (pc SH4 + codigo nativo) visto no fim deste bloco. O codigo testa a
-	// geracao e o pc com um cmp e salta direto no acerto, caindo no hash
-	// lookup so na falha. g_dynCacheGen e incrementado a cada bloco
-	// descartado, invalidando TODOS os caches (o codigo cacheado pode ter
-	// sido liberado/reusado). Zera no Setup.
-	u32 dyn_cache_gen;	// == g_dynCacheGen quando o cache e valido
-	u32 dyn_cache_pc;	// pc SH4 do ultimo alvo
-	void* dyn_cache_code;	// codigo nativo do ultimo alvo
+	// Ligacao direta do despacho dinamico (rec_arm64.cpp, 5.7): pc SH4 do
+	// alvo ligado em pBranchBlock quando o bloco e BET_Dynamic*.
+	u32 dyn_link_pc;
 
 	BlockEndType BlockType;
 	bool has_jcond;

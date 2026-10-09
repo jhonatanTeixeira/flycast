@@ -168,9 +168,7 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	code=0;
 	has_jcond=false;
 	BranchBlock=NextBlock=csc_RetCache=0xFFFFFFFF;
-	dyn_cache_gen=0;
-	dyn_cache_pc=0;
-	dyn_cache_code=nullptr;
+	dyn_link_pc=0;
 	BlockType=BET_SCL_Intr;
 	has_fpu_op = false;
 	temp_block = false;
@@ -406,6 +404,12 @@ void* DYNACALL rdv_LinkBlock(u8* code,u32 dpc)
 	if (rv == NULL)
 		return (void*)rdv_FailedToFindBlock(next_pc);
 
+	// Compilar o alvo pode ter limpado o cache de codigo (cheio/reset): o rbi
+	// morreu e o endereco dele ja pode ser de um bloco novo. Religar ali
+	// corromperia o bloco novo -- so liga se o rbi ainda for o dono do codigo.
+	if (!stale_block && bm_GetBlock2((void*)code).get() != rbi.get())
+		stale_block = true;
+
 	if (!mmu_enabled() && !stale_block)
 	{
 		if (bcls == BET_CLS_Dynamic)
@@ -414,6 +418,7 @@ void* DYNACALL rdv_LinkBlock(u8* code,u32 dpc)
 
 			if (rbi->pBranchBlock!= NULL)
 			{
+				// Alvo diferente do ligado: o salto e polimorfico, desliga de vez.
 				rbi->pBranchBlock->RemRef(rbi);
 				rbi->pBranchBlock = NULL;
 				rbi->relink_data = 1;
@@ -421,8 +426,18 @@ void* DYNACALL rdv_LinkBlock(u8* code,u32 dpc)
 			else if (rbi->relink_data == 0)
 			{
 				rbi->pBranchBlock = bm_GetBlock(next_pc).get();
-				if (rbi->pBranchBlock != NULL)
+				// Blocos temporarios somem no bm_ResetTempCache sem Discard
+				// (pre_refs nao seria atualizado): nao liga de/para eles.
+				if (rbi->pBranchBlock != NULL && !rbi->temp_block && !rbi->pBranchBlock->temp_block)
+				{
+					rbi->dyn_link_pc = next_pc;
 					rbi->pBranchBlock->AddRef(rbi);
+				}
+				else
+				{
+					rbi->pBranchBlock = NULL;
+					rbi->relink_data = 1;
+				}
 			}
 		}
 		else

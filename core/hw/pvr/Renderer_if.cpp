@@ -424,6 +424,31 @@ u64 rend_new_frame_count()
 	return g_newFrameCount.load(std::memory_order_relaxed);
 }
 
+// Frames que o JOGO produziu (thread de emulacao, no rend_start_render, sem
+// RTT) e quantos deles levaram exatamente 1 vblank emulado. Um jogo de 30 quase
+// nunca tem frame de 1 vblank; um de 60 lento tem muitos (DOA2 a ~40 fps
+// emulados: ~metade). E o que separa 30 de 60 no report (libretro.cpp, 4.112).
+u32 spg_vblank_count(void);
+static std::atomic<u32> g_gameFrames{0};
+static std::atomic<u32> g_gameFramesOneVblank{0};
+static void note_game_frame()
+{
+	static u32 lastVblk = 0;
+	const u32 v = spg_vblank_count();
+	const u32 d = v - lastVblk;
+	if (d == 0)
+		return;		// outro render no mesmo vblank
+	lastVblk = v;
+	g_gameFrames.fetch_add(1, std::memory_order_relaxed);
+	if (d == 1)
+		g_gameFramesOneVblank.fetch_add(1, std::memory_order_relaxed);
+}
+void rend_game_frame_counts(u32 *frames, u32 *oneVblank)
+{
+	*frames = g_gameFrames.load(std::memory_order_relaxed);
+	*oneVblank = g_gameFramesOneVblank.load(std::memory_order_relaxed);
+}
+
 static bool sync_stats_on()
 {
 	if (g_syncStats < 0)
@@ -928,6 +953,8 @@ void rend_start_render(void)
             FillBGP(ctx);
 
          ctx->rend.isRTT      = is_rtt;
+         if (!is_rtt && !ctx->rend.isRenderFramebuffer)
+            note_game_frame();
 
          ctx->rend.fb_X_CLIP  = FB_X_CLIP;
          ctx->rend.fb_Y_CLIP  = FB_Y_CLIP;
