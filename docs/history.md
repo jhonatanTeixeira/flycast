@@ -335,3 +335,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   o sort per-strip (chave = ponto mais distante) desenha um polígono preto curto
   por cima. Per-triangle corrige (30 → 25,9 fps). Ferramentas novas: pick de
   polígonos por pixel (`FC_DBG_PICK`) e chaves de render para isolar culpados.
+- **Sort dos translúcidos (4.124):** strips profundos quebrados em pedaços de 2
+  triângulos + translúcido ordenado sem escrita de Z. Chão do Evolution 1 completo,
+  Napple com bem menos defeitos (usuário), custo ~0 (render +0,1 ms). Core oficial
+  md5 `5525c6b0`, backup `*-pre-trsort-20261009`.

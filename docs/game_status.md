@@ -74,14 +74,14 @@ boot sem savestate; "ES" = lançado pelo EmulationStation (`perfmax performance`
 | Capcom vs SNK 2 (CvS2) | 2026-09-27 | 100 | 56 | descrachou; cauda baixa |
 | DOA2 | 2026-10-07 | 89 | 37 | tier2 OFF: slowdowns, "quase jogável"; teto = throughput do SH4 (4.20). HLE do laço de vértices ~+1% |
 | EGG | 2026-10-07 | 99,5 | 46 | tier2 OFF: **destravou** (travava a 11 fps com tier2) |
-| Evolution (1) | 2026-10-09 | 99 | 30 | "roda muito bem, 30 fps"; pedaços do chão pretos (sort per-strip, 4.124; per-triangle corrige mas custa ~4 fps). **FMV a 100% (era ~78%)**, vídeo 30 quadros/s, usuário: "vídeo perfeito, áudio certo" (4.123). Obs.: há CHD com zstd que não abre (`cdzs`) |
+| Evolution (1) | 2026-10-09 | 99 | 30 | "roda muito bem, 30 fps"; chão completo desde a correção do sort dos translúcidos (4.124, sem custo). **FMV a 100% (era ~78%)**, vídeo 30 quadros/s, usuário: "vídeo perfeito, áudio certo" (4.123). Obs.: há CHD com zstd que não abre (`cdzs`) |
 | Evolution 2 | 2026-10-07 | 97 | 28 | jogável a 30, quedas p/ 24; save/load a ver |
 | Grandia II | 2026-10-06 | 100 | 30 | **30 fps lisos**, ~0% dupes. **Som estourado + vozes baixas** (4.116) |
 | KOF Evolution | 2026-10-07 | 98 | 51 | 60 fps fora da chuva; chuva ~54 com quedas p/ 32 e hicups |
 | Le Mans | 2026-10-07 | 95 | 30 | cold, HLE: velocidade perfeita, 30 fps; **áudio quebrado (uma batida em loop, bug antigo)**; load demorado; `declared_fps=7.5` a investigar |
 | Macross M3 | 2026-10-07 | 97 | 6,8 | **tela preta após o logo, preso em ~145 ms/frame** (4.115) |
 | MvC2 | 2026-10-07 | 100 | 47 | 33-45 fps, **glitches** e suspeita de regressão (4.118); sem tier2 44 fps |
-| Napple Tale | 2026-10-07 | 99 | 30 | 30 cravado, partes pesadas ~27; áudio afinado (WSOLA) mas **som estourado** (4.116); **reclama de espaço no memory card / crash ao salvar** (4.117) |
+| Napple Tale | 2026-10-07 | 99 | 30 | 30 cravado, partes pesadas ~27; áudio afinado (WSOLA) mas **som estourado** (4.116); **reclama de espaço no memory card / crash ao salvar** (4.117); 2026-10-09: sort dos translúcidos corrigido (4.124) — "bem menos erros gráficos, mais coerente, mesmo fps" |
 | Phantasy Star Online v2 | 2026-10-07 | 98 | 16,5 | **trava após load game** (preso em ~71 ms/frame); new game/save funcionou antes |
 | Power Stone | 2026-10-07 | 97 | 38 | parece 100% mas a ~45 contados (dupes/frameskip?) |
 | Project Justice | 2026-10-07 | 91 | 55 | era "sempre perfeito"; agora ~118 dupes, "passa de 60", slowdown em special (4.118) |

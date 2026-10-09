@@ -335,7 +335,10 @@ __forceinline
 	if (noDepth)
 		glcache.DepthFunc(GL_ALWAYS);
 
-	if (SortingEnabled && settings.pvr.Emulation.AlphaSortMode == 0)
+	// Translucido ordenado nao escreve Z, em qualquer modo de sort (como o flycast
+	// atual): a ordem ja resolve, e o Z de um poligono quase coplanar desenhado
+	// antes reprovava o de cima (chao do Evolution 1, 4.124).
+	if (SortingEnabled)
 		glcache.DepthMask(GL_FALSE);
 	else
 	{
@@ -370,9 +373,17 @@ static inline bool PP_SameGPUState(const PolyParam* pp0, const PolyParam* pp1)
 }
 
 template <u32 Type, bool SortingEnabled>
+static void DrawListP(PolyParam* params, int count);
+
+template <u32 Type, bool SortingEnabled>
 static void DrawList(const List<PolyParam>& gply, int first, int count)
 {
-	PolyParam* params= &gply.head()[first];
+	DrawListP<Type, SortingEnabled>(&gply.head()[first], count);
+}
+
+template <u32 Type, bool SortingEnabled>
+static void DrawListP(PolyParam* params, int count)
+{
 
 	/* We want at least 1 PParam */
 	if (count==0)
@@ -626,6 +637,67 @@ static void DrawList(const List<PolyParam>& gply, int first, int count)
 }
 
 static std::vector<SortTrigDrawParam> pidx_sort;
+// Sort hibrido como comportamento do modo per-strip; FC_SORT_HYBRID=0 desliga
+// (A/B), FC_SORT_HYBRID=<razao> troca o limiar de "strip profundo" (padrao 1.5).
+static float HybridSortRatio()
+{
+	static float r = -1.f;
+	if (r < 0.f)
+	{
+		const char *e = getenv("FC_SORT_HYBRID");
+		r = e != nullptr ? (float)atof(e) : 1.5f;
+	}
+	return r;
+}
+
+// Per-strip com os strips PROFUNDOS quebrados em pedacos de 2 triangulos
+// (4.124). O sort per-strip usa como chave o ponto mais distante do strip: um
+// chao que atravessa a sala vira "longe" e e desenhado antes de poligonos que no
+// PVR (ordem por pixel) ficam atras dele -- no Evolution 1 um poligono preto
+// cobria o chao. Strip profundo = 1/W max > ratio x 1/W min. Os pedacos comecam
+// em indice par (mesmo sentido de giro) e apontam para o mesmo buffer de indices
+// (sem upload extra); pedacos seguidos com o mesmo estado voltam a ser
+// agrupados pelo primitive restart do DrawList.
+static std::vector<PolyParam> g_trSortList;
+static void SortPParamsSplit(int first, int count, float deepRatio)
+{
+	g_trSortList.clear();
+	const Vertex *vtx = pvrrc.verts.head();
+	const u32 *idx = pvrrc.idx.head();
+	const PolyParam *pp = &pvrrc.global_param_tr.head()[first];
+	for (int p = 0; p < count; p++, pp++)
+	{
+		if (pp->count < 3)
+			continue;
+		const u32 *pi = idx + pp->first;
+		float zmin = vtx[pi[0]].z, zmax = zmin;
+		for (u32 i = 1; i < pp->count; i++)
+		{
+			const float z = vtx[pi[i]].z;
+			zmin = std::min(zmin, z);
+			zmax = std::max(zmax, z);
+		}
+		if (!(zmax > zmin * deepRatio) || pp->count <= 4)
+		{
+			g_trSortList.push_back(*pp);
+			g_trSortList.back().zvZ = zmin;
+			continue;
+		}
+		for (u32 k = 0; k + 2 < pp->count; k += 2)
+		{
+			PolyParam piece = *pp;
+			piece.first = pp->first + k;
+			piece.count = std::min<u32>(4, pp->count - k);
+			float z = vtx[pi[k]].z;
+			for (u32 i = 1; i < piece.count; i++)
+				z = std::min(z, vtx[pi[k + i]].z);
+			piece.zvZ = z;
+			g_trSortList.push_back(piece);
+		}
+	}
+	std::stable_sort(g_trSortList.begin(), g_trSortList.end(),
+			[](const PolyParam& a, const PolyParam& b) { return a.zvZ < b.zvZ; });
+}
 
 static void SortTriangles(int first, int count)
 {
@@ -1055,6 +1127,14 @@ void DrawStrips()
 				{
 					SortTriangles(previous_pass.tr_count, trCount);
 					DrawSorted(render_pass < pvrrc.render_passes.used() - 1);
+				}
+				else if (HybridSortRatio() > 0.f)
+				{
+					u64 rsS = g_rendSplitEnabled ? rs_now_us() : 0;
+					SortPParamsSplit(previous_pass.tr_count, trCount, HybridSortRatio());
+					if (g_rendSplitEnabled) { g_rsUs[8] += rs_now_us() - rsS; g_rsUs[9] += trCount; }
+					if (!g_trSortList.empty())
+						DrawListP<ListType_Translucent, true>(g_trSortList.data(), (int)g_trSortList.size());
 				}
 				else
 				{
