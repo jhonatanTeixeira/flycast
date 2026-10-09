@@ -497,11 +497,15 @@ static void fps_log_vblank()
 	{
 		extern float g_reportedTargetFpsLog;
 		extern u32 g_yuvFrames;
+		extern u32 g_taBadInvW;
+		static u32 lastBadW = 0;
+		const u32 badW = g_taBadInvW - lastBadW;
+		lastBadW = g_taBadInvW;
 		static u32 lastYuv = 0;
 		const u32 yuv = g_yuvFrames - lastYuv;
 		lastYuv = g_yuvFrames;
-		fprintf(stderr, "FPSLOG yuv=%u vblk=%u ta[1v=%u 2v=%u 3v=%u 4+=%u] fb[0v=%u 1v=%u 2v=%u 3v=%u 4+=%u] rtt=%u flips=%u declared=%.0f\n",
-				yuv, spg_vblank_count(), g_fpsLogTa[1], g_fpsLogTa[2], g_fpsLogTa[3], g_fpsLogTa[4],
+		fprintf(stderr, "FPSLOG badw=%u yuv=%u vblk=%u ta[1v=%u 2v=%u 3v=%u 4+=%u] fb[0v=%u 1v=%u 2v=%u 3v=%u 4+=%u] rtt=%u flips=%u declared=%.0f\n",
+				badW, yuv, spg_vblank_count(), g_fpsLogTa[1], g_fpsLogTa[2], g_fpsLogTa[3], g_fpsLogTa[4],
 				g_fpsLogFb[0], g_fpsLogFb[1], g_fpsLogFb[2], g_fpsLogFb[3], g_fpsLogFb[4],
 				g_fpsLogRtt, g_fpsLogFlips, (double)g_reportedTargetFpsLog);
 		memset(g_fpsLogTa, 0, sizeof(g_fpsLogTa));

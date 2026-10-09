@@ -331,3 +331,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   Evolution 1 78,9 → 100,2% (vídeo 24 → 30 quadros/s), RE CV FMV ~96%; DOA2
   idêntico por hash fora de FMV. Usuário: vídeo perfeito, áudio certo. Core md5
   no device atualizado; backup `*-pre-fmvclock-20261009`.
+- **Chão faltando no Evolution 1 (4.124):** o chão é translúcido em strips longos;
+  o sort per-strip (chave = ponto mais distante) desenha um polígono preto curto
+  por cima. Per-triangle corrige (30 → 25,9 fps). Ferramentas novas: pick de
+  polígonos por pixel (`FC_DBG_PICK`) e chaves de render para isolar culpados.

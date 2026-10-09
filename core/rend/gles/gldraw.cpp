@@ -127,7 +127,9 @@ GLuint lightgunTextureId[4]={0,0,0,0};
 
 void SetCull(u32 CullMode)
 {
-	if (CullModes[CullMode] == GL_NONE)
+	// FC_DBG_NOCULL (diagnostico): nunca descarta face.
+	static const bool noCull = getenv("FC_DBG_NOCULL") != nullptr;
+	if (noCull || CullModes[CullMode] == GL_NONE)
 		glcache.Disable(GL_CULL_FACE);
 	else
 	{
@@ -328,6 +330,10 @@ __forceinline
 	{
 		glcache.DepthFunc(Zfunction[gp->isp.DepthMode]);
 	}
+	// FC_DBG_NODEPTH (diagnostico): profundidade sempre passa.
+	static const bool noDepth = getenv("FC_DBG_NODEPTH") != nullptr;
+	if (noDepth)
+		glcache.DepthFunc(GL_ALWAYS);
 
 	if (SortingEnabled && settings.pvr.Emulation.AlphaSortMode == 0)
 		glcache.DepthMask(GL_FALSE);
@@ -920,8 +926,72 @@ static void DrawModVols(int first, int count)
 	glcache.Enable(GL_DEPTH_TEST);
 }
 
+// FC_DBG_PICK=x,y (diagnostico): a cada ~2 s, lista no stderr os poligonos que
+// cobrem o ponto (x,y) em coordenadas do PVR (640x480): lista, indice, modo de
+// profundidade, escrita de Z, textura, cor do 1o vertice e 1/W no ponto.
+static void dbg_pick_log()
+{
+	static const char *pick = getenv("FC_DBG_PICK");
+	if (pick == nullptr)
+		return;
+	static int n = 0, empty = 0, full = 0;
+	if (pvrrc.global_param_op.used() <= 1 && pvrrc.global_param_tr.used() == 0 && pvrrc.global_param_pt.used() == 0)
+	{
+		empty++;
+		return;
+	}
+	full++;
+	if ((n++ % 60) != 0)
+		return;
+	fprintf(stderr, "PICK renders: cena=%d vazios=%d isRTT=%d fb=%d\n", full, empty, (int)pvrrc.isRTT, (int)pvrrc.isRenderFramebuffer);
+	float px = 0, py = 0;
+	if (sscanf(pick, "%f,%f", &px, &py) != 2)
+		return;
+	const Vertex *vt = pvrrc.verts.head();
+	const u32 *ix = pvrrc.idx.head();
+	const List<PolyParam> *lists[3] = { &pvrrc.global_param_op, &pvrrc.global_param_pt, &pvrrc.global_param_tr };
+	const char *names[3] = { "OP", "PT", "TR" };
+	fprintf(stderr, "PICK frame (%g,%g) bg_d? passes=%d\n", px, py, pvrrc.render_passes.used());
+	fprintf(stderr, "PICK lists op=%d pt=%d tr=%d verts=%d idx=%d\n", pvrrc.global_param_op.used(),
+			pvrrc.global_param_pt.used(), pvrrc.global_param_tr.used(), pvrrc.verts.used(), pvrrc.idx.used());
+	for (int p = 1; p < 6 && p < pvrrc.global_param_op.used(); p++)
+	{
+		const PolyParam &q = pvrrc.global_param_op.head()[p];
+		if (q.count == 0) continue;
+		const Vertex &a = vt[ix[q.first]];
+		fprintf(stderr, "PICK sample op#%d first=%u count=%u v0=(%g,%g,%g)\n", p, q.first, q.count, a.x, a.y, a.z);
+	}
+	int hits = 0;
+	for (int l = 0; l < 3 && hits < 40; l++)
+	{
+		const PolyParam *pp = lists[l]->head();
+		for (int p = 0; p < lists[l]->used() && hits < 40; p++)
+		{
+			for (u32 i = 0; i + 2 < pp[p].count; i++)
+			{
+				const Vertex &a = vt[ix[pp[p].first + i]], &b = vt[ix[pp[p].first + i + 1]], &c = vt[ix[pp[p].first + i + 2]];
+				const float d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+				if (d == 0.f)
+					continue;
+				const float wa = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / d;
+				const float wb = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / d;
+				const float wc = 1.f - wa - wb;
+				if (wa < 0 || wb < 0 || wc < 0)
+					continue;
+				const float z = wa * a.z + wb * b.z + wc * c.z;
+				fprintf(stderr, "PICK %s #%d tri%u dm=%u zwdis=%u cull=%u tex=%u tsp=%08x tcw=%08x col=%02x%02x%02x%02x z=%g zabc=%g/%g/%g\n",
+						names[l], p, i, pp[p].isp.DepthMode, pp[p].isp.ZWriteDis, pp[p].isp.CullMode, pp[p].pcw.Texture,
+						pp[p].tsp.full, pp[p].tcw.full, a.col[0], a.col[1], a.col[2], a.col[3], z, a.z, b.z, c.z);
+				hits++;
+				break;
+			}
+		}
+	}
+}
+
 void DrawStrips()
 {
+	dbg_pick_log();
 	SetupMainVBO();
 	//Draw the strips !
 

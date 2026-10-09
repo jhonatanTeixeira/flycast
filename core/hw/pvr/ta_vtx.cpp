@@ -4,6 +4,7 @@
 	Parsing of the TA stream and generation of vertex data !
 */
 #include "ta.h"
+u32 g_taBadInvW;	// FC_FPS_LOG (Renderer_if.cpp): vertices com 1/W <= 0
 #include <chrono>	// FC_TA_SPLIT timing
 #include "ta_ctx.h"
 #include "rend/TexCache.h"	// vramlock_ReprotectPending()
@@ -886,6 +887,7 @@ private:
 		cv->y=vtx->xyz[1];
 		cv->z=invW;
 		update_fz(invW);
+		g_taBadInvW += !(invW > 0.f);	// FC_FPS_LOG: vertices com 1/W <= 0 (ou NaN)
 		return cv;
 	}
 
@@ -1863,6 +1865,22 @@ void FillBGP(TA_context* ctx)
 
 	f32 bg_depth = ISP_BACKGND_D.f;
 	reinterpret_cast<u32&>(bg_depth) &= 0xFFFFFFF0;	// ISP_BACKGND_D has only 28 bits
+	// Recuo de 1e-6 no plano de fundo, como o flycast atual (443d5a2ba): o chao
+	// de alguns jogos fica quase na profundidade do fundo e, no buffer de 24 bits,
+	// o fundo preto vencia (Evolution 1: pedacos do chao sumindo).
+	bg_depth = std::max(bg_depth - 1e-6f, 1e-11f);
+	{
+		// Diagnostico: FC_DBG_BGZ_MIN joga o fundo para o mais longe possivel;
+		// FC_FPS_LOG imprime o ISP_BACKGND_D e a faixa de 1/W do frame.
+		static const bool bgMin = getenv("FC_DBG_BGZ_MIN") != nullptr;
+		if (bgMin)
+			bg_depth = 1e-11f;
+		static const bool fpsLog = getenv("FC_FPS_LOG") != nullptr;
+		static u32 n = 0;
+		if (fpsLog && (n++ % 60) == 0)
+			fprintf(stderr, "BGLOG bg_d=%g (raw %08x) fZ_max=%g ops=%u\n", bg_depth, ISP_BACKGND_D.i,
+					ctx->rend.fZ_max, ctx->rend.global_param_op.used());
+	}
 
 	f32 min_u = std::min(cv[0].u, std::min(cv[1].u, cv[2].u));
 	f32 max_u = std::max(cv[0].u, std::max(cv[1].u, cv[2].u));
