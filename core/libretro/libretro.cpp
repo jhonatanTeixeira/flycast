@@ -1776,7 +1776,11 @@ void retro_run (void)
                   const double oneFrac = (double)d1 / (double)df;
                   const double current = g_reportedTargetFps == 0.0 ? full : g_reportedTargetFps;
                   double target = current;
-                  if (current == full && oneFrac < 0.05)
+                  // FC_FORCE_TARGET_FPS=30|60 (diagnostico, A/B): trava o alvo.
+                  static const int forced = getenv("FC_FORCE_TARGET_FPS") != nullptr ? atoi(getenv("FC_FORCE_TARGET_FPS")) : 0;
+                  if (forced > 0)
+                     target = forced >= 45 ? full : half;
+                  else if (current == full && oneFrac < 0.05)
                      target = half;
                   else if (current != full && oneFrac > 0.25)
                      target = full;

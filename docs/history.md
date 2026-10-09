@@ -324,3 +324,5 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   desenha pelo TA em todo vblank (declarado 60, certo), mas a emu faz só 44-50
   vblanks/s (~78%), saturada na decodificação da Sofdec (4.123) → caminho é o
   `fmv_plan.md`.
+- Teste "travar FMV em 30" (`FC_FORCE_TARGET_FPS=30`, diagnóstico): VEL da FMV
+  80,0 → 50,1%. A emulação fica presa ao consumo de cada frame; não vira padrão.
