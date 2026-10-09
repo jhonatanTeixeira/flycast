@@ -55,6 +55,9 @@ congelado).
 Apache 2.0 nem (L)GPL v3. pl_mpeg (MIT) e um ADX próprio estão ok.
 
 **Jogos de teste:**
+- **Evolution 1**: FMV depois dos logos (cold boot, sem savestate). 2026-10-09: emu
+  98-101%, 75% nos blocos `8C213F82..8C214ED0`, ~78% de velocidade, o jogo
+  redesenha o quadro em todo vblank (4.123).
 - **Resident Evil: Code Veronica**: FMV logo depois dos logos; título com fundo
   em vídeo.
 - **Elemental Gimmick Gear (EGG)**: FMV logo no início.

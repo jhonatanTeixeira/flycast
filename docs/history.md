@@ -316,3 +316,11 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   Corrigido bug de religar bloco morto após limpeza do cache (corrompia código).
   Bit-exato; DOA2 +4% fps novos, Shenmue II +0,8 VEL. Classificador 30/60 trocado
   para fração de frames de 1 vblank (o DOA2 era declarado 30). Core md5 `0295f22b`.
+
+### 2026-10-09 — FMV do Evolution 1: não é pacing, é a Sofdec saturando a emu
+
+- `FC_FPS_LOG=1` (novo, opt-in): por segundo, frames do TA por vblanks gastos,
+  frames de framebuffer, RTT, trocas de página e o fps declarado. Na FMV o jogo
+  desenha pelo TA em todo vblank (declarado 60, certo), mas a emu faz só 44-50
+  vblanks/s (~78%), saturada na decodificação da Sofdec (4.123) → caminho é o
+  `fmv_plan.md`.

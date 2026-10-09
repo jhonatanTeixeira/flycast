@@ -199,6 +199,7 @@ static struct retro_system_av_info g_lastAvInfo = {};
 static bool g_lastAvInfoValid = false;
 // Ultimo fps-alvo reportado em runtime (0 = nenhum ainda).
 static double g_reportedTargetFps = 0.0;
+float g_reportedTargetFpsLog = 0.f;	// copia para o FC_FPS_LOG (Renderer_if.cpp)
 
 // Callbacks
 retro_log_printf_t         log_cb = NULL;
@@ -1787,6 +1788,7 @@ void retro_run (void)
                      if (environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &info))
                      {
                         g_reportedTargetFps = target;
+                        g_reportedTargetFpsLog = (float)target;
                         NOTICE_LOG(RENDERER, "Game target fps reported: %.3f (display %.2f, %.1f%% of %u game frames in 1 vblank)",
                                    target, (double)g_declaredFps, oneFrac * 100.0, df);
                      }

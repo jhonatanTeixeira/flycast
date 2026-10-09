@@ -429,6 +429,50 @@ u64 rend_new_frame_count()
 // nunca tem frame de 1 vblank; um de 60 lento tem muitos (DOA2 a ~40 fps
 // emulados: ~metade). E o que separa 30 de 60 no report (libretro.cpp, 4.112).
 u32 spg_vblank_count(void);
+// FC_FPS_LOG=1 (diagnostico, opt-in): por segundo de parede, no stderr, o que
+// o jogo produziu -- frames do TA por vblanks gastos, frames de framebuffer
+// (escrita direta, ex.: FMV), RTT e trocas de pagina (FB_R_SOF1). Serve para
+// entender o ritmo das FMVs (4.112).
+static bool fpsLogOn()
+{
+	static int on = -1;
+	if (on < 0)
+		on = getenv("FC_FPS_LOG") != nullptr ? 1 : 0;
+	return on != 0;
+}
+static u32 g_fpsLogTa[5], g_fpsLogFb[5], g_fpsLogRtt, g_fpsLogFlips;
+static u32 g_fpsLogLastFbVblk, g_fpsLogLastSof1;
+static void fps_log_bucket(u32 *h, u32 d)
+{
+	h[d >= 4 ? 4 : d]++;
+}
+static void fps_log_vblank()
+{
+	if (!fpsLogOn())
+		return;
+	if (FB_R_SOF1 != g_fpsLogLastSof1)
+	{
+		g_fpsLogLastSof1 = FB_R_SOF1;
+		g_fpsLogFlips++;
+	}
+	static u64 lastUs = 0;
+	const u64 now = rend_now_us();
+	if (lastUs == 0)
+		lastUs = now;
+	if (now - lastUs >= 1000000)
+	{
+		extern float g_reportedTargetFpsLog;
+		fprintf(stderr, "FPSLOG vblk=%u ta[1v=%u 2v=%u 3v=%u 4+=%u] fb[0v=%u 1v=%u 2v=%u 3v=%u 4+=%u] rtt=%u flips=%u declared=%.0f\n",
+				spg_vblank_count(), g_fpsLogTa[1], g_fpsLogTa[2], g_fpsLogTa[3], g_fpsLogTa[4],
+				g_fpsLogFb[0], g_fpsLogFb[1], g_fpsLogFb[2], g_fpsLogFb[3], g_fpsLogFb[4],
+				g_fpsLogRtt, g_fpsLogFlips, (double)g_reportedTargetFpsLog);
+		memset(g_fpsLogTa, 0, sizeof(g_fpsLogTa));
+		memset(g_fpsLogFb, 0, sizeof(g_fpsLogFb));
+		g_fpsLogRtt = g_fpsLogFlips = 0;
+		lastUs = now;
+	}
+}
+
 static std::atomic<u32> g_gameFrames{0};
 static std::atomic<u32> g_gameFramesOneVblank{0};
 static void note_game_frame()
@@ -439,6 +483,8 @@ static void note_game_frame()
 	if (d == 0)
 		return;		// outro render no mesmo vblank
 	lastVblk = v;
+	if (fpsLogOn())
+		fps_log_bucket(g_fpsLogTa, d);
 	g_gameFrames.fetch_add(1, std::memory_order_relaxed);
 	if (d == 1)
 		g_gameFramesOneVblank.fetch_add(1, std::memory_order_relaxed);
@@ -955,6 +1001,17 @@ void rend_start_render(void)
          ctx->rend.isRTT      = is_rtt;
          if (!is_rtt && !ctx->rend.isRenderFramebuffer)
             note_game_frame();
+         if (fpsLogOn())
+         {
+            if (is_rtt)
+               g_fpsLogRtt++;
+            else if (ctx->rend.isRenderFramebuffer)
+            {
+               const u32 v = spg_vblank_count();
+               fps_log_bucket(g_fpsLogFb, v - g_fpsLogLastFbVblk);
+               g_fpsLogLastFbVblk = v;
+            }
+         }
 
          ctx->rend.fb_X_CLIP  = FB_X_CLIP;
          ctx->rend.fb_Y_CLIP  = FB_Y_CLIP;
@@ -1100,6 +1157,7 @@ void rend_vblank()
 		fb_dirty = false;
 	}
 	render_called = false;
+	fps_log_vblank();
 	check_framebuffer_write();
 	cheatManager.Apply();
 
