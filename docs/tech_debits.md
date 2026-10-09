@@ -37,7 +37,6 @@
 |---|------|--------|
 | 4.119 | HLE `memset`/`ocbp` (5.4) **não validado**: sem `FC_STATE_HASH`; tempo não é bit-exato por construção (laço inteiro com um só `UpdateSystem` → interrupções atrasadas; o HLE do DOA2 faz ENTER por bloco); o "Le Mans `core_p95` 95→58 ms" veio de cold boot (cenas diferentes) e a rodada seguinte com o mesmo HLE deu p95 150 ms + `declared_fps` 7,5 + áudio em loop, sem separar do HLE. Teto do ganho: memset 2-6%, ocbp ≤1% da emu | validar |
 | 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
-| 4.123 | FMV do Evolution 1 (cold boot, depois dos logos) **não é problema de pacing**: o jogo redesenha o quadro pelo TA em **todo vblank** (1 vblank/frame → declarado 60, correto; sem escrita direta no framebuffer), mas a emulação só faz 44-50 vblanks/s (~78%), com a emu a **98-101% de um core**, 75% nos blocos da Sofdec `8C213F82..8C214ED0` (decodificação real, sem laço ocioso). Por isso fps irregular e som esticado. Correção = decodificador nativo da Sofdec por assinatura (`docs/fmv_plan.md`); diagnóstico com `FC_FPS_LOG=1`. **Travar a FMV em 30 piora:** `FC_FORCE_TARGET_FPS=30` (A/B, 30 s dentro da FMV) derrubou VEL 80,0 → 50,1% — a emu espera cada frame ser consumido (`FC_EMU_WAIT_RE`), então o ritmo de 30 freia a emulação para 30 vblanks/s | confirmado, sem fix |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |
 | 4.112 | Fps do jogo: o core declara só o refresh (60) ou metade (30). Critério: fração dos frames que o jogo produz (thread de emulação, sem RTT) em exatamente 1 vblank emulado — 60→30 com <5%, 30→60 com >25%, confirmado em 2 janelas de 1 s. A média de vblanks/frame (1ª versão, limiar 1,6) declarava o DOA2 (~40 fps emulados) como 30 e o travava em 28 fps. O **ritmo é do core**, sem opção: com alvo 30 o `retro_run` dorme até o prazo de 1/30 s (fim do `retro_run`; fora em fast-forward; `FC_CORE_PACING=0` só para A/B); com alvo 60 não segura (o vsync já dá o ritmo; o pacing do frontend nos de 60 custou fps: KOF Evo 59,3 → 57,8, CvS2 com o report antigo travava em 55). `retrorun_loop_declared_fps=false` no device. Medido (cfg `false`, savestate, 20 s): Napple 30 / VEL 100,1 / 30,2 novos / 0 dupes / overruns 490 → 119; KOF Evo 60 / 100 / 59,0; Shenmue II 30 / 72,6 (empate). **Atenção na medição:** em jogo de 30, o `core_*`/`active_frame_*` do benchmark passa a incluir o sono do ritmo (~33 ms); o custo de trabalho fica no `FC_SYNC_STATS`. Core md5 `ea43aa08` | done (validar jogando) |
@@ -102,6 +101,16 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   Cacheado em `static`. Nada de `getenv` em caminho quente.
 
 ### JIT / CPU
+- **FMV Sofdec: clock reduzido só durante o vídeo (4.123, 2026-10-09).** A FMV do
+  Evolution 1 rodava a ~78% com a emu saturada nos blocos da Sofdec — mas não era
+  decodificação: o player **gira em espera** (laço que o idle não pega). Travar o
+  declarado em 30 piorou (VEL 80 → 50: a emu espera cada frame ser consumido).
+  O que funcionou: com o conversor YUV do PVR ativo (só a Sofdec usa), o stub
+  `intc_sched` repõe 2/3 dos ciclos por fatia (`g_sh4CycleRefill`, equivale ao
+  clock 1,5 só no vídeo, sem recompilar) → Evolution 1 VEL 78,9 → 100,2%, vídeo
+  24 → 30 quadros/s, frame p99 39,5 → 19,8 ms; RE CV FMV 25-30 quadros/s (~83% →
+  ~96%). Fora de FMV idêntico (DOA2, hash 956 frames). `FC_FMV_CLOCK=0` desliga;
+  `FC_FPS_LOG=1` mostra `yuv=` (quadros de vídeo/s).
 - **Link direto do despacho dinâmico (4.120, ex-5.7 `FC_DYN_CACHE`), padrão desde
   2026-10-08.** A 1ª versão não fazia o que prometia: o acerto terminava no mesmo
   `Br x15` indireto, com 5 loads em vez de 1, e a falha (~40%) somava 3 stores — o

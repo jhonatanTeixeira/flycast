@@ -471,6 +471,7 @@ struct DynaRBI : RuntimeBlockInfo
 
 static jmp_buf jmp_env;
 static u32 cycle_counter;
+extern u32 g_sh4CycleRefill;	// sh4_interpreter.cpp (FMV, 4.123)
 
 // FC_JIT_TRACE=<arquivo> (diagnostico): a cada bloco executado, grava
 // "vaddr phase hash(Sh4Context)" (phase 0 = entrada, 1 = saida). Comparando
@@ -2487,16 +2488,20 @@ public:
 		Bind(&intc_sched);
 
 		// Add timeslice to cycle counter
+		// Repoe g_sh4CycleRefill (= timeslice, ou 2/3 dele na FMV -- 4.123).
+		g_sh4CycleRefill = sh4_sched_timeslice;
+		Mov(x0, reinterpret_cast<uintptr_t>(&g_sh4CycleRefill));
+		Ldr(w0, MemOperand(x0));
 		if (!mmu_enabled())
 		{
-			Add(w27, w27, sh4_sched_timeslice);
+			Add(w27, w27, w0);
 		}
 		else
 		{
 			Ldr(x1, MemOperand(sp, 8));	// &cycle_counter
-			Ldr(w0, MemOperand(x1));	// cycle_counter
-			Add(w0, w0, sh4_sched_timeslice);
-			Str(w0, MemOperand(x1));
+			Ldr(w2, MemOperand(x1));	// cycle_counter
+			Add(w2, w2, w0);
+			Str(w2, MemOperand(x1));
 		}
 		Mov(x29, lr);				// Trashing pc here but it will be reset at the end of the block or in DoInterrupts
 		if (tier2_configured())

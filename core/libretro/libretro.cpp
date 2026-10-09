@@ -655,6 +655,9 @@ static void update_variables(bool first_startup)
    // melhor que o antigo padrao d12 (Le Mans 16,1 -> 18,8 fps, sem perda nos
    // demais -- 4.39/4.42). O override por jogo (lut_games.sh4clock) continua.
    settings.dreamcast.sh4clock = 1.0f;
+   // FC_SH4CLOCK=<mult> (diagnostico, A/B): forca o multiplicador de ciclos.
+   if (getenv("FC_SH4CLOCK") != nullptr)
+      settings.dreamcast.sh4clock = (float)atof(getenv("FC_SH4CLOCK"));
 
 #if HOST_CPU == CPU_ARM64
    var.key = CORE_OPTION_NAME "_tier2";

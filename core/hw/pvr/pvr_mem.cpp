@@ -22,6 +22,7 @@ u32 YUV_tempdata[512/4];//512 bytes
 u32 YUV_dest=0;
 
 u32 YUV_blockcount;
+u32 g_yuvFrames;
 
 u32 YUV_x_curr;
 u32 YUV_y_curr;
@@ -132,6 +133,7 @@ static INLINE void YUV_ConvertMacroBlock(u8* datap)
 
 	if (YUV_blockcount==TA_YUV_TEX_CNT)
 	{
+		g_yuvFrames++;	// quadros completos do conversor YUV (FC_FPS_LOG: video decodificado)
 		YUV_init();
 		
 		asic_RaiseInterrupt(holly_YUV_DMA);

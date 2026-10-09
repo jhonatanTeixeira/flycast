@@ -20,6 +20,11 @@ sh4_ocache ocache;
 
 // See sh4_interpreter.h -- default keeps current behavior exactly.
 u32 sh4_sched_timeslice = SH4_TIMESLICE;
+// Ciclos que o JIT repoe a cada fatia (intc_sched). Normalmente = timeslice; na
+// FMV (conversor YUV ativo, Renderer_if.cpp) cai para 2/3 -- equivale ao clock
+// 1,5 so durante o video: o player da Sofdec gira menos em espera e o video vai
+// a 100% (4.123). O tempo emulado continua avancando o timeslice inteiro.
+u32 g_sh4CycleRefill = SH4_TIMESLICE;
 
 static s32 l;
 

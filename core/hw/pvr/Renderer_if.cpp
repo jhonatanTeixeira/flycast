@@ -429,6 +429,40 @@ u64 rend_new_frame_count()
 // nunca tem frame de 1 vblank; um de 60 lento tem muitos (DOA2 a ~40 fps
 // emulados: ~metade). E o que separa 30 de 60 no report (libretro.cpp, 4.112).
 u32 spg_vblank_count(void);
+// FMV (4.123): com o conversor YUV do PVR em uso (a Sofdec decodifica por ele),
+// o SH4 recebe 2/3 dos ciclos por fatia -- o player gira menos em espera e o
+// video vai a 100% (Evolution 1: 78,9 -> 100,2%, video a 30 quadros/s). Liga com
+// quadros YUV no ultimo segundo emulado e desliga apos 1 s sem nenhum. Sem
+// opcao; FC_FMV_CLOCK=0 desliga (A/B).
+extern u32 sh4_sched_timeslice;
+extern u32 g_sh4CycleRefill;
+static void fmv_clock_vblank()
+{
+	static int enabled = -1;
+	if (enabled < 0)
+		enabled = (getenv("FC_FMV_CLOCK") != nullptr && getenv("FC_FMV_CLOCK")[0] == '0') ? 0 : 1;
+	if (!enabled)
+		return;
+	extern u32 g_yuvFrames;
+	static u32 lastYuv = 0;
+	static u32 vblanksSinceYuv = 1000;
+	static bool active = false;
+	if (g_yuvFrames != lastYuv)
+	{
+		lastYuv = g_yuvFrames;
+		vblanksSinceYuv = 0;
+	}
+	else if (vblanksSinceYuv < 1000)
+		vblanksSinceYuv++;
+	const bool want = vblanksSinceYuv < 60;
+	if (want != active)
+	{
+		active = want;
+		INFO_LOG(RENDERER, "FMV clock: %s", active ? "on" : "off");
+	}
+	// Toda vblank: o stub intc_sched volta o valor ao normal quando e regenerado.
+	g_sh4CycleRefill = active ? sh4_sched_timeslice * 2 / 3 : sh4_sched_timeslice;
+}
 // FC_FPS_LOG=1 (diagnostico, opt-in): por segundo de parede, no stderr, o que
 // o jogo produziu -- frames do TA por vblanks gastos, frames de framebuffer
 // (escrita direta, ex.: FMV), RTT e trocas de pagina (FB_R_SOF1). Serve para
@@ -462,8 +496,12 @@ static void fps_log_vblank()
 	if (now - lastUs >= 1000000)
 	{
 		extern float g_reportedTargetFpsLog;
-		fprintf(stderr, "FPSLOG vblk=%u ta[1v=%u 2v=%u 3v=%u 4+=%u] fb[0v=%u 1v=%u 2v=%u 3v=%u 4+=%u] rtt=%u flips=%u declared=%.0f\n",
-				spg_vblank_count(), g_fpsLogTa[1], g_fpsLogTa[2], g_fpsLogTa[3], g_fpsLogTa[4],
+		extern u32 g_yuvFrames;
+		static u32 lastYuv = 0;
+		const u32 yuv = g_yuvFrames - lastYuv;
+		lastYuv = g_yuvFrames;
+		fprintf(stderr, "FPSLOG yuv=%u vblk=%u ta[1v=%u 2v=%u 3v=%u 4+=%u] fb[0v=%u 1v=%u 2v=%u 3v=%u 4+=%u] rtt=%u flips=%u declared=%.0f\n",
+				yuv, spg_vblank_count(), g_fpsLogTa[1], g_fpsLogTa[2], g_fpsLogTa[3], g_fpsLogTa[4],
 				g_fpsLogFb[0], g_fpsLogFb[1], g_fpsLogFb[2], g_fpsLogFb[3], g_fpsLogFb[4],
 				g_fpsLogRtt, g_fpsLogFlips, (double)g_reportedTargetFpsLog);
 		memset(g_fpsLogTa, 0, sizeof(g_fpsLogTa));
@@ -1157,6 +1195,7 @@ void rend_vblank()
 		fb_dirty = false;
 	}
 	render_called = false;
+	fmv_clock_vblank();
 	fps_log_vblank();
 	check_framebuffer_write();
 	cheatManager.Apply();

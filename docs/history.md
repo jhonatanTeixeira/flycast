@@ -326,3 +326,8 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   `fmv_plan.md`.
 - Teste "travar FMV em 30" (`FC_FORCE_TARGET_FPS=30`, diagnóstico): VEL da FMV
   80,0 → 50,1%. A emulação fica presa ao consumo de cada frame; não vira padrão.
+- **FMV a 100%** (4.123): o player da Sofdec gira em espera; com o conversor YUV
+  ativo o JIT repõe 2/3 dos ciclos por fatia (clock 1,5 só no vídeo).
+  Evolution 1 78,9 → 100,2% (vídeo 24 → 30 quadros/s), RE CV FMV ~96%; DOA2
+  idêntico por hash fora de FMV. Usuário: vídeo perfeito, áudio certo. Core md5
+  no device atualizado; backup `*-pre-fmvclock-20261009`.

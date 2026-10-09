@@ -1,6 +1,6 @@
 # Plano: FMVs (vídeo Sofdec) leves no Dreamcast
 
-Status: **planejado** (o tier2 foi aposentado em 2026-10-07 e não ajudava nas FMVs: ~8% da faixa do decodificador; o caminho é o codec nativo por assinatura).
+Status: **mitigado em 2026-10-09** (clock reduzido durante o vídeo levou o Evolution 1 a 100% e o RE CV a ~96%, ver `tech_debits.md` Lições, 4.123); o codec nativo continua opção se algum jogo não chegar a 100%. Antes:  **planejado** (o tier2 foi aposentado em 2026-10-07 e não ajudava nas FMVs: ~8% da faixa do decodificador; o caminho é o codec nativo por assinatura).
 
 ## 1. Medição que motivou (2026-10-02)
 
