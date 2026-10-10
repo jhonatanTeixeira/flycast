@@ -4,7 +4,7 @@
 > aprendidas dos resolvidos. A tabela completa (dezenas de itens com números, A/B e
 > desmontagens) está em `docs/arquivo/tech_debits_2026-09-13_a_2026-10-08.md` — as
 > referências "item 4.xx" dos outros docs apontam para lá. Itens novos continuam a
-> numeração (próximo livre: **5.8** / **4.119**).
+> numeração (próximo livre: **5.8** / **4.126**).
 >
 > Status: `não investigado` · `confirmado` · `parcial` · `aceito` · `opt-in`.
 > Ao resolver um item, remova a linha e, se houver lição, acrescente um bullet abaixo.
@@ -36,6 +36,7 @@
 | # | Item | Status |
 |---|------|--------|
 | 4.119 | HLE `memset`/`ocbp` (5.4) **não validado**: sem `FC_STATE_HASH`; tempo não é bit-exato por construção (laço inteiro com um só `UpdateSystem` → interrupções atrasadas; o HLE do DOA2 faz ENTER por bloco); o "Le Mans `core_p95` 95→58 ms" veio de cold boot (cenas diferentes) e a rodada seguinte com o mesmo HLE deu p95 150 ms + `declared_fps` 7,5 + áudio em loop, sem separar do HLE. Teto do ganho: memset 2-6%, ocbp ≤1% da emu | validar |
+| 4.125 | Funções nativas são de **biblioteca do SDK** e o `hle_fn` só instala em endereço fixo: `lightxf`/`stripemit` (Napple) existem em Evolution 1/2, RE CV e Skies; o laço do DOA2 em MvC2 e Shenmue II (prefixo; falta comparar a função inteira). Tornar o `hle_fn` relocável — `docs/native_sdk_code.md` | confirmado (prefixo), sem fix |
 | 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |

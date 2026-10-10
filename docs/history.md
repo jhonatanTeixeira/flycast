@@ -348,3 +348,9 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   `tas.b`" do `padroes_ineficiencia_analise.md` são try-lock do SDK (corrigido lá).
   Lição em `tech_debits.md`. `sh4clock`: d12 era o padrão antigo, d10 ganho geral,
   d8 piorou a maioria (lição corrigida).
+
+- **Código de SDK (mesmo dia):** o try-lock do DOA2 envolve os comandos Maple (r5 =
+  0x01/0x0A/0x0B/0x0C/0x0E; 19 jogos). As funções já nativas são de biblioteca:
+  `lightxf`/`stripemit` em Evolution 1/2, RE CV e Skies; o laço do DOA2 em MvC2 e
+  Shenmue II (prefixo). `hle_fn` só instala em endereço fixo → 4.125,
+  `docs/native_sdk_code.md`.
