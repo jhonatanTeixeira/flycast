@@ -31,7 +31,7 @@ Estes são os candidatos perfeitos para a abordagem atual do projeto (HLE via as
 > o despachante `8C1353B0` com um código de comando (r5 = 0x0A/0x0B/0x0C/0x0E) e
 > solta a trava (`mov.b #0`). Sem volta para trás; trava ocupada = sai sem esperar.
 > O "ratio 9,8" é a instrução isolada, e o `perf` dá `tas.b` 0,0% da emu.
-> A lógica de **threads** que existe está em outro lugar (ver `tech_debits.md`, Lições).
+> A lógica de **threads** que existe está em outro lugar (`docs/sh4_threading_model.md`).
 
 **Padrões Identificados:** 6, 15, 21, 32
 **Assinaturas Típicas:** Contêm a infame instrução `tas.b @r0` seguida imediatamente por um `bt` (branch if true) ou `bf`.
