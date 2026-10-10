@@ -29,12 +29,26 @@ jogo), `docs/jit_hot_path.md` (cache de instruções), `docs/sh4_threading_model
 
 | Etapa | O quê | Por quê nesta posição |
 |---|---|---|
+| **0** | Remoção do tier2 | aposentado (opt-in, OFF); tira ~3.000 linhas e os ganchos do emissor antes das etapas A e D mexerem nele, e libera a área reservada do cache para a D3 |
 | **A** | `hle_fn` relocável | pré-requisito de todas as nativizações em mais de um jogo |
 | **B1 + C1** | T&L da biblioteca dos jogos de luta + espera de quadro do TMU | maiores pesos medidos (Shenmue II/DOA2 ~6%, EGG ~9,6%) |
 | **D1 + D2** | quente/frio no emissor + versão por página | genéricos, todos os jogos, sem mudar o código do corpo |
 | **B2, B4, B5** | cor ARGB (MvC2), cabeçalho Kamui2 (13 jogos), IDCT da Sofdec (7 jogos) | alto peso, funções fechadas |
 | **D3** | arena quente | depende de D1 |
 | **B3, B6, C2-C4, D4** | malhas com culling, memset/ocbp, demais esperas, menos bytes por instrução | maior esforço ou ganho menos certo |
+
+## 0 — Remoção do tier2
+
+O tier2 foi aposentado em 2026-10-07 (opt-in, `flycast2026_tier2 = disabled`): o ganho
+não compensava os bugs de correção (4.93 etc.). O caminho quente (D) e as nativizações
+(A/B) substituem o que ele tentava. Pedido do usuário: remover o código.
+
+| # | Item | Status |
+|---|------|--------|
+| 0.1 | Remover `core/rec-ARM64/tier2.cpp` (~3.000 linhas) e `tier2_doa2.S` do build (`Makefile.common`) e do repositório. | pendente |
+| 0.2 | Tirar os ganchos: `rec_arm64.cpp` (`tier2_entry_for` no `ngen_Compile` e demais, 36 referências), `driver.cpp` (`tier2_code_reserve`), `blockmanager.cpp`, `decoder.cpp`, `sh4_interpreter.cpp`, `sh4_interrupts.cpp`, `Renderer_if.cpp`, `nullDC.cpp`, `libretro.cpp`/`common.cpp` (opção e variáveis `FC_TIER2_*`). O `hle_fn.cpp` usa `t2_last_pc` (zera o estado do tier2 antes do `UpdateSystem`): remover junto. | pendente |
+| 0.3 | Remover a core option `flycast2026_tier2` (`libretro_core_options.h`). A linha nos cfgs do device fica sem efeito; tirar dos cfgs só com o pedido do usuário (cfg oficial). Ferramentas e docs que citam `FC_TIER2_*`/regiões do tier2 (`jit_lite_report.py --log`, skills) atualizadas. | pendente |
+| 0.4 | Validação: com o tier2 já OFF, a remoção é neutra → `FC_STATE_HASH` idêntico (DOA2, Shenmue II, Napple) e boot dos jogos da bateria; `make clean` com os argumentos do build (headers amplos mudam). Lição e números do tier2 continuam em `tech_debits.md`/`docs/arquivo/`. | pendente |
 
 ## A — Infraestrutura: `hle_fn` relocável (4.125)
 

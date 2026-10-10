@@ -376,3 +376,5 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   itens abertos conferidos no `tech_debits.md`, novos 4.128 Skies Disc 2, 4.129 Le Mans,
   5.8 spill do DOA2). Plano novo: A `hle_fn` relocável → B nativizações do SDK → C
   esperas fora do idle FF → D caminho quente do JIT.
+- Plano: etapa 0 = **remoção do tier2** (pedido do usuário; ~3.000 linhas + ganchos em 11
+  arquivos, neutra porque já está OFF).
