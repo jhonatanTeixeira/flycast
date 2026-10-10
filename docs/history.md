@@ -378,3 +378,8 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   esperas fora do idle FF → D caminho quente do JIT.
 - Plano: etapa 0 = **remoção do tier2** (pedido do usuário; ~3.000 linhas + ganchos em 11
   arquivos, neutra porque já está OFF).
+- **Plano futuro `docs/refactor_x64.md`** (fora do `current_plan`): o x64 é o backend
+  original (nenhum `FC_*`, sem idle FF, `hle_fn`, link dinâmico, anti-SMC) e faz
+  `ftrv`/`fipr` sem fusão — hash não comparável com o ARM64. Fases: fatorar o comum,
+  portar (correção → esperas → velocidade → diagnóstico → nativo), semântica de float
+  única (hash PC = R36), caminho quente.
