@@ -1,7 +1,8 @@
 # Plano futuro: refatorar o backend x64 para o mesmo pé do ARM64
 
 Status: **plano futuro (2026-10-10)** — **não está no `current_plan.md`**; não executar
-sem pedido. Pré-requisitos desejáveis: etapa 0 (remoção do tier2) e etapa A (`hle_fn`
+sem pedido. Pré-requisitos desejáveis: etapa 0 (remoção do tier2 — **feita em
+2026-10-10**) e etapa A (`hle_fn`
 relocável) do plano atual, para portar o desenho final e não um intermediário.
 
 ## 1. Por que

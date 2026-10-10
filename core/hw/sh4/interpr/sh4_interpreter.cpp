@@ -175,22 +175,9 @@ void ExecuteDelayslot_RTE()
 #endif
 }
 
-// nivel 2 (rec-ARM64/tier2.cpp): ponto seguro para instalar regioes
-bool tier2_poll;
-void tier2_safe_point() __attribute__((weak));
-// FC_TIER2_POLL_MASK (A/B): chama o safe_point a cada (mask+1) fatias. 0 = toda
-// fatia (padrao). Mede o custo do call por fatia quando o tier2 esta ligado.
-u32 tier2_poll_mask;
-
 // every SH4_TIMESLICE cycles
 int UpdateSystem()
 {
-	if (tier2_poll && tier2_safe_point)
-	{
-		static u32 t2upd = 0;
-		if ((t2upd++ & tier2_poll_mask) == 0)
-			tier2_safe_point();
-	}
 	Sh4cntx.sh4_sched_next -= sh4_sched_timeslice;
 	if (Sh4cntx.sh4_sched_next<0)
 		sh4_sched_tick(sh4_sched_timeslice);

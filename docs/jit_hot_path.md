@@ -95,7 +95,7 @@ Onde: `CheckBlock` (`rec_arm64.cpp`), `SetProtectedFlags`/`unprotected_pages`
 ### Fase 3 — arena quente com os blocos em ordem de execução
 
 Onde: `driver.cpp` (alocação/recompilação), `blockmanager.cpp` (`bm_*`, `Relink`), reuso
-da cauda reservada do cache (`tier2_code_reserve`, livre desde que o tier2 aposentou).
+do cache principal (todo ele livre desde a remoção do tier2, 2026-10-10).
 
 - **Quem é quente, sem custo por bloco:** amostrar no `intc_sched` (uma vez por fatia,
   ~448 ciclos do SH4) o bloco onde a fatia acabou (`next_pc`) e somar num contador do
@@ -129,7 +129,7 @@ O resto da thread (30-55%) também disputa a L1I: compilar o core com o perfil d
 
 1. Build com as flags do `CLAUDE.md` (`-j2`, `make clean` com os mesmos argumentos se
    mexer em header amplo).
-2. `FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL`, tier2 OFF: frame a frame
+2. `FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL`: frame a frame
    **idêntico** ao core atual (DOA2, Shenmue II, Napple). Fases 1-3 só mudam o lugar do
    código; qualquer diferença é bug.
 3. A/B de 2 rodadas (savestate, cfg de debug, `perfmax`): VEL%, fps novos, frame time

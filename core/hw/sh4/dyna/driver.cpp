@@ -42,7 +42,6 @@ u8* TempCodeCache;
 uintptr_t cc_rx_offset;
 
 u32 LastAddr = 0;
-u32 tier2_code_reserve = 0;	// cauda do CodeCache do nivel 2 (rec-ARM64/tier2.cpp)
 u32 LastAddr_min = 0;
 u32 TempLastAddr = 0;
 u32* emit_ptr = nullptr;
@@ -124,7 +123,7 @@ u32 emit_FreeSpace()
 	if (emit_ptr)
 		return (emit_ptr_limit - emit_ptr) * sizeof(u32);
 	else
-		return CODE_SIZE - tier2_code_reserve - LastAddr;
+		return CODE_SIZE - LastAddr;
 }
 
 void AnalyseBlock(RuntimeBlockInfo* blk);
@@ -330,11 +329,11 @@ DynarecCodeEntryPtr DYNACALL rdv_BlockCheckFail(u32 addr)
 	}
 #if !defined(NO_MMU)
 	// Robustez (plano 0.1): a recompilacao do bloco aqui pode executar/decodificar
-	// codigo invalido e lancar SH4ThrownException (ex.: `iNimp` quando uma regiao
-	// do tier2 faz o jogo executar dados -- SA2). Sem catch, a excecao escapava
-	// desta funcao (chamada do stub de check-fail do JIT) e chamava
-	// std::terminate, FECHANDO o emulador. Tratamos como o interpretador faz e
-	// retomamos; pode virar glitch, mas nao crash.
+	// codigo invalido e lancar SH4ThrownException (ex.: `iNimp` ao executar
+	// dados). Sem catch, a excecao escapava desta funcao (chamada do stub de
+	// check-fail do JIT) e chamava std::terminate, FECHANDO o emulador.
+	// Tratamos como o interpretador faz e retomamos; pode virar glitch, mas
+	// nao crash.
 	try {
 #endif
 		return (DynarecCodeEntryPtr)CC_RW2RX(rdv_CompilePC(blockcheck_failures));

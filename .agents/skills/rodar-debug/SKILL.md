@@ -50,9 +50,10 @@ echo "retrorun_auto_load = true" >> /home/ark/r_<jogo>.cfg
 ```
 
 Configs já existentes: `r_g2.cfg` (auto_load), `r_napple_load.cfg`, `r_t2load.cfg`
-(auto_load); `r_noload.cfg`, `r_t2off.cfg`, `r_t_disabled.cfg` (cold boot / tier2 off).
-Convenção: **uma config por teste**, nomeada pelo jogo e pela variável testada.
-`flycast2026_tier2 = enabled|disabled` e as opções `flycast2026_*` ficam nela.
+(auto_load); `r_noload.cfg`, `r_t_disabled.cfg` (cold boot). As configs antigas
+`r_t2off.cfg`/`r_t2load.cfg` são de quando havia o tier2 (removido em 2026-10-10);
+a linha `flycast2026_tier2` delas ficou sem efeito. Convenção: **uma config por
+teste**, nomeada pelo jogo e pela variável testada; as opções `flycast2026_*` ficam nela.
 
 ## 2. Rodar com benchmark + captura (o comando de medir)
 
@@ -92,7 +93,7 @@ cat "$D/bench.json"; echo; cat "$D"/sync-stats-*.txt
 | `FC_FRAME_WAIT_MS=N` | prazo da main p/ o próximo frame (0 = antigo; sem a var = auto, o fps medido) | — |
 | `FC_EMU_WAIT=1` | restaura a espera antiga da emu (A/B) | — |
 | `FC_HLE=0/1` | desliga/liga as funções nativas por assinatura | — |
-| `FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL` | validação frame-a-frame (tier2 off) | stdout |
+| `FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL` | validação frame-a-frame | stdout |
 | `FC_REND_SPLIT=1`, `FC_TA_SPLIT=1` | quebra o custo por frame (wait/process/render; lock/decode/index) | `/tmp/rend-split-*.txt` |
 
 `FC_JIT_DUMP` **completo derruba o jogo** (4.98); use o `_LITE`. Dump serve para a
@@ -132,7 +133,7 @@ artefatos do mbaa, 4.110). O core hoje casa a apresentação com o fps medido.
 
 O `rr_capture.sh` já grava o dump leve. Para analisar: puxe `jit-<pid>.txt` +
 `samples.txt.gz` (`scp`), descomprima e rode `tools/jit_lite_report.py jit-<pid>.txt
-samples.txt` (resolve amostra do perf → bloco e separa regiões do tier2 de stubs);
+samples.txt` (resolve amostra do perf → bloco e separa blocos de stubs);
 `tools/sh4dis.py` desmonta o SH4. O resto do ciclo (reescrever em nativo, plugar por
 assinatura) está na skill **`jit-nativo`**.
 

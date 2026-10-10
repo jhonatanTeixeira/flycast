@@ -33,8 +33,8 @@ timeout 60 sshpass -p ark ssh ark@192.168.0.14 '
 - `<core.so>` precisa ser um build com o socket (commit `eebcf4b4d` em diante).
   `/home/ark/flycast_ctrl.so` é um build de teste com ele.
 - **Sempre passe `-c <cfg>`.** Sem ele o retrorun procura `/home/ark/retrorun.cfg`,
-  não acha e sobe com as opções padrão do core (tier2 desligado, por exemplo). A
-  rodada fica diferente da do ES sem aviso nenhum.
+  não acha e sobe com as opções padrão do core. A rodada fica diferente da do ES
+  sem aviso nenhum.
 - Para começar de um savestate: copie o cfg com `retrorun_auto_load = true`. O
   savestate é `/roms2/dreamcast/<jogo>.fc2021-rrstate.auto`.
 - Para fechar o jogo, use **`pkill -x retrorun3`**. Nunca `pkill -f "retrorun3 ..."`:

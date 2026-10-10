@@ -250,10 +250,6 @@ RuntimeBlockInfoPtr bm_GetStaleBlock(void* dynarec_code)
 	return NULL;
 }
 
-// tier2 (design 1): a emu thread entrega o bloco recem-compilado ao worker
-// (fila SPSC). Weak: so existe no build ARM64 com tier2.
-void tier2_on_block_added(const RuntimeBlockInfoPtr &b) __attribute__((weak));
-
 void bm_AddBlock(RuntimeBlockInfo* blk)
 {
 	RuntimeBlockInfoPtr block(blk);
@@ -265,8 +261,6 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 		verify(false);
 	}
 	blkmap[(void*)block->code] = block;
-	if (tier2_on_block_added != nullptr)
-		tier2_on_block_added(block);
 
 	verify((void*)bm_GetCode(block->addr) == (void*)ngen_FailedToFindBlock);
 	FPCA(block->addr) = (DynarecCodeEntryPtr)CC_RW2RX(block->code);
@@ -287,12 +281,8 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 
 }
 
-void tier2_on_discard(RuntimeBlockInfo *block) __attribute__((weak));
-
 void bm_DiscardBlock(RuntimeBlockInfo* block)
 {
-	if (tier2_on_discard)
-		tier2_on_discard(block);
 	// Remove from block map
 	auto it = blkmap.find((void*)block->code);
 	verify(it != blkmap.end());

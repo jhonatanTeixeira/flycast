@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Consolida os dumps de JIT (FC_JIT_DUMP_LITE) + logs de tier2 de uma bateria
+"""Consolida os dumps de JIT (FC_JIT_DUMP_LITE) + logs de uma bateria
 num UNICO arquivo, com o SH4 de cada bloco desmontado.
 
 Entrada: pasta com subpastas de captura (cada uma com jit-*.txt, live.log,
@@ -32,10 +32,10 @@ def parse_blocks(path):
     return blocks
 
 
-def tier2_lines(log):
+def error_lines(log):
     out = []
     for line in open(log, errors='replace'):
-        if 'tier2:' in line or 'iNimp' in line or 'BAIL' in line:
+        if 'iNimp' in line or 'BAIL' in line:
             out.append(line.rstrip('\n'))
     return out
 
@@ -51,7 +51,7 @@ def main():
                      if os.path.isdir(d))
     total_blocks = 0
     with open(outpath, 'w') as out:
-        out.write("# Consolidado da bateria: disassembly SH4 dos blocos do JIT + logs de tier2\n")
+        out.write("# Consolidado da bateria: disassembly SH4 dos blocos do JIT + logs\n")
         out.write("# Fonte: %s\n\n" % srcdir)
         for d in folders:
             name = os.path.basename(d.rstrip('/'))
@@ -71,10 +71,10 @@ def main():
             out.write("## exit: %s\n" % ex)
             out.write("=" * 100 + "\n")
 
-            # tier2 log
-            out.write("\n--- LOG tier2 ---\n")
+            # log (erros/BAIL)
+            out.write("\n--- LOG (iNimp/BAIL) ---\n")
             if os.path.exists(log):
-                for l in tier2_lines(log):
+                for l in error_lines(log):
                     out.write(l + "\n")
             else:
                 out.write("(sem live.log)\n")

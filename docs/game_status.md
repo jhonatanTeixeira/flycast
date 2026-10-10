@@ -28,8 +28,9 @@
 
 Vocabulário: "cauda" = picos p95/p99 (o que se sente como hicup); "cold" = cold
 boot sem savestate; "ES" = lançado pelo EmulationStation (`perfmax performance`,
-`rr_capture.sh`). Estado do core: tier2 **aposentado** (OFF por padrão desde
-2026-10-07); funções nativas por assinatura (`hle_fn`) ligadas.
+`rr_capture.sh`). Estado do core: tier2 **removido** (aposentado em 2026-10-07, OFF
+por padrão, código tirado em 2026-10-10 — as menções "tier2 ON/OFF" nas linhas são a
+condição de quando foram medidas); funções nativas por assinatura (`hle_fn`) ligadas.
 
 ## Naomi
 

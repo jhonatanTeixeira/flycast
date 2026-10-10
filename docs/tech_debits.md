@@ -31,7 +31,7 @@
 | — | Evolution 1 não abre: CHD com codec zstd (`cdzs`), libchdr do fork sem zstd | confirmado |
 | 4.128 | Skies of Arcadia Disc 2 não boota (`SIGSEGV ... was not in vram`, exit 133): validar o CHD com o core upstream; se bom, `FC_JIT_TRACE` | não investigado |
 | 4.129 | Le Mans: `declared_fps=7.5` (devia reportar 30), áudio quebrado (batida em loop) em cold boot, load/menus lentos | não investigado |
-| — | Re-rodar a bateria DC com **tier2 OFF** (skill `bateria`) para fechar as linhas de `game_status.md` medidas com tier2 ON (cvs2, MvC2, SA2, Shenmue II...) | pendente |
+| — | Re-rodar a bateria DC com o core **sem tier2** (removido em 2026-10-10; skill `bateria`) para fechar as linhas de `game_status.md` medidas com tier2 ON (cvs2, MvC2, SA2, Shenmue II...) | pendente |
 | — | `ggxx`/`ggxxsla`/`sa2`: savestates V12 antigos precisam ser regenerados pelo usuário | pendente |
 
 ### Performance
@@ -55,8 +55,6 @@
 | 4.103 | Morton na GPU (`FC_TEX_GPU_MORTON`) validado no MvC2; falta bateria Naomi e mslug6 | opt-in |
 | 4.51 | `jit_armv8_a` correto (idêntico) mas mais lento — código quente dobrou | guardado |
 | 4.72 | Isolar por padrão o tradeoff do acesso compacto (kofnw −2-3%) | ideia / aceito |
-| 4.111 | `div32u/s` ainda não suportados no tier2 (rejeita a região) | tier2 aposentado |
-| — | Tier2 (4.73-4.76): aposentado, opt-in OFF. Causas raiz abertas: 4.74 (laço com store no delay slot), 4.76 (chão sumido esporádico) | aposentado |
 
 ### Nunca investigados (baixa prioridade; auditoria de 2026-09-13)
 
@@ -172,6 +170,14 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   Lições: ligar só após o handover BIOS→jogo; `pref` no slot de `jcond` clobbera o
   `decision`; MMIO dentro de região → bail preciso; saída não pode gravar T que a
   região não usa; gate do `safe_point` (1/64) e fila SPSC fora da emu thread.
+- **Remoção do tier2 (2026-10-10):** código morto "OFF por padrão" ainda *roda*:
+  com a opção desligada o `tier2_on_block_added` ainda marcava o handover e
+  reservava 1 MB da cauda do code cache (`tier2_code_reserve = T2_AREA`) e subia a
+  thread do worker (que ficava ociosa, sem amostras). Mesmo assim a remoção é
+  neutra: `FC_STATE_HASH` (RAM/VRAM/ARAM/ctx) idêntico em DOA2 (1241 quadros),
+  Shenmue II (397) e Napple (760), cold boot com `FC_RTC_FIXED`+`FC_INPUT_NEUTRAL`
+  — a área liberada só muda a *capacidade* do cache, não a emulação. Validar antes
+  de comemorar "é só código morto" pagou: confirmou que os ganchos eram inertes.
 - Exceção de FPU (`SR.FD`) no decode clobbera `next_pc`; checar em runtime.
 - Savestate: validar contagens lidas (board_count lixo) e abortar o load limpo.
 - Hipótese "N% do tempo ⇒ ganho grande" falhou várias vezes; o teto real vem do

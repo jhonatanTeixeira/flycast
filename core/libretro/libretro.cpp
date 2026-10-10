@@ -412,9 +412,6 @@ void retro_deinit(void)
 
 static bool is_dupe = false;
 extern int GDROM_TICK;
-#if HOST_CPU == CPU_ARM64
-extern void tier2_set_core_option(bool on);
-#endif
 static bool rotate_screen = false;
 
 static void set_variable_visibility(void)
@@ -658,15 +655,6 @@ static void update_variables(bool first_startup)
    // FC_SH4CLOCK=<mult> (diagnostico, A/B): forca o multiplicador de ciclos.
    if (getenv("FC_SH4CLOCK") != nullptr)
       settings.dreamcast.sh4clock = (float)atof(getenv("FC_SH4CLOCK"));
-
-#if HOST_CPU == CPU_ARM64
-   var.key = CORE_OPTION_NAME "_tier2";
-
-   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-      tier2_set_core_option(!strcmp(var.value, "enabled"));
-   else
-      tier2_set_core_option(false);
-#endif
 
    // Teto de frameskip (padrao 33%): quantos % dos frames o core pode
    // descartar para manter o jogo a 100% de velocidade (ta_ctx.cpp).
@@ -1699,11 +1687,6 @@ void retro_run (void)
                  fprintf(f, "pacer_skips\t%u\n", g_pacerSkips);
                  extern u64 g_renderBudgetUs;
                  fprintf(f, "render_budget_ms\t%.2f\n", g_renderBudgetUs / 1000.0);
-#if HOST_CPU == CPU_ARM64
-                extern u64 g_tier2EmuUs;
-                fprintf(f, "tier2_emu_us_total\t%llu\n", (unsigned long long)g_tier2EmuUs);
-                fprintf(f, "tier2_emu_us_per_frame\t%.1f\n", (double)g_tier2EmuUs / idleFrames);
-#endif
                 fclose(f);
             }
          }

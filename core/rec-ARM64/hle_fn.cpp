@@ -27,7 +27,6 @@
 #include <cstdlib>
 #include <cstdio>
 
-extern uintptr_t t2_last_pc;
 extern float g_lutSh4Clock;
 extern void *ta_sq_stub;
 bool hle_gpu_enabled();
@@ -273,7 +272,6 @@ u64 lightxf_run(s32 c, u32 entry)
 		{ \
 			c += sh4_sched_timeslice; \
 			FLUSH(); \
-			t2_last_pc = 0; \
 			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
 			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
 			RELOAD(); \
@@ -588,8 +586,7 @@ out:
 // (contagem; negativo = tipo invertido), indice do 1o vertice; por vertice: u,v
 // (int16 -> float * escala), indice do proximo, 2 rajadas de 32 bytes na SQ
 // (PCW+xyz+uv, cores). Roda com FPSCR.SZ=1 (fschg): os fmov movem PARES (8
-// bytes). O laco interno (8C14D4F6) e um bloco que volta para si mesmo -- o
-// tier2 recusa "trecho de 1 bloco", entao nunca virava regiao.
+// bytes). O laco interno (8C14D4F6) e um bloco que volta para si mesmo.
 const u16 strip_s0[] = {
 	0x2F86, 0x2F96, 0x2FA6, 0x2FB6, 0x2FC6, 0xD057, 0x6243, 0x7206, 0x0283, 0x6163, 0x2109, 0xE2F2,
 	0x462D, 0xE303, 0xE200, 0x2639, 0xE300, 0xF99D, 0x4600, 0xF591, 0xF691, 0xF791, 0xF3FD, 0xDB4F,
@@ -688,7 +685,6 @@ u64 stripemit_run(s32 c, u32 entry)
 		{ \
 			c += sh4_sched_timeslice; \
 			FLUSH(); \
-			t2_last_pc = 0; \
 			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
 			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
 			RELOAD(); \
@@ -1056,7 +1052,6 @@ u64 doa2_run(s32 c, u32 entry)
 		{ \
 			c += sh4_sched_timeslice; \
 			FLUSH(); \
-			t2_last_pc = 0; \
 			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
 			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
 			RELOAD(); \

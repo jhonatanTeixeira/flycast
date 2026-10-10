@@ -212,22 +212,6 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       },
       "per-strip (fast, least accurate)",
    },
-#if HOST_CPU == CPU_ARM64
-   {
-      CORE_OPTION_NAME "_tier2",
-      "Nível 2 (compilador de regiões, experimental)",
-      NULL,
-      "Compila regiões quentes (laços/trechos) numa segunda thread para código ARM64 mais compacto e rápido. Identico ao JIT normal (validado em DOA2, Shenmue I/II, Zombie Revenge, Giga Wing 2); a maioria dos jogos nunca rodou com ele. Se um jogo travar ou tiver comportamento estranho, desligue esta opção primeiro.",
-      NULL,
-      NULL,
-      {
-         { "disabled", NULL },
-         { "enabled",  NULL },
-         { NULL, NULL },
-      },
-       "disabled",
-    },
-#endif
     {
        CORE_OPTION_NAME "_frameskip_budget",
        "Frameskip budget (%)",

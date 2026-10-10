@@ -163,78 +163,9 @@ static const IdleFFSig idle_ff_sigs[] = {
 #undef M_
 #undef MB
 
-#if HOST_CPU == CPU_ARM64
-extern void tier2_disable_for_pattern(const char *name);
-extern void tier2_exclude_block(u32 va, const char *name);
-#endif
-
-// Biblioteca de threads cooperativas (kofxi, kofnw, MBAA, ...): o tier2 gera
-// estado diferente do JIT normal nela (state_compare, KOF XI 774/921 quadros
-// diferentes, MBAA 273/925). Detecta pelo mesmo codigo do yield() da
-// assinatura idle_ff_sigs[0], tanto na entrada da funcao (+0) quanto no
-// bloco da tarefa ociosa (+0x1E), e desliga o tier2 do jogo.
-static void coop_kernel_detect(u32 addr)
-{
-#if HOST_CPU == CPU_ARM64
-	const IdleFFSig& sig = idle_ff_sigs[0];
-	static const u32 entries[2] = { 0, sig.entry };
-	for (u32 e : entries)
-	{
-		if (addr < e)
-			continue;
-		const u16 *code = (const u16 *)GetMemPtr(addr - e, sig.count * 2);
-		if (code == nullptr)
-			continue;
-		u32 i = 0;
-		while (i < sig.count && (code[i] & sig.mask[i]) == sig.ops[i])
-			i++;
-		if (i == sig.count)
-		{
-			tier2_disable_for_pattern(sig.name);
-			return;
-		}
-	}
-#endif
-}
-
-// Padroes de codigo que o codegen de regiao do tier2 quebra. O nome descreve
-// a FORMA do padrao (nao o jogo) -- o mesmo padrao pode aparecer em varios
-// jogos. Ao casar, o bloco e EXCLUIDO das regioes (tier2 continua ligado nas
-// outras). docs/tech_debits.md 4.80.
-struct BadRegionSig { const char *name; u32 count; u16 ops[16]; u16 mask[16]; };
-static const BadRegionSig region_bad_sigs[] = {
-	// Metal Slug 6 (8C01255C): rajada de 7 stores `mov.l rX,@(0x18,r2)`
-	// seguidos (r9..r3) e um `bra`; a 4a regiao automatica que a contem deixa
-	// a tela estriada (metrica de gradiente 20-33 x 10,5 limpo).
-	{ "region-bad-store-burst", 7,
-	  { 0x2096, 0x2086, 0x2076, 0x2066, 0x2056, 0x2046, 0x2036 },
-	  { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF } },
-};
-
-static void region_bad_pattern(u32 addr)
-{
-#if HOST_CPU == CPU_ARM64
-	for (const BadRegionSig &s : region_bad_sigs)
-	{
-		const u16 *code = (const u16 *)GetMemPtr(addr, s.count * 2);
-		if (code == nullptr)
-			continue;
-		u32 i = 0;
-		while (i < s.count && (code[i] & s.mask[i]) == s.ops[i])
-			i++;
-		if (i == s.count)
-		{
-			tier2_exclude_block(addr, s.name);
-			return;
-		}
-	}
-#endif
-}
-
 static u8 idle_ff_last_ram_reg;
 static bool idle_ff_match(u32 addr)
 {
-	coop_kernel_detect(addr);
 	idle_ff_last_ram_reg = 0;
 	static int enabled = -1;
 	if (enabled == -1)
@@ -1548,10 +1479,6 @@ _end:
 #endif
 #endif
 
-	// Padroes que o codegen de regiao do tier2 quebra: exclui o bloco das
-	// regioes (tier2 continua ligado no resto). docs/tech_debits.md.
-	if (!mmu_enabled())
-		region_bad_pattern(blk->addr);
 	//cycle tricks
 	if (settings.dynarec.idleskip)
 	{

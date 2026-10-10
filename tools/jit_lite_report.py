@@ -91,7 +91,6 @@ def main():
     ap.add_argument('--at')
     ap.add_argument('--span', type=float, default=10.0)
     ap.add_argument('--freq', type=int, default=299, help='-F do perf record (rr_capture.sh usa 299)')
-    ap.add_argument('--log', help='live.log do retrorun (regioes do tier2, em ordem de emissao)')
     ap.add_argument('--tcb-off', default='0x3a2568', help='offset do simbolo SH4_TCB no .so (nm)')
     a = ap.parse_args()
 
@@ -102,20 +101,10 @@ def main():
             if line.startswith('M so_base'):
                 so_base = int(line.split()[2], 16)
                 break
-    # layout do cache (blockmanager.h / driver.cpp / tier2.cpp): SH4_TCB alinhado a
-    # 4 KB; [0, 14 MB) blocos; [14, 15 MB) tier2 (T2_AREA = 1 MB); [15, 16 MB) temp
-    CODE_SIZE, T2_AREA = 15 << 20, 1 << 20
+    # layout do cache (blockmanager.h / driver.cpp): SH4_TCB alinhado a
+    # 4 KB; [0, 15 MB) blocos; [15, 16 MB) cache temporario
+    CODE_SIZE = 15 << 20
     cc = ((so_base + int(a.tcb_off, 16) + 4095) & ~4095) if so_base else None
-    regions = []    # (inicio, fim, id, blocos) dentro da area do tier2
-    if a.log and cc:
-        pos = cc + CODE_SIZE - T2_AREA
-        rx = re.compile(r'regiao #(\d+): .*?, (\d+) bytes.*blocos: (.*)$')
-        for line in open(a.log, errors='replace'):
-            m = rx.search(line)
-            if m:
-                size = int(m.group(2))
-                regions.append((pos, pos + size, int(m.group(1)), m.group(3).split()[:6]))
-                pos += size
     res = Resolver(blocks)
 
     rows = []
@@ -169,13 +158,7 @@ def main():
                 unresolved += 1
                 if cc:
                     off = ip - cc
-                    if CODE_SIZE - T2_AREA <= off < CODE_SIZE:
-                        tag = 'tier2 (area)'
-                        for r0, r1, rid, rb in regions:
-                            if r0 <= ip < r1:
-                                tag = 'tier2 regiao #%d (%s)' % (rid, ' '.join(rb))
-                                break
-                    elif CODE_SIZE <= off < CODE_SIZE + (1 << 20):
+                    if CODE_SIZE <= off < CODE_SIZE + (1 << 20):
                         tag = 'cache temporario'
                     else:
                         tag = 'stubs/despachante (cache principal, fora de bloco)'
@@ -189,7 +172,7 @@ def main():
     n_jit = sum(by_block.values())
     print('\n--- Thread de emulacao: %d amostras ---' % n_emu)
     print('  codigo do JIT (blocos)        %5.1f%%' % (100.0 * n_jit / n_emu))
-    print('  JIT sem bloco (tier2/stubs)   %5.1f%%' % (100.0 * unresolved / n_emu))
+    print('  JIT sem bloco (stubs)         %5.1f%%' % (100.0 * unresolved / n_emu))
     print('  resto (C++, kernel, libs)     %5.1f%%' % (100.0 * sum(by_sym.values()) / n_emu))
 
     if unres_kind:

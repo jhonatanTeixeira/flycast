@@ -383,3 +383,23 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   `ftrv`/`fipr` sem fusão — hash não comparável com o ARM64. Fases: fatorar o comum,
   portar (correção → esperas → velocidade → diagnóstico → nativo), semântica de float
   única (hash PC = R36), caminho quente.
+
+## 2026-10-10 — Etapa 0 do plano: remoção do tier2 (neutra, validada)
+
+Pedido do usuário (plano 0): tirar o segundo compilador de regiões, aposentado em
+2026-10-07 (opt-in OFF). Removidos `core/rec-ARM64/tier2.cpp` (3.073 linhas),
+`tier2_doa2.S` (641) e `tools/tier2_gen.py` (910); ganchos em 11 arquivos
+(`rec_arm64.cpp` com `tier2_entry_for`/`t2_doa2_*`/`t2_no_update`/`t2_last_pc`,
+`driver.cpp` `tier2_code_reserve`, `blockmanager.cpp`, `decoder.cpp`
+`coop_kernel_detect`/`region_bad_pattern`, `sh4_interpreter.cpp` `tier2_poll`,
+`sh4_interrupts.cpp`, `Renderer_if.cpp`, `nullDC.cpp`, `libretro.cpp`/`common.cpp`);
+core option `flycast2026_tier2` e as variáveis `FC_TIER2_*`. Ferramentas
+(`jit_lite_report.py --log`, `dcbat_consolidar.py`, README do harness) e 5 skills
+atualizadas.
+
+**Validação (core novo `/home/ark/flycast_tier2rm.so` × oficial de 2026-10-09):**
+`FC_STATE_HASH`+`FC_RTC_FIXED`+`FC_INPUT_NEUTRAL`, cold boot (cfg oficial, tier2
+desligado), frame a frame **idêntico** — DOA2 1241 quadros, Shenmue II 397, Napple
+760, 0 diferenças (RAM/VRAM/ARAM/ctx a cada 60). Boot ok em MvC2, cvs2 (Naomi) e
+kofxi (Atomiswave). Detalhe e lição no `tech_debits.md`; números do tier2 seguem em
+`docs/arquivo/`.

@@ -36,7 +36,7 @@ as features que o libretro não expressa bem, e menos atrito de build/deploy.
 
 | peça | onde | o que é |
 |---|---|---|
-| **Nosso core** | este repo (`core/`, 143 `.cpp`) | emulação DC/Naomi/Atomiswave, dynarec ARM64/tier2, render GLES. **Só libretro** (sem frontend). Build: `Makefile`/`Makefile.common` → `flycast_libretro.so`. |
+| **Nosso core** | este repo (`core/`, 143 `.cpp`) | emulação DC/Naomi/Atomiswave, dynarec ARM64, render GLES. **Só libretro** (sem frontend). Build: `Makefile`/`Makefile.common` → `flycast_libretro.so`. |
 | **Glue libretro** | `core/libretro/libretro.cpp` (4142 linhas) | mapeia o core para a API libretro: `retro_run`, callbacks de vídeo/áudio/input, core options, serialize (savestate). **Fica** (retrorun + RetroArch). |
 | **Frontend atual** | fork `dreams/retrorun` (~34k linhas) | SDL2/KMSDRM, apresentação em thread, áudio (SDL + rate control + **WSOLA**), input, config + catálogo por jogo, savestate, menu, benchmark, RetroAchievements. |
 | **Standalone do upstream** | device `/opt/flycastsa/flycast` (v2.6-9) | app SDL2 + imgui do flyinghead. **É o master: ~10x mais lento** no R36 (`CLAUDE.md`). Referência de UX, não de base. |

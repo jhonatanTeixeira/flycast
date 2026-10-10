@@ -7,10 +7,10 @@ description: Ciclo de otimização do flycast deste repositório no Dreamcast �
 
 Método vigente no Dreamcast (pedido do usuário; ver `history.md` 2026-10-01 e
 `tech_debits.md` 4.100/4.101/4.106). A ideia central: **não** fazer profiling em
-volta do tier2 — **dumpar o código que o JIT gera, ler como análise estática,
-reescrever o trecho ruim em nativo e plugar a correção por identificação da
-função** (assinatura dos bytes SH4). Casos de referência: `lightxf` (4.101) e o
-emissor de strips do Napple (4.106).
+volta do código gerado — **dumpar o código que o JIT gera, ler como análise
+estática, reescrever o trecho ruim em nativo e plugar a correção por
+identificação da função** (assinatura dos bytes SH4). Casos de referência:
+`lightxf` (4.101) e o emissor de strips do Napple (4.106).
 
 Antes de rodar/medir no device, leia `rodar-games` (backup de core, logs, `perfmax`).
 
@@ -48,8 +48,7 @@ compilação (SH4/SHIL/**ARM64** por bloco) + linhas `t <mono> <realtime>`.
 
 - `tools/jit_lite_report.py` — resolve amostra do `perf` → bloco (pelo endereço e
   instante; o cache de código é o array `SH4_TCB` dentro do `.so`) e **separa
-  regiões do tier2 de stubs**. Opções `--window`, `--at`, `--log`,
-  `--tcb-off 0x3a2568`.
+  blocos de stubs**. Opções `--window`, `--at`, `--tcb-off 0x3a2568`.
 - `tools/sh4dis.py` — desmonta o SH4 de uma faixa a partir do dump (usa a tabela
   de opcodes do próprio flycast).
 
@@ -83,17 +82,17 @@ o caminho rápido não cobre o caso, **BAIL** para a entrada do bloco do JIT
 correspondente (nunca resultado diferente). `FC_HLE=0` desliga; `FC_HLE_LOG=1` loga.
 
 > Distinção: isso é o **`hle_fn`** (substitui a função por assinatura de bytes).
-> O **tier2** tem o mecanismo irmão de **padrões** (`idle_ff_sigs` — ex.
-> `chained-wait-loop-getter-cmp`, `wait-flag-task-loop`; `region_bad_sigs`/
-> `tier2_bad_pattern` — ex. exclusão de bloco que estriava o mslug6). Mesma ideia
-> de "identificar o padrão no jogo", camadas diferentes.
+> O decoder tem o mecanismo irmão de **padrões** (`idle_ff_sigs` — ex.
+> `chained-wait-loop-getter-cmp`, `wait-flag-task-loop`). Mesma ideia de
+> "identificar o padrão no jogo", camadas diferentes. (O tier2 — segundo
+> compilador de regiões — foi removido em 2026-10-10; plano 0.)
 
 ## 5. Validar (antes de medir)
 
-`FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL` com **tier2 desligado**:
-hash completo (RAM/VRAM/ARAM/ctx) em **todo** frame, `FC_HLE=0` × ligado,
-**idênticos**. Ex.: `lightxf` 560 frames + 380 com hash completo; emissor de
-strips 402 frames. Sem isso, não meça.
+`FC_STATE_HASH` + `FC_RTC_FIXED` + `FC_INPUT_NEUTRAL`: hash completo
+(RAM/VRAM/ARAM/ctx) em **todo** frame, `FC_HLE=0` × ligado, **idênticos**. Ex.:
+`lightxf` 560 frames + 380 com hash completo; emissor de strips 402 frames. Sem
+isso, não meça.
 
 ## 6. Medir (A/B)
 
@@ -108,6 +107,6 @@ tela. **Commite o marco** (código + docs) assim que validado.
 - `docs/tech_debits.md`: novo item com o ganho medido. `docs/history.md`: entrada
   com timestamp. `docs/current_plan.md`: estado do alvo.
 - **Alvos abertos do DC:** laços de vértice do DOA2/Shenmue II/Shenmue (a base
-  dumpada mostra o laço de vértices → SQ dominando nos quatro — DOA2 região tier2
-  #1 = 14% da emu; Shenmue II 7,5%); controle do AICA; **IDCT da Sofdec**
+  dumpada mostra o laço de vértices → SQ dominando nos quatro — DOA2 = 14% da
+  emu; Shenmue II 7,5%); controle do AICA; **IDCT da Sofdec**
   (`docs/fmv_plan.md`).

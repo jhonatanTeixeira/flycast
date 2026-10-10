@@ -112,7 +112,11 @@ harness é barato (no jogo a descarga chama o TA de verdade, o mesmo custo nos
 dois lados, o que dilui o ganho); as escritas na SQ vão direto para a memória
 nos dois lados (no emulador o JIT atual usa trampolim).
 
-## Gerador offline (`tools/tier2_gen.py`), v1
+## Gerador offline (`tools/tier2_gen.py`), v1 — removido com o tier2 (2026-10-10)
+
+> O gerador e o tier2 foram removidos do repositório (plano 0). A seção fica
+> como registro do método (região gerada do SHIL do dump, mesma interface do
+> harness); as regras da v1 valem para qualquer gerador futuro.
 
 Gera a região direto do SHIL do dump, com a mesma interface do harness:
 ```

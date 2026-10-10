@@ -27,7 +27,7 @@ timeout 40 sshpass -p ark ssh -o StrictHostKeyChecking=no ark@192.168.0.14 \
 ```
 
 - `-c /home/ark/r_noload.cfg` = **cold boot** (sem `auto_load` de savestate). É a política
-  nova; `r_t2off.cfg` = mesma config com `flycast2026_tier2 = disabled` (A/B).
+  nova. (O `r_t2off.cfg` era de quando havia o tier2, removido em 2026-10-10.)
 - `<core>`: `/home/ark/.config/retroarch/cores/flycast2026_libretro.so` (oficial do
   device) ou um `.so` de teste (ex.: `/home/ark/flycast_lazygd.so`).
 - `-s /roms2/<sistema>` = pasta de ROMs; `-d /roms2/bios` = BIOS.
@@ -68,16 +68,15 @@ descompressão do CHD (ver tech_debits 4.89).
   dá regressão silenciosa (sem erro/warning).
 - **Não use `-j$(nproc)`** (máquina compartilhada; watchdog de baixa-memória derruba).
   Use `-j1`/`-j2` e retome o `make` incremental se for interrompido.
-- **Não commite** nada sem o usuário pedir.
+- **Commite a cada marco validado** (código + docs), como pede o `CLAUDE.md` — o
+  estado bom não pode ficar só no working tree.
 
 ## Instrumentação (opt-in) útil
 
-- `FC_TIER2_DELAY_MS=N` — adia a ativação do tier2 em N ms (evita exceção de FPU no boot).
 - `FC_EXC_LOG=1` — loga exceções SH4.
 - `FC_JIT_TRACE=<arquivo>` (+ `FC_JIT_TRACE_ALL=1`, `FC_JIT_TRACE_BOOT=1`) — traça blocos.
 - `FC_DUMP_BLOCK=<vaddr,...>` — dumpa SH4/ARM64 de blocos.
 - `FC_BLOCK_PROF=1` — dumpa os blocos mais quentes em `/tmp/hot-blocks-<pid>.txt`.
-- `FC_TIER2_RACE=1` — detector de geração nos mapas do worker do tier2.
 
 Toda instrumentação nova deve ser **opt-in** (custo zero desligada) e registrada em
 `docs/tech_debits.md`.

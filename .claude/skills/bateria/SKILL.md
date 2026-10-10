@@ -48,8 +48,8 @@ timeout 30 sshpass -p ark ssh -o StrictHostKeyChecking=no ark@192.168.0.14 \
 - `<core>`: o `.so` de teste/deploy em uso (ex.: `/home/ark/flycast_lazygd.so` ou o
   oficial `/home/ark/.config/retroarch/cores/flycast2026_libretro.so`). **Anote qual
   core** rodou a bateria — os números só valem para aquele binário.
-- `r_noload.cfg` = cold boot (sem savestate). Para A/B de tier2 use `r_t2off.cfg`
-  (mesma config com `flycast2026_tier2 = disabled`).
+- `r_noload.cfg` = cold boot (sem savestate). (O `r_t2off.cfg` era de quando havia
+  o tier2, removido em 2026-10-10.)
 - `RETRORUN_BENCHMARK_ROLLING=1` = **janela rolante**: o benchmark guarda só os
   **últimos 40s** (descarta o dado antigo) e **não fecha o jogo** — reporta o JSON no
   fechamento (requer o `retrorun3` de 2026-09-29+). É o padrão da bateria: pega a cena
@@ -88,7 +88,7 @@ isso (ex.: "não bootou", "sem JSON") junto com a observação.
 Dreamcast) — **não crie seção nova por bateria nem por data.** A tabela é a fonte da
 verdade do último teste: substitua `Teste` (data), `VEL%`, `fps` e `Estado` com o que
 o usuário relatou (suavidade, hicups, glitch, freeze, "não boota", crash) + a
-condição (cold/savestate, tier2 on/off). Os números detalhados (core avg/p50/p95/p99,
+condição (cold/savestate, core usado). Os números detalhados (core avg/p50/p95/p99,
 underruns) ficam no JSON em `/roms2/dcbat/` ou no `docs/history.md`, não na tabela.
 
 ## Ao terminar a bateria

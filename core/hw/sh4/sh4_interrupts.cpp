@@ -156,7 +156,7 @@ bool Do_Exception(u32 epc, u32 expEvn, u32 CallVect)
 {
 	verify(sr.BL == 0);
 	// FC_EXC_LOG: diagnostico (opt-in). Loga as excecoes SH4 para achar a
-	// origem de um salto espurio ao vetor (ex.: 0C000100 no cvs2 com tier2).
+	// origem de um salto espurio ao vetor (ex.: 0C000100 no cvs2).
 	{
 		static int excLog = -1;
 		if (excLog == -1)

@@ -89,7 +89,7 @@
 | **emu** | `emu_thread_func` (`libretro.cpp:240-266`), iniciada no 1º `retro_run` (`libretro.cpp:1356`) | SH4 + JIT + scheduler; monta o contexto do TA (`TA_context`); escreve VRAM e paleta; chama `rend_start_render` (STARTRENDER, `pvr_regs.cpp:28-31`) e `rend_end_render` (RENDER_DONE, `spg.cpp:228-240`) | o áudio: o push de amostras bloqueia quando a fila do frontend enche (`audiostream.cpp:47-48`; "o loop fica regulado pelo backpressure do áudio", 4.18) |
 | **main / render** | thread do frontend que chama `retro_run` | `rend_single_frame` (`libretro.cpp:1366`): `Process` (parse do TA + conversão/upload de textura) e `Render` (submissão GL), depois `video_cb` (`libretro.cpp:1380`) | o frontend: com vsync+FIFO o `present` espera um slot a cada vblank; em mailbox nada espera (seção 4) |
 | **apresentação (retrorun)** | `present_worker_thread` (`retrorun/src/platform/platform_sdl.cpp:1643`) | dona da janela; faz o `SDL_GL_SwapWindow`/flip | o vsync |
-| **AICA render, tier2, CHD** | helpers parkeados (`docs/thread_separation_plan.md` §2) | não participam desta sincronização | — |
+| **AICA render, CHD** | helpers parkeados (`docs/thread_separation_plan.md` §2) | não participam desta sincronização | — |
 
 ### 1.2 Dados compartilhados
 

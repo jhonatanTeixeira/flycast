@@ -325,7 +325,7 @@ void rend_dump_split(const char *path)
 // flip (kofnw dropped 610 frames). Process + Render never waits on vsync.
 std::atomic<u32> g_rendWorkUsEma(0);
 // Custo da ULTIMA renderizacao (Process+Render, sem a espera). Usado pelo
-// orcamento por tempo do tier2/pacer (docs/frame_pacing_plan.md) para ajustar
+// orcamento por tempo do pacer (docs/frame_pacing_plan.md) para ajustar
 // o intervalo entre frames renderizados pela cauda do custo (TOC).
 u64 g_lastRendWorkUs;
 
@@ -663,11 +663,6 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
 		 rend_term_renderer();
 	  rend_create_renderer();
 	  rend_init_renderer();
-	  // FC_TIER2: o primeiro quadro PVR e o logo da SEGA / inicio do jogo --
-	  // marca o fim do boot para o tier2 (ver tier2_mark_game_started).
-	  extern void tier2_mark_game_started() __attribute__((weak));
-	  if (tier2_mark_game_started != nullptr)
-		 tier2_mark_game_started();
    }
    u64 t0 = rend_now_us();
    bool proc = renderer->Process(ctx);

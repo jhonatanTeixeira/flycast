@@ -498,11 +498,11 @@ void dc_run()
    }
    catch (SH4ThrownException& ex)
    {
-      // Robustez: uma excecao do guest (ex.: `iNimp` por uma regiao do tier2
-      // executando dados) que escape de um caminho sem catch chamava
-      // std::terminate e FECHAVA o emulador. Tratamos como o interpretador faz
-      // (Do_Exception -> handler do guest), para o jogo sobreviver; pode virar
-      // glitch, mas nao crash. Ver docs/bateria_2026-10-07_plan.md 0.1.
+      // Robustez: uma excecao do guest (ex.: `iNimp` ao executar dados) que
+      // escape de um caminho sem catch chamava std::terminate e FECHAVA o
+      // emulador. Tratamos como o interpretador faz (Do_Exception -> handler do
+      // guest), para o jogo sobreviver; pode virar glitch, mas nao crash.
+      // Ver docs/bateria_2026-10-07_plan.md 0.1.
       ERROR_LOG(BOOT, "SH4 exception escaped the run loop (epc=%08X evn=%03X) -- handled at the boundary", ex.epc, ex.expEvn);
       Do_Exception(ex.epc, ex.expEvn, ex.callVect);
    }
