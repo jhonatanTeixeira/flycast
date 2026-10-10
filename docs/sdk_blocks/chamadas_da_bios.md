@@ -344,11 +344,11 @@ Dump: `/mnt/1TB/dcbat/20261007-163759_Le_Mans_24_Hours__Europe___En_Fr_De_Es_I/j
 
 ```
 ; 8C045FF0-8C045FFA
-  8C045FF0  6BF6  mov.l @r15+,r11
-  8C045FF2  6CF6  mov.l @r15+,r12
-  8C045FF4  6DF6  mov.l @r15+,r13
-  8C045FF6  6EF6  mov.l @r15+,r14
-  8C045FF8  FEF9  fmov.s @r15+,fr14
+  8C045FF0  D702  mov.l @([8C045FFC]),r7
+  8C045FF2  D003  mov.l @([8C046000]),r0
+  8C045FF4  6002  mov.l @r0,r0
+  8C045FF6  402B  jmp @r0
+  8C045FF8  0009  nop
 ```
 
 ```

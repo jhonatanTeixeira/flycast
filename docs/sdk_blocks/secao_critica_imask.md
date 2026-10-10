@@ -21,7 +21,7 @@ Referência da comparação: **Dead or Alive 2 (USA)**.
 | Macross M3 | `8C0083F8`, `8C008456`, `8C1C5B7A`, `8C1EBE88` | 93 de 93 opcodes |
 | Marvel vs. Capcom 2 - New Age of Heroes (Europe) | `8C0083F8`, `8C008456` | 93 de 93 opcodes |
 | Napple Tale - Arsia in Daydream (Japan) (T-En by Cargodin v1.0) | `8C0083F8`, `8C008456`, `8C108CAE`, `8C10C514` | 93 de 93 opcodes |
-| Phantasy Star Online Ver. 2 (USA) (EnJaFrDeEs) | `8C0083F8`, `8C008456`, `8C3544BC`, `8C38D2E2` | 76 de 93 opcodes |
+| Phantasy Star Online Ver. 2 (USA) (EnJaFrDeEs) | `8C0083F8`, `8C008456`, `8C3544BC`, `8C38D2E2` | 93 de 93 opcodes |
 | Power Stone (USA) | `8C0083F8`, `8C008456` | 93 de 93 opcodes |
 | Project Justice (USA) | `8C0083F8`, `8C008456` | 93 de 93 opcodes |
 | Resident Evil - Code - Veronica (USA) (Disc 1) | `8C0083F8`, `8C008456`, `8C173854`, `8C17AFFE` | 93 de 93 opcodes |
@@ -3181,17 +3181,17 @@ Dump: `/mnt/1TB/dcbat/20261007-155901_Phantasy_Star_Online_Ver__2__USA___EnJaF/j
   8C008422  4008  shll2 r0
   8C008424  4008  shll2 r0
   8C008426  0302  stc SR,r3
-  8C008428  4F22  sts.l PR,@-r15
-  8C00842A  7FFC  add ##-4,r15
-  8C00842C  E500  mov ##0x00,r5
-  8C00842E  9719  mov.w @([8C008464]),r7
-  8C008430  D60D  mov.l @([8C008468]),r6
-  8C008432  6453  mov r5,r4
-  8C008434  7401  add ##1,r4
-  8C008436  2652  mov.l r5,@r6
-  8C008438  3472  cmp/hs r7,r4
-  8C00843A  8FFB  bf.s 8C008434
-  8C00843C  7604  add ##4,r6
+  8C008428  9213  mov.w @([8C008452]),r2
+  8C00842A  2329  and r2,r3
+  8C00842C  203B  or r3,r0
+  8C00842E  400E  ldc r0,SR
+  8C008430  50F9  mov.l @(36,r15),r0
+  8C008432  8804  cmp/eq ##0x04,R0
+  8C008434  8B03  bf 8C00843E
+  8C008436  E209  mov ##0x09,r2
+  8C008438  1F28  mov.l r2,@(32,r15)
+  8C00843A  A011  bra 8C008460
+  8C00843C  0009  nop
   8C00843E  D30B  mov.l @([8C00846C]),r3
   8C008440  D409  mov.l @([8C008468]),r4
   8C008442  9510  mov.w @([8C008466]),r5
@@ -3209,8 +3209,8 @@ Dump: `/mnt/1TB/dcbat/20261007-155901_Phantasy_Star_Online_Ver__2__USA___EnJaF/j
   8C00845A  6323  mov r2,r3
   8C00845C  2F22  mov.l r2,@r15
   8C00845E  7F04  add ##4,r15
-  8C008460  432B  jmp @r3
-  8C008462  4F26  lds.l @r15+,PR
+  8C008460  0002  stc SR,r0
+  8C008462  4009  shlr2 r0
   8C008464  4009  shlr2 r0
   8C008466  C90F  and ##15,R0
   8C008468  2F02  mov.l r0,@r15
@@ -3218,10 +3218,10 @@ Dump: `/mnt/1TB/dcbat/20261007-155901_Phantasy_Star_Online_Ver__2__USA___EnJaF/j
   8C00846C  9332  mov.w @([8C0084D4]),r3
   8C00846E  2039  and r3,r0
   8C008470  CBF0  or ##240,R0
-  8C008472  0000  nop0
-  8C008474  F4D4  fcmp/eq fr13,fr4_SD_F
-  8C008476  BEF4  bsr 8C008262
-  8C008478  1E31  mov.l r3,@(4,r14)
+  8C008472  400E  ldc r0,SR
+  8C008474  54F8  mov.l @(32,r15),r4
+  8C008476  D318  mov.l @([8C0084D8]),r3
+  8C008478  430B  jsr @r3
   8C00847A  0009  nop
   8C00847C  60F2  mov.l @r15,r0
   8C00847E  C90F  and ##15,R0
@@ -3277,8 +3277,8 @@ Dump: `/mnt/1TB/dcbat/20261007-155901_Phantasy_Star_Online_Ver__2__USA___EnJaF/j
   8C00845A  6323  mov r2,r3
   8C00845C  2F22  mov.l r2,@r15
   8C00845E  7F04  add ##4,r15
-  8C008460  432B  jmp @r3
-  8C008462  4F26  lds.l @r15+,PR
+  8C008460  0002  stc SR,r0
+  8C008462  4009  shlr2 r0
   8C008464  4009  shlr2 r0
   8C008466  C90F  and ##15,R0
   8C008468  2F02  mov.l r0,@r15
@@ -3286,10 +3286,10 @@ Dump: `/mnt/1TB/dcbat/20261007-155901_Phantasy_Star_Online_Ver__2__USA___EnJaF/j
   8C00846C  9332  mov.w @([8C0084D4]),r3
   8C00846E  2039  and r3,r0
   8C008470  CBF0  or ##240,R0
-  8C008472  0000  nop0
-  8C008474  F4D4  fcmp/eq fr13,fr4_SD_F
-  8C008476  BEF4  bsr 8C008262
-  8C008478  1E31  mov.l r3,@(4,r14)
+  8C008472  400E  ldc r0,SR
+  8C008474  54F8  mov.l @(32,r15),r4
+  8C008476  D318  mov.l @([8C0084D8]),r3
+  8C008478  430B  jsr @r3
   8C00847A  0009  nop
   8C00847C  60F2  mov.l @r15,r0
   8C00847E  C90F  and ##15,R0

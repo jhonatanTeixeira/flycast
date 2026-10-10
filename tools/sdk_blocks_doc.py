@@ -81,7 +81,7 @@ FAMILIES = [
               'protegida e restaura o IMASK. É o "mutex" do Dreamcast (um núcleo). Fica na '
               'área de sistema (`8C0083F8`), no mesmo endereço em todos os jogos.'),
     dict(file='memset_e_ocbp.md',
-         title='Laços de `memset` (16/32 bits) e `ocbp`',
+         title='Laços de `memset` (16 bits) e `ocbp`',
          sigs=['2471 76FF 7402 2668 8BFA', '2471 75FF 7402 2558 8BFA',
                '4509 4509 4501 7501 04A3 4510 8FFC 7420'], off=0, size=0x10, mode='func',
          ref='Napple',
@@ -103,27 +103,40 @@ def game_name(path):
 
 
 def load(path):
-    """pc -> lista de opcodes de cada bloco + mapa endereco -> opcode (uniao)."""
-    blocks, mem, pc = {}, {}, None
+    """Blocos na ordem de compilacao [(seq, pc, ops)] + endereco -> [(seq, opcode)].
+
+    O mesmo endereco pode ter codigo diferente ao longo da sessao (overlays): cada
+    janela usa, em cada endereco, o bloco compilado mais perto no tempo do bloco
+    em que a assinatura casou."""
+    blocks, mem, pc = [], {}, None
     for line in open(path, errors='ignore'):
         if line.startswith('B '):
             pc = int(line.split()[2], 16)
         elif line.startswith('G ') and pc is not None:
             ops = [int(x, 16) for x in line.split()[1:]]
-            blocks[pc] = ops
+            seq = len(blocks)
+            blocks.append((seq, pc, ops))
             for i, op in enumerate(ops):
-                mem[pc + 2 * i] = op
+                mem.setdefault(pc + 2 * i, []).append((seq, op))
     return blocks, mem
 
 
+def at(mem, a, seq):
+    v = mem.get(a)
+    if not v:
+        return None
+    return min(v, key=lambda x: abs(x[0] - seq))[1]
+
+
 def find(blocks, sig):
+    """{endereco: seq do primeiro bloco em que a assinatura aparece}"""
     s = [int(x, 16) for x in sig.split()]
-    out = set()
-    for pc, ops in blocks.items():
+    out = {}
+    for seq, pc, ops in blocks:
         for i in range(len(ops) - len(s) + 1):
             if ops[i:i + len(s)] == s:
-                out.add(pc + 2 * i)
-    return sorted(out)
+                out.setdefault(pc + 2 * i, seq)
+    return out
 
 
 def windows(fam, hits):
@@ -132,10 +145,10 @@ def windows(fam, hits):
     return [(h - fam['off'], h - fam['off'] + fam['size']) for h in hits]
 
 
-def listing(mem, lo, hi):
+def listing(mem, lo, hi, seq):
     lines, gap = [], False
     for a in range(lo, hi, 2):
-        op = mem.get(a)
+        op = at(mem, a, seq)
         if op is None:
             if not gap:
                 lines.append('  ...       (não compilado nesta sessão)')
@@ -159,13 +172,18 @@ def main():
             continue
         blocks, mem = load(path)
         for f in need:
-            hits = sorted({h for s in f['sigs'] for h in find(blocks, s)})
+            found_ = {}
+            for s in f['sigs']:
+                for h, sq in find(blocks, s).items():
+                    found_[h] = min(sq, found_.get(h, sq))
+            hits = sorted(found_)
             if not hits:
                 continue
             ws = []
-            for lo, hi in windows(f, hits):
-                ws.append((lo, hi, {a: mem[a] for a in range(lo, hi, 2) if a in mem},
-                           listing(mem, lo, hi)))
+            for (lo, hi), h in zip(windows(f, hits), hits if f['mode'] == 'func' else hits[:1]):
+                sq = found_[h]
+                ops = {a: at(mem, a, sq) for a in range(lo, hi, 2) if a in mem}
+                ws.append((lo, hi, ops, listing(mem, lo, hi, sq)))
             found[f['file']][g] = (path, ws)
         sys.stderr.write('lido %s\n' % g)
 
@@ -223,6 +241,11 @@ def main():
         'python3 tools/sdk_blocks_doc.py docs/sdk_blocks /mnt/1TB/dcbat_off/*/jit-*.txt \\',
         '    $(ls -r /mnt/1TB/dcbat/*/jit-*.txt)',
         '```', '',
+        'Cada família tem um arquivo irmão `<família>_pseudo.cpp`: pseudo-C++ (não compila '
+        'no core) que resolve todos os jogos da família, com `if/else` onde eles diferem. '
+        'É escrito à mão (não é gerado) e é a base do `hle_fn` relocável (4.125). '
+        'Variantes reais: threads do EGG (sem FPSCR inicial), seção crítica do PSO v2 '
+        '(chamadas a mais); o Maple do Shenmue só muda a ordem das instruções.', '',
         '| Família | Jogos | Onde |', '|---|---|---|'] + index) + '\n')
 
 
