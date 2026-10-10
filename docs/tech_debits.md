@@ -4,7 +4,7 @@
 > aprendidas dos resolvidos. A tabela completa (dezenas de itens com números, A/B e
 > desmontagens) está em `docs/arquivo/tech_debits_2026-09-13_a_2026-10-08.md` — as
 > referências "item 4.xx" dos outros docs apontam para lá. Itens novos continuam a
-> numeração (próximo livre: **5.8** / **4.127**).
+> numeração (próximo livre: **5.8** / **4.128**).
 >
 > Status: `não investigado` · `confirmado` · `parcial` · `aceito` · `opt-in`.
 > Ao resolver um item, remova a linha e, se houver lição, acrescente um bullet abaixo.
@@ -38,6 +38,7 @@
 | 4.119 | HLE `memset`/`ocbp` (5.4) **não validado**: sem `FC_STATE_HASH`; tempo não é bit-exato por construção (laço inteiro com um só `UpdateSystem` → interrupções atrasadas; o HLE do DOA2 faz ENTER por bloco); o "Le Mans `core_p95` 95→58 ms" veio de cold boot (cenas diferentes) e a rodada seguinte com o mesmo HLE deu p95 150 ms + `declared_fps` 7,5 + áudio em loop, sem separar do HLE. Teto do ganho: memset 2-6%, ocbp ≤1% da emu | validar |
 | 4.125 | Funções nativas são de **biblioteca do SDK** e o `hle_fn` só instala em endereço fixo: `lightxf`/`stripemit` (Napple) existem em Evolution 1/2, RE CV e Skies; o laço do DOA2 em MvC2 e Shenmue II (prefixo; falta comparar a função inteira). Tornar o `hle_fn` relocável — `docs/native_sdk_code.md`. Varredura automática (`tools/sdk_find.py`, `docs/sdk_find/`): 2.798 grupos em 2+ jogos; novos alvos T&L Shenmue II 6,0%, MvC2 6,1%, DOA2 6,3% | confirmado (prefixo), sem fix |
 | 4.126 | Espera de fim de quadro que **lê o TMU0** (grupo 009 do `sdk_find`, mesma função em 10 jogos de DC): gira até uma interrupção zerar uma flag ou estourar o timeout; o idle fast-forward não pega porque o 4.43 exclui laço que lê hardware. EGG ~9,6% da emu. Pular com segurança = avançar até o próximo evento sabendo o valor do TCNT0 nesse ponto. `docs/sdk_find/pseudo/espera_de_quadro_com_timeout_pseudo.cpp` | confirmado, sem fix |
+| 4.127 | Código quente do JIT não cabe na L1I e carrega peso morto: 90% do tempo em blocos = 80-160 KB (Shenmue II 345 KB) para 32 KB de L1I; 11-15% de cada bloco quente é caminho frio e 1-4% literal; blocos espalhados (DOA2 196 páginas de 4 KB); Shenmue executa a checagem de código em 24 dos 79 blocos mais quentes. Plano em `docs/jit_hot_path.md` | planejado |
 | 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |

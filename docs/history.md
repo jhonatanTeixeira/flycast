@@ -368,3 +368,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   por r8), IDCT da Sofdec em 7 jogos (010), cabeçalho de polígono Kamui2 em 13 jogos
   (012), e 008/009 que eram espera, não cópia (009 lê o TMU0 → 4.126). Paridade de r8
   corrigida na revisão. Nada validado com FC_STATE_HASH ainda.
+- **Plano `jit_hot_path` (4.127):** medição nos dumps + `perf` (`tools/jit_hotset.py`):
+  50% do tempo em blocos cabe na L1I (8-25 KB; Shenmue II 72 KB), 90% pede 80-345 KB;
+  frio + literais ~15-20% de cada bloco quente; empacotar só o quente corta ~25-33% das
+  linhas tocadas. Fases em `docs/jit_hot_path.md`.

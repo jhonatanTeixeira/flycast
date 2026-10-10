@@ -61,6 +61,11 @@
 - **Morton na GPU:** rodar a bateria Naomi + mslug6 antes de promover (4.103).
 - **DOA2/Zombie/Shenmue:** teto é o throughput do SH4 (4.20/4.34); só baratear o
   JIT por instrução (menos tráfego de contexto) move o número.
+- **Caminho quente do JIT** (`docs/jit_hot_path.md`, 4.127): 90% do tempo em blocos
+  pede 80-160 KB de código (Shenmue II 345 KB) contra 32 KB de L1I; ~15-20% de cada
+  bloco quente é frio/literal. Fases: separar quente/frio no emissor → versão por
+  página no lugar da checagem de código (Shenmue) → arena quente em ordem de execução →
+  menos bytes por instrução. Cada fase: `FC_STATE_HASH` idêntico + A/B. | pendente
 - **Standalone SDL:** plano futuro em `docs/standalone_plan.md` — não executar agora.
 
 ## Pendências de método/infra

@@ -33,7 +33,7 @@ dois é uma ferramenta de investigação legítima.
    experiência, P2 otimização), compactado; concluído vai para `history.md`.
 2. **`docs/tech_debits.md`** — só os débitos **abertos** + lições aprendidas dos
    resolvidos (compactado em 2026-10-08; a tabela completa com todos os números está
-   em `docs/arquivo/`). Itens novos seguem a numeração (próximo: 5.8 / 4.127);
+   em `docs/arquivo/`). Itens novos seguem a numeração (próximo: 5.8 / 4.128);
    ao resolver, remover a linha e, se couber, acrescentar um bullet de lição.
 3. **`docs/history.md`** — log cronológico com timestamp de tudo que foi feito.
    Adicionar uma entrada por sessão/marco relevante.
