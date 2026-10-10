@@ -363,3 +363,8 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   contenção em vez de Jaccard (o dump é parcial), SHIL como visão sem ordem.
   Reencontrou `lightxf`/`stripemit`/laço do DOA2; novos alvos de T&L no Shenmue II,
   MvC2 e DOA2 e cópias de memória em 8-10 jogos.
+- **Pseudo das 8 mais valiosas (`docs/sdk_find/pseudo/`):** T&L dos jogos de luta
+  (004/005/007/011; 004, 005 e o laço nativo do DOA2 são modos de uma rotina, despacho
+  por r8), IDCT da Sofdec em 7 jogos (010), cabeçalho de polígono Kamui2 em 13 jogos
+  (012), e 008/009 que eram espera, não cópia (009 lê o TMU0 → 4.126). Paridade de r8
+  corrigida na revisão. Nada validado com FC_STATE_HASH ainda.

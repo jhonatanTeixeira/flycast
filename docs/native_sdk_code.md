@@ -125,6 +125,11 @@ apontou novos alvos: T&L do Shenmue II (6,0%), do MvC2 (6,1%) e do DOA2 (6,3%) f
 laço já nativo, cópias de memória no Napple e no EGG (~5,5% cada) e a região quente
 `8C1C1xxx` do Napple (5,4%), todos presentes em vários jogos.
 
+Pseudo-C++ das 8 mais valiosas: `docs/sdk_find/pseudo/` (índice com o que cada uma é).
+Destaques: 004/005 e o laço nativo do DOA2 são modos da mesma rotina (despacho por r8);
+008/009 são espera (o 009 lê o TMU0 → 4.126); 010 é a IDCT da Sofdec em 7 jogos; 012 é o
+cabeçalho de polígono da Kamui2 em 13 jogos.
+
 ## 4. O que nativizar (e o que não)
 
 **Vale:** funções de **cálculo** quentes e autocontidas — T&L de vértice, emissores de

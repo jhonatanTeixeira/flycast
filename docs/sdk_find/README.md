@@ -42,7 +42,13 @@ Ranking: `descoberta.md`. Listagens dos 60 primeiros grupos: `auto/`. Contexto e
   `produto_escalar` = `fipr`, `copia` = laço com leitura e escrita, `switch` = `braf`,
   `contexto` = `rte`/SSR...). Dar nome de verdade exige ler a listagem.
 
-## Primeiros achados (não nativizados ainda)
+## Pseudo-C++ das mais valiosas
+
+`pseudo/` (índice em `pseudo/README.md`): 8 funções lidas a fundo, com o que cada uma é,
+as variantes reais por jogo e uma versão em C. Leitura mudou dois rótulos: 008 e 009
+("copia") são **espera**, não cópia; 010 é a IDCT da Sofdec/MPV.
+
+## Primeiros achados (rótulos automáticos; ver `pseudo/README.md` para o que são)
 
 | Grupo | Jogos | Onde pesa |
 |---|---|---|

@@ -98,6 +98,11 @@ MPS 1.14 (demux), ADXT 5.58, SJ 5.50 (junho de 1999).
 - VLC `8C209A52`/`8C209EC4`: ~5%. Compensação de movimento
   `8C20AE98`, `8C20B0CE…8C20B254`: ~6%.
 
+**Outra versão da IDCT (2026-10-10, `docs/sdk_find/pseudo/idct_do_macrobloco_pseudo.cpp`):**
+a IDCT float do macrobloco em Napple, EGG, Evolution 1/2, Grandia II, KOF Evolution e PSO
+v2 é a mesma função (369 de 369 opcodes; Napple `8C1C1658`, Evolution 1 `8C213F34`),
+diferente da do RE CV acima. Uma versão nativa dela vale para as FMVs dos 7 jogos.
+
 **Próximo:** IDCT do macrobloco nativa e exata (mesma ordem de operações de
 float do JIT: `ftrv` = `fmul` + 3 `fmla`), por assinatura da MPV 1.14,
 validada com `FC_STATE_HASH`. Depois compensação de movimento e VLC.
