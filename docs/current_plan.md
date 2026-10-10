@@ -30,7 +30,7 @@ jogo), `docs/jit_hot_path.md` (cache de instruções), `docs/sh4_threading_model
 | Etapa | O quê | Por quê nesta posição |
 |---|---|---|
 | **0** | Remoção do tier2 | aposentado (opt-in, OFF); tira ~3.000 linhas e os ganchos do emissor antes das etapas A e D mexerem nele, e libera a área reservada do cache para a D3 · **done 2026-10-10** |
-| **A** | `hle_fn` relocável | pré-requisito de todas as nativizações em mais de um jogo |
+| **A** | `hle_fn` relocável | pré-requisito de todas as nativizações em mais de um jogo · **done 2026-10-10** (A.4 Shenmue II validado; demais jogos dependem de cena) |
 | **B1 + C1** | T&L da biblioteca dos jogos de luta + espera de quadro do TMU | maiores pesos medidos (Shenmue II/DOA2 ~6%, EGG ~9,6%) |
 | **D1 + D2** | quente/frio no emissor + versão por página | genéricos, todos os jogos, sem mudar o código do corpo |
 | **B2, B4, B5** | cor ARGB (MvC2), cabeçalho Kamui2 (13 jogos), IDCT da Sofdec (7 jogos) | alto peso, funções fechadas |
@@ -61,10 +61,10 @@ e kofxi (Atomiswave). Commit `tier2` (2026-10-10).
 
 | # | Item | Status |
 |---|------|--------|
-| A.1 | Reconhecer função por **bytes em qualquer endereço**: no `ngen_Compile`, hash dos primeiros opcodes do bloco → candidatos → comparação completa dos trechos (offsets relativos à entrada). Tabela de funções com variantes (uma entrada por versão do SDK). | pendente |
-| A.2 | **Base relativa**: `ENTER`/`BAIL`, entradas extras (cabeça de laço) e literais PC-relativos viram `base + offset`; constantes do literal pool lidas da RAM do jogo na hora. | pendente |
-| A.3 | Migrar `lightxf`, `stripemit` e o laço do DOA2 para a forma relocável; `FC_STATE_HASH` idêntico no Napple e no DOA2 (não pode regredir). | pendente |
-| A.4 | Ligar nos outros jogos (código já idêntico, `docs/sdk_blocks/`): `lightxf`/`stripemit` em Evolution 1/2, RE CV, Skies; laço do DOA2 em MvC2, Shenmue II, Power Stone, Project Justice. Hash por jogo + A/B no Shenmue II e no Evolution 1. | pendente |
+| A.1 | Reconhecer função por **bytes em qualquer endereço**: no `ngen_Compile`, hash dos primeiros opcodes do bloco → candidatos → comparação completa dos trechos (offsets relativos à entrada). Tabela de funções com variantes (uma entrada por versão do SDK). | done 2026-10-10 |
+| A.2 | **Base relativa**: `ENTER`/`BAIL`, entradas extras (cabeça de laço) e literais PC-relativos viram `base + offset`; constantes do literal pool lidas da RAM do jogo na hora. | done 2026-10-10 |
+| A.3 | Migrar `lightxf`, `stripemit` e o laço do DOA2 para a forma relocável; `FC_STATE_HASH` idêntico no Napple e no DOA2 (não pode regredir). | done (Napple 760 / DOA2 1249 quadros, 0 dif) |
+| A.4 | Ligar nos outros jogos (código já idêntico, `docs/sdk_blocks/`): `lightxf`/`stripemit` em Evolution 1/2, RE CV, Skies; laço do DOA2 em MvC2, Shenmue II, Power Stone, Project Justice. Hash por jogo + A/B no Shenmue II e no Evolution 1. | **Shenmue II done** (HLE on×off idêntico, 283 quadros, base `8C1D8D22`); MvC2/Evolution 1: bytes idênticos confirmados no dump, mas o savestate não executa a função (falta cena); demais pendentes |
 
 ## B — Nativizações (por peso medido; pseudo pronto em `docs/sdk_find/pseudo/`)
 

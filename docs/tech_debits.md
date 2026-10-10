@@ -39,7 +39,7 @@
 | # | Item | Status |
 |---|------|--------|
 | 4.119 | HLE `memset`/`ocbp` (5.4) **não validado**: sem `FC_STATE_HASH`; tempo não é bit-exato por construção (laço inteiro com um só `UpdateSystem` → interrupções atrasadas; o HLE do DOA2 faz ENTER por bloco); o "Le Mans `core_p95` 95→58 ms" veio de cold boot (cenas diferentes) e a rodada seguinte com o mesmo HLE deu p95 150 ms + `declared_fps` 7,5 + áudio em loop, sem separar do HLE. Teto do ganho: memset 2-6%, ocbp ≤1% da emu | validar |
-| 4.125 | Funções nativas são de **biblioteca do SDK** e o `hle_fn` só instala em endereço fixo: `lightxf`/`stripemit` (Napple) existem em Evolution 1/2, RE CV e Skies; o laço do DOA2 em MvC2 e Shenmue II (prefixo; falta comparar a função inteira). Tornar o `hle_fn` relocável — `docs/native_sdk_code.md`. Varredura automática (`tools/sdk_find.py`, `docs/sdk_find/`): 2.798 grupos em 2+ jogos; novos alvos T&L Shenmue II 6,0%, MvC2 6,1%, DOA2 6,3% | confirmado (prefixo), sem fix |
+| 4.125 | `hle_fn` **relocável**: reconhece a função por bytes em qualquer endereço (base = vaddr − offset da entrada; literais lidos da RAM). Validado idêntico em Napple/DOA2 (regressão zero) e **Shenmue II** (laço do DOA2, base `8C1D8D22`, HLE on×off idêntico). Falta: Evolution 1/2, RE CV, Skies (`lightxf`/`stripemit`) e MvC2/Power Stone/Project Justice (laço do DOA2) — bytes idênticos confirmados no dump, mas o savestate não executa a função (precisa de cena); A/B de 2 rodadas em Shenmue II. `docs/native_sdk_code.md` | parcial (infra done; falta A/B/cenas) |
 | 4.126 | Espera de fim de quadro que **lê o TMU0** (grupo 009 do `sdk_find`, mesma função em 10 jogos de DC): gira até uma interrupção zerar uma flag ou estourar o timeout; o idle fast-forward não pega porque o 4.43 exclui laço que lê hardware. EGG ~9,6% da emu. Pular com segurança = avançar até o próximo evento sabendo o valor do TCNT0 nesse ponto. `docs/sdk_find/pseudo/espera_de_quadro_com_timeout_pseudo.cpp` | confirmado, sem fix |
 | 4.127 | Código quente do JIT não cabe na L1I e carrega peso morto: 90% do tempo em blocos = 80-160 KB (Shenmue II 345 KB) para 32 KB de L1I; 11-15% de cada bloco quente é caminho frio e 1-4% literal; blocos espalhados (DOA2 196 páginas de 4 KB); Shenmue executa a checagem de código em 24 dos 79 blocos mais quentes. Plano em `docs/jit_hot_path.md` | planejado |
 | 5.8 | Spill do HLE do DOA2: o cluster `8C101BC4..C4E` (~15% da emu) guarda e recarrega todo o estado a cada fronteira de bloco do JIT — rendeu só ~1%. Fechar o laço externo no nativo | confirmado, sem fix |
@@ -178,6 +178,16 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   Shenmue II (397) e Napple (760), cold boot com `FC_RTC_FIXED`+`FC_INPUT_NEUTRAL`
   — a área liberada só muda a *capacidade* do cache, não a emulação. Validar antes
   de comemorar "é só código morto" pagou: confirmou que os ganchos eram inertes.
+- **`hle_fn` relocável (2026-10-10, 4.125):** código de SDK é o mesmo em vários
+  jogos, então casar por **bytes** (não por endereço) vale para todos. O `Span`
+  guarda os bytes na base canônica e o match vai em `base + (addr − canonBase)`;
+  a base do jogo sai de `vaddr − entryOff[entrada]`, e `ENTER`/`BAIL`/literais
+  viram `base + offset`. Match completo (todos os spans) evita falso positivo;
+  casa em qualquer endereço onde a função apareça. Migração do Napple/DOA2 e
+  Shenmue II idênticas por `FC_STATE_HASH` — a relocação não muda o resultado,
+  só onde a função é reconhecida. **Mas o gancho só instala quando o bloco de
+  entrada é compilado:** savestate em cena que não roda a função (Evolution 1,
+  MvC2) não mostra o log — falta a cena, não é bug.
 - Exceção de FPU (`SR.FD`) no decode clobbera `next_pc`; checar em runtime.
 - Savestate: validar contagens lidas (board_count lixo) e abortar o load limpo.
 - Hipótese "N% do tempo ⇒ ganho grande" falhou várias vezes; o teto real vem do

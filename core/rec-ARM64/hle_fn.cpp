@@ -57,6 +57,33 @@ int hleLog()
 
 struct Span { u32 addr; u32 count; const u16 *ops; };
 
+// Funcao nativa de biblioteca, casavel em QUALQUER endereco (4.125): os Span
+// guardam os bytes na base canonica (canonBase, do jogo de referencia) e o
+// match e feito em base + (span.addr - canonBase). entryOff[e] e o
+// deslocamento da entrada e relativo a canonBase; a base do jogo sai de
+// vaddr - entryOff[entrada]. Bytes iguais em outro jogo => mesma funcao.
+struct HleFunc {
+	const char *name;
+	int funcId;
+	u32 canonBase;
+	const Span *spans;
+	size_t nSpans;
+	const u32 *entryOff;
+	size_t nEntries;
+};
+
+static bool func_matches(const HleFunc &f, u32 base)
+{
+	for (size_t i = 0; i < f.nSpans; i++)
+	{
+		const Span &s = f.spans[i];
+		const u8 *mem = GetMemPtr(base + (s.addr - f.canonBase), s.count * 2);
+		if (mem == nullptr || memcmp(mem, s.ops, s.count * 2) != 0)
+			return false;
+	}
+	return true;
+}
+
 // ---------------------------------------------------------------------------
 // lightxf: transformacao + iluminacao direcional de vertices (Napple Tale,
 // 8C14DDC0; estilo biblioteca SEGA). Entrada r4 = {n, src, ocb, dst(SQ)} +
@@ -81,17 +108,8 @@ const Span lightxf_sig[] = {
 	{ 0x8C14DE0C, sizeof(lightxf_s1) / 2, lightxf_s1 },
 	{ 0x8C14DE90, sizeof(lightxf_s2) / 2, lightxf_s2 },
 };
-
-bool spans_match(const Span *s, size_t n)
-{
-	for (size_t i = 0; i < n; i++)
-	{
-		const u8 *mem = GetMemPtr(s[i].addr, s[i].count * 2);
-		if (mem == nullptr || memcmp(mem, s[i].ops, s[i].count * 2) != 0)
-			return false;
-	}
-	return true;
-}
+// entradas (offset relativo a 8C14DDC0): 0 = funcao, 1 = cabeca do laco
+static const u32 lightxf_eo[] = { 0x00, 0x16 };
 
 inline bool is_ram(u32 a) { return ((a >> 29) & 7) != 7 && ((a >> 26) & 7) == 3; }
 inline u32 rd32(u32 a) { u32 v; memcpy(&v, &mem_b.data[a & RAM_MASK], 4); return v; }
@@ -113,10 +131,14 @@ u64 lightxf_decline(u32 entry, const char *why)
 	return 0;
 }
 
-// entry 0: 8C14DDC0 (entrada da funcao); entry 1: 8C14DDD6 (cabeca do laco)
-u64 lightxf_run(s32 c, u32 entry)
+// entry 0: +0x00 (entrada da funcao); entry 1: +0x16 (cabeca do laco)
+u64 lightxf_run(s32 c, u32 entry, u32 vaddr)
 {
-	static const u32 lit = 0x8C14DE08;	// mov.l @(disp,PC),r1 (DDEA)
+	// base do jogo = endereco da entrada - offset canonico; tudo abaixo usa A()
+	const u32 CANON = 0x8C14DDC0;
+	const u32 base = vaddr - lightxf_eo[entry];
+#define A(x) (base + ((u32)(x) - CANON))
+	const u32 lit = A(0x8C14DE08);		// mov.l @(disp,PC),r1 (DDEA)
 
 	// so o modo simples de FPU (fmov.s de 32 bits, precisao simples)
 	if (fpscr.PR || fpscr.SZ)
@@ -272,13 +294,13 @@ u64 lightxf_run(s32 c, u32 entry)
 		{ \
 			c += sh4_sched_timeslice; \
 			FLUSH(); \
-			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
-			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
+			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(A(addr)); goto out; } \
+			if (!Sh4cntx.CpuRunning) { next = A(addr); goto out; } \
 			RELOAD(); \
 		} \
 	} while (0)
 	// Sai na entrada do bloco `addr` sem descontar nada: o JIT continua dali.
-#define BAIL(addr) do { lightxf_stats.bails++; next = addr; goto out_bail; } while (0)
+#define BAIL(addr) do { lightxf_stats.bails++; next = A(addr); goto out_bail; } while (0)
 
 	RELOAD();
 	bool gpuCmp = false;
@@ -578,6 +600,7 @@ out:
 #undef FTRV
 #undef ENTER
 #undef BAIL
+#undef A
 }
 
 // ---------------------------------------------------------------------------
@@ -609,6 +632,8 @@ const Span strip_sig[] = {
 	{ 0x8C14D440, sizeof(strip_s0) / 2, strip_s0 },
 	{ 0x8C14D586, sizeof(strip_s1) / 2, strip_s1 },
 };
+// entradas (offset relativo a 8C14D440): 0 = funcao, 1 = laco do vertice, 2 = cabeca da strip
+static const u32 strip_eo[] = { 0x00, 0xB6, 0x32 };
 
 Stats strip_stats;
 
@@ -623,11 +648,14 @@ inline u32 sh4_shld(u32 rn, u32 rm)
 	return rn >> (((~rm) & 31) + 1);
 }
 
-// entry 0: 8C14D440 (entrada); 1: 8C14D4F6 (laco do vertice); 2: 8C14D472 (cabeca da strip)
-u64 stripemit_run(s32 c, u32 entry)
+// entry 0: +0x00 (entrada); 1: +0xB6 (laco do vertice); 2: +0x32 (cabeca da strip)
+u64 stripemit_run(s32 c, u32 entry, u32 vaddr)
 {
-	static const u32 lit5A8 = 0x8C14D5A8, lit5AC = 0x8C14D5AC, lit5B0 = 0x8C14D5B0;
-	static const u32 lit584 = 0x8C14D584, lit5B4 = 0x8C14D5B4, lit5B8 = 0x8C14D5B8;
+	const u32 CANON = 0x8C14D440;
+	const u32 base = vaddr - strip_eo[entry];
+#define A(x) (base + ((u32)(x) - CANON))
+	const u32 lit5A8 = A(0x8C14D5A8), lit5AC = A(0x8C14D5AC), lit5B0 = A(0x8C14D5B0);
+	const u32 lit584 = A(0x8C14D584), lit5B4 = A(0x8C14D5B4), lit5B8 = A(0x8C14D5B8);
 
 	if (fpscr.PR || fpscr.SZ != (entry == 0 ? 0u : 1u))
 		return 0;
@@ -685,8 +713,8 @@ u64 stripemit_run(s32 c, u32 entry)
 		{ \
 			c += sh4_sched_timeslice; \
 			FLUSH(); \
-			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
-			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
+			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(A(addr)); goto out; } \
+			if (!Sh4cntx.CpuRunning) { next = A(addr); goto out; } \
 			RELOAD(); \
 		} \
 	} while (0)
@@ -916,6 +944,7 @@ out:
 #undef RELOAD
 #undef FLUSH
 #undef ENTER
+#undef A
 }
 
 
@@ -979,11 +1008,18 @@ const Span doa2_sig[] = {
 	{ 0x8C101C3A, sizeof(doa2_s_C3A) / 2, doa2_s_C3A },
 	{ 0x8C101C4E, sizeof(doa2_s_C4E) / 2, doa2_s_C4E },
 };
+// entradas (offset relativo a 8C101BC2), na ordem dos ids 0x400..0x40E
+static const u32 doa2_eo[] = {
+	0x00, 0x02, 0x20, 0x2A, 0x2E, 0x3C, 0x46, 0x4A, 0x4C, 0x5E, 0x64, 0x6C, 0x76, 0x78, 0x8C,
+};
 
 Stats doa2_stats;
 
-u64 doa2_run(s32 c, u32 entry)
+u64 doa2_run(s32 c, u32 entry, u32 vaddr)
 {
+	const u32 CANON = 0x8C101BC2;
+	const u32 base = vaddr - doa2_eo[entry];
+#define A(x) (base + ((u32)(x) - CANON))
 	// base do laco: FPSCR.SZ=1 (fmov.s move pares); precisao simples
 	if (fpscr.PR || fpscr.SZ != 1)
 		return 0;
@@ -1052,8 +1088,8 @@ u64 doa2_run(s32 c, u32 entry)
 		{ \
 			c += sh4_sched_timeslice; \
 			FLUSH(); \
-			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(addr); goto out; } \
-			if (!Sh4cntx.CpuRunning) { next = addr; goto out; } \
+			if (UpdateSystem() != 0) { next = rdv_DoInterrupts_pc(A(addr)); goto out; } \
+			if (!Sh4cntx.CpuRunning) { next = A(addr); goto out; } \
 			RELOAD(); \
 		} \
 	} while (0)
@@ -1115,7 +1151,7 @@ bc4_body:	// 8C101BC4: carrega par, ftrv, dt r3, bt.s 8C101C5C
 	T = r3 == 0;
 	r0 = RD32(r4); r4 += 4;
 	r1 = r14;			// slot do bt.s
-	if (T) { next = 0x8C101C5C; goto out_bail; }
+	if (T) { next = A(0x8C101C5C); goto out_bail; }
 	// cai no 8C101BE2
 
 be2_top:
@@ -1215,7 +1251,7 @@ c3a_body:	// 8C101C3A: 2 fmul, 4 pares + cabecalho de 32 bytes na SQ; bt.s 8C101
 	r6 -= 8; SQP(f6, f7, r6);
 	r6 -= 8; SQP(f4, f5, r6);
 	SQI(r7, r6);			// slot do bt.s
-	if (T) { next = 0x8C101C52; goto out_bail; }
+	if (T) { next = A(0x8C101C52); goto out_bail; }
 	// cai no 8C101C4E
 
 c4e_top:
@@ -1251,6 +1287,7 @@ out:
 #undef FTRV
 #undef FIPR
 #undef FTRC
+#undef A
 }
 
 
@@ -1364,40 +1401,32 @@ bool hle_fn_lookup(u32 vaddr, u32 *id)
 		}
 	}
 
-	struct Entry { u32 vaddr, id; const Span *sig; size_t n; const char *name; };
-	static const Entry entries[] = {
-		{ 0x8C14DDC0, 0x000, lightxf_sig, sizeof(lightxf_sig) / sizeof(lightxf_sig[0]), "lightxf (8C14DDC0)" },
-		{ 0x8C14DDD6, 0x001, lightxf_sig, sizeof(lightxf_sig) / sizeof(lightxf_sig[0]), "lightxf (8C14DDC0)" },
-		{ 0x8C14D440, 0x100, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
-		{ 0x8C14D4F6, 0x101, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
-		{ 0x8C14D472, 0x102, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]), "stripemit (8C14D440)" },
-		{ 0x8C101BC2, 0x400, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BC2)" },
-		{ 0x8C101BC4, 0x401, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BC4)" },
-		{ 0x8C101BE2, 0x402, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BE2)" },
-		{ 0x8C101BEC, 0x403, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BEC)" },
-		{ 0x8C101BF0, 0x404, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BF0)" },
-		{ 0x8C101BFE, 0x405, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101BFE)" },
-		{ 0x8C101C08, 0x406, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C08)" },
-		{ 0x8C101C0C, 0x407, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C0C)" },
-		{ 0x8C101C0E, 0x408, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C0E)" },
-		{ 0x8C101C20, 0x409, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C20)" },
-		{ 0x8C101C26, 0x40A, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C26)" },
-		{ 0x8C101C2E, 0x40B, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C2E)" },
-		{ 0x8C101C38, 0x40C, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C38)" },
-		{ 0x8C101C3A, 0x40D, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C3A)" },
-		{ 0x8C101C4E, 0x40E, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]), "doa2 (8C101C4E)" },
+	// Funcoes de biblioteca casaveis em qualquer endereco (4.125): a base do
+	// jogo sai de vaddr - entryOff[entrada] e o match completo (todos os Span)
+	// decide. Uma variante de SDK = bytes diferentes = outra HleFunc.
+	static const HleFunc funcs[] = {
+		{ "lightxf", 0, 0x8C14DDC0, lightxf_sig, sizeof(lightxf_sig) / sizeof(lightxf_sig[0]),
+			lightxf_eo, sizeof(lightxf_eo) / sizeof(lightxf_eo[0]) },
+		{ "stripemit", 1, 0x8C14D440, strip_sig, sizeof(strip_sig) / sizeof(strip_sig[0]),
+			strip_eo, sizeof(strip_eo) / sizeof(strip_eo[0]) },
+		{ "doa2", 4, 0x8C101BC2, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]),
+			doa2_eo, sizeof(doa2_eo) / sizeof(doa2_eo[0]) },
 	};
-	for (const Entry &e : entries)
+	for (const HleFunc &f : funcs)
 	{
-		if (e.vaddr != vaddr || !spans_match(e.sig, e.n))
-			continue;
-		static u32 loggedMask;
-		const u32 bit = 1u << (e.id >> 8);
-		if (!(loggedMask & bit))
-			fprintf(stderr, "hle: %s instalada\n", e.name);
-		loggedMask |= bit;
-		*id = e.id;
-		return true;
+		for (size_t e = 0; e < f.nEntries; e++)
+		{
+			const u32 base = vaddr - f.entryOff[e];
+			if (!func_matches(f, base))
+				continue;
+			static u32 loggedMask;
+			const u32 bit = 1u << f.funcId;
+			if (!(loggedMask & bit))
+				fprintf(stderr, "hle: %s instalada (base %08X)\n", f.name, base);
+			loggedMask |= bit;
+			*id = ((u32)f.funcId << 8) | (u32)e;
+			return true;
+		}
 	}
 	return false;
 }
@@ -1408,11 +1437,11 @@ extern "C" u64 hle_fn_run(s32 cycles, u32 id, u32 vaddr)
 {
 	switch (id >> 8)
 	{
-	case 0: return lightxf_run(cycles, id & 0xFF);
-	case 1: return stripemit_run(cycles, id & 0xFF);
+	case 0: return lightxf_run(cycles, id & 0xFF, vaddr);
+	case 1: return stripemit_run(cycles, id & 0xFF, vaddr);
 	case 2: return memset_run(cycles, id & 0xFF, vaddr);
 	case 3: return ocbp_run(cycles, id & 0xFF, vaddr);
-	case 4: return doa2_run(cycles, id & 0xFF);
+	case 4: return doa2_run(cycles, id & 0xFF, vaddr);
 	default: return 0;
 	}
 }

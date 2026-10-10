@@ -403,3 +403,19 @@ desligado), frame a frame **idêntico** — DOA2 1241 quadros, Shenmue II 397, N
 760, 0 diferenças (RAM/VRAM/ARAM/ctx a cada 60). Boot ok em MvC2, cvs2 (Naomi) e
 kofxi (Atomiswave). Detalhe e lição no `tech_debits.md`; números do tier2 seguem em
 `docs/arquivo/`.
+
+## 2026-10-10 — Etapa A: `hle_fn` relocável (4.125)
+
+As funções nativas são de **biblioteca do SDK** (mesmos bytes em vários jogos), mas
+o `hle_fn` só instalava no endereço fixo do Napple/DOA2. Agora casa por **bytes em
+qualquer endereço**: `Span` na base canônica, match em `base + (addr − canonBase)`,
+base = `vaddr − entryOff[entrada]`; `ENTER`/`BAIL`/literais PC-relativos viram
+`base + offset` (literal pool lido da RAM). Match completo de todos os spans (sem
+falso positivo). Só `hle_fn.cpp` mudou; ganchos do JIT intactos.
+
+**Validado (FC_STATE_HASH+FC_RTC_FIXED+FC_INPUT_NEUTRAL):** Napple 760 quadros e
+DOA2 1249 idênticos ao core anterior (HLE ainda instala na base canônica); **Shenmue
+II** (savestate) com o laço do DOA2 na base `8C1D8D22`: HLE on × off **idênticos**
+(283 quadros) — o Shenmue II agora usa o nativo. MvC2 e Evolution 1 têm os bytes
+idênticos (confirmado no dump), mas o savestate não executa a função (falta cena).
+Falta A/B de 2 rodadas no Shenmue II e ligar as demais cenas (4.125).

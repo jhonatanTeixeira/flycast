@@ -1,7 +1,9 @@
 # Código de SDK nos jogos de Dreamcast: identificar e nativizar
 
-Status: **levantamento (2026-10-10)**, nada implementado. Item aberto: `tech_debits.md`
-4.125. Irmão: `docs/sh4_threading_model.md` (biblioteca de threads, IMASK, `tas.b`).
+Status: **levantamento (2026-10-10)**; o `hle_fn` **relocável** (seção 5) foi
+implementado no mesmo dia — reconhece por bytes em qualquer endereço, validado
+idêntico em Napple, DOA2 e Shenmue II (4.125). Item: `tech_debits.md` 4.125.
+Irmão: `docs/sh4_threading_model.md` (biblioteca de threads, IMASK, `tas.b`).
 
 Base: os 60 dumps do JIT em `/mnt/1TB` (`dcbat/`, `dcbat_off/`), `tools/sh4dis.py`,
 `tools/sh4_ctx_scan.py` (`find` = sequência de opcodes em todos os dumps) e o `perf`
