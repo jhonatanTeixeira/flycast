@@ -25,6 +25,14 @@ Estes são os candidatos perfeitos para a abordagem atual do projeto (HLE via as
 
 ## 2. Spinlocks e Mutexes do Sistema Operacional (`tas.b`)
 
+> **Revisão 2026-10-10 (desmontagem do DOA2, dumps de `/mnt/1TB`):** não é laço de
+> espera. Os padrões 6/15/21/32 são **try-lock** na entrada de funções do SDK
+> (`8C136034…8C1362A0`, mesmos endereços em ~20 jogos): `tas.b @trava; bt` → chama
+> o despachante `8C1353B0` com um código de comando (r5 = 0x0A/0x0B/0x0C/0x0E) e
+> solta a trava (`mov.b #0`). Sem volta para trás; trava ocupada = sai sem esperar.
+> O "ratio 9,8" é a instrução isolada, e o `perf` dá `tas.b` 0,0% da emu.
+> A lógica de **threads** que existe está em outro lugar (ver `tech_debits.md`, Lições).
+
 **Padrões Identificados:** 6, 15, 21, 32
 **Assinaturas Típicas:** Contêm a infame instrução `tas.b @r0` seguida imediatamente por um `bt` (branch if true) ou `bf`.
 **Contexto no Jogo:** O Katana/Shinobi SDK usando polling ativo ("Test-and-Set") para aguardar um recurso do sistema liberar (ex: fila do AICA). O JIT fica preso traduzindo um laço inútil que só gasta bateria e CPU do R36.

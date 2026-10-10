@@ -138,6 +138,16 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   tamanho fixo; rewrite não pode assumir `x0` = endereço.
 - Anti-SMC: stores em página de código via stub + bitmap; leituras dobradas pelo
   SSA precisam ser invalidadas por escrita.
+- **Threads nos jogos de DC (2026-10-10, varredura dos dumps em `/mnt/1TB`):** existe
+  uma biblioteca de threads **preemptiva/por troca de contexto** ligada em 10 jogos
+  (Napple `8C16BB28…8C16BD74`, EGG, Grandia II, RE CV, Evolution 1 e 2, Le Mans,
+  Macross M3, PSO v2, KOF Evo; endereço muda por jogo, bytes iguais). Cria a pilha da
+  thread (entrada r6, arg r7, SR, FPSCR), cede por "exceção falsa" (`ldc SSR/SPC` com
+  o PR e salta para o escalonador), salva tudo (r0-r14, bancos, 32 floats, GBR, MAC,
+  SPC/SSR), escolhe a próxima em C e volta com `rte`. Custo medido: ~0,5% da emu
+  (Napple, EGG; só esses têm amostras). TR Chronicles usa o kernel do WinCE (SPC/SSR
+  próprios). Os `tas.b` do SDK são try-lock, não espera. Os "mutex" de verdade são
+  `ldc SR` mascarando interrupção (`8C0084xx`, 21 jogos). Não é alvo de performance.
 - Idle: assinaturas por **forma**, exigindo desvio para trás e apertado; laço de
   espera encadeado e de contagem precisam de avanço até o evento; checar "endereço é
   RAM" para não pular timer de hardware; varredura (`strlen`) não é espera.

@@ -339,3 +339,12 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   triângulos + translúcido ordenado sem escrita de Z. Chão do Evolution 1 completo,
   Napple com bem menos defeitos (usuário), custo ~0 (render +0,1 ms). Core oficial
   md5 `5525c6b0`, backup `*-pre-trsort-20261009`.
+
+### 2026-10-10 — threads nos jogos de DC (varredura dos dumps)
+
+- Pedido do usuário: achar nos dumps de `/mnt/1TB` a lógica de threads. Varredura de
+  60 dumps por `rte`/`ldc SSR/SPC`/bancos/`tas.b`: biblioteca de troca de contexto
+  completa em 10 jogos (mesmos bytes); ~0,5% da emu onde há amostra. Os "spinlocks
+  `tas.b`" do `padroes_ineficiencia_analise.md` são try-lock do SDK (corrigido lá).
+  Lição em `tech_debits.md`. `sh4clock`: d12 era o padrão antigo, d10 ganho geral,
+  d8 piorou a maioria (lição corrigida).
