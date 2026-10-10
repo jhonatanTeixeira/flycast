@@ -148,7 +148,8 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   SPC/SSR), escolhe a próxima em C e volta com `rte`. Custo medido: ~0,5% da emu
   (Napple, EGG; só esses têm amostras). TR Chronicles usa o kernel do WinCE (SPC/SSR
   próprios). Os `tas.b` do SDK são try-lock, não espera. Os "mutex" de verdade são
-  `ldc SR` mascarando interrupção (`8C0084xx`, 21 jogos). Não é alvo de performance.
+  `ldc SR` mascarando interrupção (`8C0084xx`, 21 jogos). Detalhe e a análise de
+  paralelizar no ARM64 em `docs/sh4_threading_model.md`.
 - Idle: assinaturas por **forma**, exigindo desvio para trás e apertado; laço de
   espera encadeado e de contagem precisam de avanço até o evento; checar "endereço é
   RAM" para não pular timer de hardware; varredura (`strlen`) não é espera.
