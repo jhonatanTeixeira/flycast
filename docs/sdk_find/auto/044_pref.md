@@ -1,0 +1,253 @@
+# 044_pref
+
+> Gerado por `tools/sdk_find.py`. Jogos: 7 · variantes (sequências normalizadas distintas): 1 · tempo perf somado: 0.97% da emu.
+
+| Jogo | Entrada | Instr. | Tempo perf |
+|---|---|---|---|
+| Elemental Gimmick Gear v1.001 (1999)(Vatical)(US)[!] | `8C0B0F08` | 233 | 0.01% |
+| Evolution - The World of Sacred Device (USA) | `8C214A58` | 233 | 0.00% |
+| Evolution 2 - Far Off Promise (USA) | `8C222138` | 233 | 0.00% |
+| Grandia II (USA) | `8C14195C` | 233 | 0.00% |
+| King of Fighters The - Evolution (USA) (EnJaEsPt) | `8C3E57BC` | 233 | 0.00% |
+| Napple Tale - Arsia in Daydream (Japan) (T-En by Cargodin v1.0) | `8C1C217C` | 233 | 0.96% |
+| Phantasy Star Online Ver. 2 (USA) (EnJaFrDeEs) | `8C4124F8` | 233 | 0.00% |
+
+## Elemental Gimmick Gear v1.001 (1999)(Vatical)(US)[!] `8C0B0F08`
+
+Dump: `/mnt/1TB/dcbat_off/20261007-185447_Elemental_Gimmick_Gear_v1_001__1999__Vat/jit-2004.txt`
+
+```
+  8C0B0F08  2FE6  mov.l r14,@-r15
+  8C0B0F0A  6E63  mov r6,r14
+  8C0B0F0C  5050  mov.l @(0,r5),r0
+  8C0B0F0E  F3FD  fschg
+  8C0B0F10  5751  mov.l @(4,r5),r7
+  8C0B0F12  5653  mov.l @(12,r5),r6
+  8C0B0F14  5552  mov.l @(8,r5),r5
+  8C0B0F16  2FD6  mov.l r13,@-r15
+  8C0B0F18  ED40  mov ##0x40,r13
+  8C0B0F1A  2FC6  mov.l r12,@-r15
+  8C0B0F1C  6353  mov r5,r3
+  8C0B0F1E  2FB6  mov.l r11,@-r15
+  8C0B0F20  4D00  shll r13
+  8C0B0F22  2FA6  mov.l r10,@-r15
+  8C0B0F24  EB06  mov ##0x06,r11
+  8C0B0F26  2F96  mov.l r9,@-r15
+  8C0B0F28  4E00  shll r14
+  8C0B0F2A  8D4D  bt.s 8C0B0FC8
+  8C0B0F2C  EC08  mov ##0x08,r12
+  8C0B0F2E  37DC  add r13,r7
+  8C0B0F30  6264  mov.b @r6+,r2
+  8C0B0F32  6154  mov.b @r5+,r1
+  8C0B0F34  622C  extu.b r2,r2
+  8C0B0F36  6A64  mov.b @r6+,r10
+  8C0B0F38  611C  extu.b r1,r1
+  8C0B0F3A  6954  mov.b @r5+,r9
+  8C0B0F3C  312C  add r2,r1
+  8C0B0F3E  7101  add ##1,r1
+  8C0B0F40  4121  shar r1
+  8C0B0F42  2310  mov.b r1,@r3
+  8C0B0F44  7301  add ##1,r3
+  8C0B0F46  6264  mov.b @r6+,r2
+  8C0B0F48  6AAC  extu.b r10,r10
+  8C0B0F4A  6154  mov.b @r5+,r1
+  8C0B0F4C  699C  extu.b r9,r9
+  8C0B0F4E  39AC  add r10,r9
+  8C0B0F50  7901  add ##1,r9
+  8C0B0F52  4921  shar r9
+  8C0B0F54  2390  mov.b r9,@r3
+  8C0B0F56  7301  add ##1,r3
+  8C0B0F58  622C  extu.b r2,r2
+  8C0B0F5A  6A64  mov.b @r6+,r10
+  8C0B0F5C  611C  extu.b r1,r1
+  8C0B0F5E  6954  mov.b @r5+,r9
+  8C0B0F60  312C  add r2,r1
+  8C0B0F62  7101  add ##1,r1
+  8C0B0F64  4121  shar r1
+  8C0B0F66  2310  mov.b r1,@r3
+  8C0B0F68  7301  add ##1,r3
+  8C0B0F6A  6AAC  extu.b r10,r10
+  8C0B0F6C  6264  mov.b @r6+,r2
+  8C0B0F6E  699C  extu.b r9,r9
+  8C0B0F70  6154  mov.b @r5+,r1
+  8C0B0F72  39AC  add r10,r9
+  8C0B0F74  7901  add ##1,r9
+  8C0B0F76  4921  shar r9
+  8C0B0F78  2390  mov.b r9,@r3
+  8C0B0F7A  7301  add ##1,r3
+  8C0B0F7C  622C  extu.b r2,r2
+  8C0B0F7E  6A64  mov.b @r6+,r10
+  8C0B0F80  611C  extu.b r1,r1
+  8C0B0F82  6954  mov.b @r5+,r9
+  8C0B0F84  312C  add r2,r1
+  8C0B0F86  7101  add ##1,r1
+  8C0B0F88  4121  shar r1
+  8C0B0F8A  2310  mov.b r1,@r3
+  8C0B0F8C  7301  add ##1,r3
+  8C0B0F8E  6AAC  extu.b r10,r10
+  8C0B0F90  6264  mov.b @r6+,r2
+  8C0B0F92  699C  extu.b r9,r9
+  8C0B0F94  6154  mov.b @r5+,r1
+  8C0B0F96  39AC  add r10,r9
+  8C0B0F98  7901  add ##1,r9
+  8C0B0F9A  4921  shar r9
+  8C0B0F9C  2390  mov.b r9,@r3
+  8C0B0F9E  7301  add ##1,r3
+  8C0B0FA0  622C  extu.b r2,r2
+  8C0B0FA2  6A64  mov.b @r6+,r10
+  8C0B0FA4  611C  extu.b r1,r1
+  8C0B0FA6  6954  mov.b @r5+,r9
+  8C0B0FA8  312C  add r2,r1
+  8C0B0FAA  7101  add ##1,r1
+  8C0B0FAC  4121  shar r1
+  8C0B0FAE  2310  mov.b r1,@r3
+  8C0B0FB0  7301  add ##1,r3
+  8C0B0FB2  6AAC  extu.b r10,r10
+  8C0B0FB4  699C  extu.b r9,r9
+  8C0B0FB6  39AC  add r10,r9
+  8C0B0FB8  7901  add ##1,r9
+  8C0B0FBA  4921  shar r9
+  8C0B0FBC  4C10  dt r12
+  8C0B0FBE  2390  mov.b r9,@r3
+  8C0B0FC0  8FB6  bf.s 8C0B0F30
+  8C0B0FC2  7301  add ##1,r3
+  8C0B0FC4  A062  bra 8C0B108C
+  8C0B0FC6  0009  nop
+  8C0B0FC8  6264  mov.b @r6+,r2
+  8C0B0FCA  6154  mov.b @r5+,r1
+  8C0B0FCC  622C  extu.b r2,r2
+  8C0B0FCE  6A64  mov.b @r6+,r10
+  8C0B0FD0  611C  extu.b r1,r1
+  8C0B0FD2  6954  mov.b @r5+,r9
+  8C0B0FD4  312C  add r2,r1
+  8C0B0FD6  6275  mov.w @r7+,r2
+  8C0B0FD8  7101  add ##1,r1
+  8C0B0FDA  4121  shar r1
+  8C0B0FDC  312C  add r2,r1
+  8C0B0FDE  6AAC  extu.b r10,r10
+  8C0B0FE0  011C  mov.b @(R0,r1),r1
+  8C0B0FE2  699C  extu.b r9,r9
+  8C0B0FE4  39AC  add r10,r9
+  8C0B0FE6  2310  mov.b r1,@r3
+  8C0B0FE8  7301  add ##1,r3
+  8C0B0FEA  6A75  mov.w @r7+,r10
+  8C0B0FEC  7901  add ##1,r9
+  8C0B0FEE  6264  mov.b @r6+,r2
+  8C0B0FF0  4921  shar r9
+  8C0B0FF2  6154  mov.b @r5+,r1
+  8C0B0FF4  39AC  add r10,r9
+  8C0B0FF6  622C  extu.b r2,r2
+  8C0B0FF8  099C  mov.b @(R0,r9),r9
+  8C0B0FFA  611C  extu.b r1,r1
+  8C0B0FFC  312C  add r2,r1
+  8C0B0FFE  2390  mov.b r9,@r3
+  8C0B1000  7301  add ##1,r3
+  8C0B1002  6275  mov.w @r7+,r2
+  8C0B1004  7101  add ##1,r1
+  8C0B1006  6A64  mov.b @r6+,r10
+  8C0B1008  4121  shar r1
+  8C0B100A  6954  mov.b @r5+,r9
+  8C0B100C  312C  add r2,r1
+  8C0B100E  6AAC  extu.b r10,r10
+  8C0B1010  011C  mov.b @(R0,r1),r1
+  8C0B1012  699C  extu.b r9,r9
+  8C0B1014  39AC  add r10,r9
+  8C0B1016  2310  mov.b r1,@r3
+  8C0B1018  7301  add ##1,r3
+  8C0B101A  6A75  mov.w @r7+,r10
+  8C0B101C  7901  add ##1,r9
+  8C0B101E  6264  mov.b @r6+,r2
+  8C0B1020  4921  shar r9
+  8C0B1022  6154  mov.b @r5+,r1
+  8C0B1024  39AC  add r10,r9
+  8C0B1026  622C  extu.b r2,r2
+  8C0B1028  099C  mov.b @(R0,r9),r9
+  8C0B102A  611C  extu.b r1,r1
+  8C0B102C  312C  add r2,r1
+  8C0B102E  2390  mov.b r9,@r3
+  8C0B1030  7301  add ##1,r3
+  8C0B1032  6275  mov.w @r7+,r2
+  8C0B1034  7101  add ##1,r1
+  8C0B1036  6A64  mov.b @r6+,r10
+  8C0B1038  4121  shar r1
+  8C0B103A  6954  mov.b @r5+,r9
+  8C0B103C  312C  add r2,r1
+  8C0B103E  699C  extu.b r9,r9
+  8C0B1040  011C  mov.b @(R0,r1),r1
+  8C0B1042  6AAC  extu.b r10,r10
+  8C0B1044  39AC  add r10,r9
+  8C0B1046  2310  mov.b r1,@r3
+  8C0B1048  7301  add ##1,r3
+  8C0B104A  6A75  mov.w @r7+,r10
+  8C0B104C  7901  add ##1,r9
+  8C0B104E  6264  mov.b @r6+,r2
+  8C0B1050  4921  shar r9
+  8C0B1052  6154  mov.b @r5+,r1
+  8C0B1054  39AC  add r10,r9
+  8C0B1056  622C  extu.b r2,r2
+  8C0B1058  099C  mov.b @(R0,r9),r9
+  8C0B105A  611C  extu.b r1,r1
+  8C0B105C  312C  add r2,r1
+  8C0B105E  2390  mov.b r9,@r3
+  8C0B1060  7301  add ##1,r3
+  8C0B1062  6275  mov.w @r7+,r2
+  8C0B1064  7101  add ##1,r1
+  8C0B1066  6A64  mov.b @r6+,r10
+  8C0B1068  4121  shar r1
+  8C0B106A  6954  mov.b @r5+,r9
+  8C0B106C  312C  add r2,r1
+  8C0B106E  6AAC  extu.b r10,r10
+  8C0B1070  011C  mov.b @(R0,r1),r1
+  8C0B1072  699C  extu.b r9,r9
+  8C0B1074  39AC  add r10,r9
+  8C0B1076  2310  mov.b r1,@r3
+  8C0B1078  7301  add ##1,r3
+  8C0B107A  6A75  mov.w @r7+,r10
+  8C0B107C  7901  add ##1,r9
+  8C0B107E  4921  shar r9
+  8C0B1080  39AC  add r10,r9
+  8C0B1082  099C  mov.b @(R0,r9),r9
+  8C0B1084  4C10  dt r12
+  8C0B1086  2390  mov.b r9,@r3
+  8C0B1088  8F9E  bf.s 8C0B0FC8
+  8C0B108A  7301  add ##1,r3
+  8C0B108C  75C0  add ##-64,r5
+  8C0B108E  F059  fmov.s @r5+,fr0
+  8C0B1090  F259  fmov.s @r5+,fr2
+  8C0B1092  F459  fmov.s @r5+,fr4
+  8C0B1094  F659  fmov.s @r5+,fr6
+  8C0B1096  F40A  fmov.s fr0,@r4
+  8C0B1098  7408  add ##8,r4
+  8C0B109A  F42A  fmov.s fr2,@r4
+  8C0B109C  7408  add ##8,r4
+  8C0B109E  F44A  fmov.s fr4,@r4
+  8C0B10A0  7408  add ##8,r4
+  8C0B10A2  F46A  fmov.s fr6,@r4
+  8C0B10A4  0483  pref @r4
+  8C0B10A6  7408  add ##8,r4
+  8C0B10A8  F059  fmov.s @r5+,fr0
+  8C0B10AA  F259  fmov.s @r5+,fr2
+  8C0B10AC  F459  fmov.s @r5+,fr4
+  8C0B10AE  F659  fmov.s @r5+,fr6
+  8C0B10B0  F40A  fmov.s fr0,@r4
+  8C0B10B2  7408  add ##8,r4
+  8C0B10B4  F42A  fmov.s fr2,@r4
+  8C0B10B6  7408  add ##8,r4
+  8C0B10B8  F44A  fmov.s fr4,@r4
+  8C0B10BA  7408  add ##8,r4
+  8C0B10BC  F46A  fmov.s fr6,@r4
+  8C0B10BE  4B10  dt r11
+  8C0B10C0  0483  pref @r4
+  8C0B10C2  8D02  bt.s 8C0B10CA
+  8C0B10C4  7408  add ##8,r4
+  8C0B10C6  AF30  bra 8C0B0F2A
+  8C0B10C8  4E00  shll r14
+  8C0B10CA  69F6  mov.l @r15+,r9
+  8C0B10CC  6AF6  mov.l @r15+,r10
+  8C0B10CE  6BF6  mov.l @r15+,r11
+  8C0B10D0  6CF6  mov.l @r15+,r12
+  8C0B10D2  F3FD  fschg
+  8C0B10D4  6DF6  mov.l @r15+,r13
+  8C0B10D6  000B  rts
+  8C0B10D8  6EF6  mov.l @r15+,r14
+```

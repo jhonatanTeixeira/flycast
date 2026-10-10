@@ -358,3 +358,8 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   família de bloco de SDK com a listagem de cada jogo. `lightxf`, `stripemit` e o laço
   do DOA2 idênticos nos outros jogos (no trecho executado); threads do Le Mans e do EGG
   são variantes.
+- **Varredura automática (`tools/sdk_find.py`, `docs/sdk_find/`):** 21 jogos de DC dos
+  dumps existentes, 50.561 funções, 2.798 grupos em 2+ jogos. Funções disjuntas,
+  contenção em vez de Jaccard (o dump é parcial), SHIL como visão sem ordem.
+  Reencontrou `lightxf`/`stripemit`/laço do DOA2; novos alvos de T&L no Shenmue II,
+  MvC2 e DOA2 e cópias de memória em 8-10 jogos.

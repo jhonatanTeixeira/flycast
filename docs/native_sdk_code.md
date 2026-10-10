@@ -115,6 +115,16 @@ Possível ligação com o 4.117 (memory card "falta de espaço" no Napple/Shenmu
 essa camada (`0x0A` = informação da mídia, de onde vem o espaço livre) que conversa
 com o VMU emulado.
 
+## 3.3 Varredura completa (automática)
+
+`tools/sdk_find.py` varre os 21 jogos de Dreamcast dos dumps (sem jogar de novo),
+agrupa funções iguais ou parecidas (hash normalizado + índice invertido de n-gramas
+com contenção + multiconjunto do SHIL) e ordena pelo tempo do `perf`. Resultado em
+**`docs/sdk_find/`** (2.798 grupos em 2+ jogos). Reencontrou sozinha os três nativos e
+apontou novos alvos: T&L do Shenmue II (6,0%), do MvC2 (6,1%) e do DOA2 (6,3%) fora do
+laço já nativo, cópias de memória no Napple e no EGG (~5,5% cada) e a região quente
+`8C1C1xxx` do Napple (5,4%), todos presentes em vários jogos.
+
 ## 4. O que nativizar (e o que não)
 
 **Vale:** funções de **cálculo** quentes e autocontidas — T&L de vértice, emissores de
