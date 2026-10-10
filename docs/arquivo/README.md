@@ -9,6 +9,7 @@ raciocínio quando um doc ativo aponta para "ver history/tech_debits <item>".
 | `tech_debits_2026-09-13_a_2026-10-08.md` | tabela completa de todos os itens (1.x a 5.7) |
 | `game_status_2026-09-16_a_2026-10-08.md` | baterias, tabelas e imagens por jogo |
 | `current_plan_2026-09-13_a_2026-10-08.md` | plano atual integral (fila de 8 itens, tier2, etc.) |
+| `current_plan_2026-10-08_a_2026-10-10.md` | plano compactado de 2026-10-08 (P0 crashes, P1 experiência, P2 otimização); zerado em 2026-10-10 — itens abertos estão em `tech_debits.md` |
 | `planos_obsoletos/` | planos e auditorias já executados, refutados ou superados |
 
 ## `planos_obsoletos/` — por que cada um saiu

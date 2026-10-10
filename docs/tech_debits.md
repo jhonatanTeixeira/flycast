@@ -4,7 +4,7 @@
 > aprendidas dos resolvidos. A tabela completa (dezenas de itens com números, A/B e
 > desmontagens) está em `docs/arquivo/tech_debits_2026-09-13_a_2026-10-08.md` — as
 > referências "item 4.xx" dos outros docs apontam para lá. Itens novos continuam a
-> numeração (próximo livre: **5.8** / **4.128**).
+> numeração (próximo livre: **5.9** / **4.130**).
 >
 > Status: `não investigado` · `confirmado` · `parcial` · `aceito` · `opt-in`.
 > Ao resolver um item, remova a linha e, se houver lição, acrescente um bullet abaixo.
@@ -29,6 +29,9 @@
 | 4.31 | Upstream oficial roda o MBAA sem glitches (a ~34 fps); os glitches do nosso eram em boa parte dupes (4.110) — reconferir | não investigado |
 | 4.22/4.66 | Sonic Shuffle ~10 fps: laço de busca linear (1,25M exec/s); `scan_loop_skip` escrito mas nunca casou | confirmado, sem fix |
 | — | Evolution 1 não abre: CHD com codec zstd (`cdzs`), libchdr do fork sem zstd | confirmado |
+| 4.128 | Skies of Arcadia Disc 2 não boota (`SIGSEGV ... was not in vram`, exit 133): validar o CHD com o core upstream; se bom, `FC_JIT_TRACE` | não investigado |
+| 4.129 | Le Mans: `declared_fps=7.5` (devia reportar 30), áudio quebrado (batida em loop) em cold boot, load/menus lentos | não investigado |
+| — | Re-rodar a bateria DC com **tier2 OFF** (skill `bateria`) para fechar as linhas de `game_status.md` medidas com tier2 ON (cvs2, MvC2, SA2, Shenmue II...) | pendente |
 | — | `ggxx`/`ggxxsla`/`sa2`: savestates V12 antigos precisam ser regenerados pelo usuário | pendente |
 
 ### Performance
@@ -39,6 +42,7 @@
 | 4.125 | Funções nativas são de **biblioteca do SDK** e o `hle_fn` só instala em endereço fixo: `lightxf`/`stripemit` (Napple) existem em Evolution 1/2, RE CV e Skies; o laço do DOA2 em MvC2 e Shenmue II (prefixo; falta comparar a função inteira). Tornar o `hle_fn` relocável — `docs/native_sdk_code.md`. Varredura automática (`tools/sdk_find.py`, `docs/sdk_find/`): 2.798 grupos em 2+ jogos; novos alvos T&L Shenmue II 6,0%, MvC2 6,1%, DOA2 6,3% | confirmado (prefixo), sem fix |
 | 4.126 | Espera de fim de quadro que **lê o TMU0** (grupo 009 do `sdk_find`, mesma função em 10 jogos de DC): gira até uma interrupção zerar uma flag ou estourar o timeout; o idle fast-forward não pega porque o 4.43 exclui laço que lê hardware. EGG ~9,6% da emu. Pular com segurança = avançar até o próximo evento sabendo o valor do TCNT0 nesse ponto. `docs/sdk_find/pseudo/espera_de_quadro_com_timeout_pseudo.cpp` | confirmado, sem fix |
 | 4.127 | Código quente do JIT não cabe na L1I e carrega peso morto: 90% do tempo em blocos = 80-160 KB (Shenmue II 345 KB) para 32 KB de L1I; 11-15% de cada bloco quente é caminho frio e 1-4% literal; blocos espalhados (DOA2 196 páginas de 4 KB); Shenmue executa a checagem de código em 24 dos 79 blocos mais quentes. Plano em `docs/jit_hot_path.md` | planejado |
+| 5.8 | Spill do HLE do DOA2: o cluster `8C101BC4..C4E` (~15% da emu) guarda e recarrega todo o estado a cada fronteira de bloco do JIT — rendeu só ~1%. Fechar o laço externo no nativo | confirmado, sem fix |
 | 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |

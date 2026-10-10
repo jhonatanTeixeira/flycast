@@ -372,3 +372,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   50% do tempo em blocos cabe na L1I (8-25 KB; Shenmue II 72 KB), 90% pede 80-345 KB;
   frio + literais ~15-20% de cada bloco quente; empacotar só o quente corta ~25-33% das
   linhas tocadas. Fases em `docs/jit_hot_path.md`.
+- **`current_plan.md` zerado** (anterior em `docs/arquivo/current_plan_2026-10-08_a_2026-10-10.md`;
+  itens abertos conferidos no `tech_debits.md`, novos 4.128 Skies Disc 2, 4.129 Le Mans,
+  5.8 spill do DOA2). Plano novo: A `hle_fn` relocável → B nativizações do SDK → C
+  esperas fora do idle FF → D caminho quente do JIT.
