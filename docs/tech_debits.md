@@ -139,7 +139,8 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
 - Anti-SMC: stores em página de código via stub + bitmap; leituras dobradas pelo
   SSA precisam ser invalidadas por escrita.
 - **Threads nos jogos de DC (2026-10-10, varredura dos dumps em `/mnt/1TB`):** existe
-  uma biblioteca de threads **preemptiva/por troca de contexto** ligada em 10 jogos
+  uma biblioteca de threads com **troca de contexto completa** (preempção por timer
+  não confirmada) ligada em 10 jogos
   (Napple `8C16BB28…8C16BD74`, EGG, Grandia II, RE CV, Evolution 1 e 2, Le Mans,
   Macross M3, PSO v2, KOF Evo; endereço muda por jogo, bytes iguais). Cria a pilha da
   thread (entrada r6, arg r7, SR, FPSCR), cede por "exceção falsa" (`ldc SSR/SPC` com
