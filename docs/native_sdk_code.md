@@ -22,8 +22,10 @@ dos 7 jogos de `dcbat_off`.
     mais lento do projeto, ~73%).
   - Hoje o `hle_fn` só instala no **endereço fixo** do Napple/DOA2, então esses outros
     jogos não ganham nada. Tornar o `hle_fn` relocável é o próximo passo (seção 5).
-  - Ressalva: a busca foi por **prefixo** (6-8 opcodes da entrada). Falta comparar a
-    função inteira e as constantes em cada jogo (versões do SDK podem diferir).
+  - **Comparação da função inteira** (`docs/sdk_blocks/`, só o trecho que o jogo
+    executou na sessão): `lightxf`, `stripemit` e o laço do DOA2 são **idênticos** em
+    todos os jogos da tabela 3.1 (ex.: `stripemit` 134 de 134 opcodes nos 5 jogos).
+    Falta conferir o literal pool (constantes), que o dump não guarda.
 
 ## 2. Como identificar o SDK
 
@@ -55,6 +57,12 @@ a bit com `FC_STATE_HASH`). Os métodos, do mais barato ao mais caro:
    a função faz, sem copiar código de ninguém.
 
 ## 3. O que já foi identificado
+
+Listagem SH4 de cada família em cada jogo, com a comparação contra o jogo de
+referência: **`docs/sdk_blocks/`** (um arquivo por família, gerado por
+`tools/sdk_blocks_doc.py`). Variantes vistas: a biblioteca de threads do **Le Mans**
+difere (15 de 277 opcodes iguais: outra versão ou trecho deslocado) e a do **EGG** em
+parte (244 de 269); a seção crítica do PSO v2 em parte (76 de 93).
 
 | Módulo | Evidência | Jogos | Quente? |
 |---|---|---|---|
@@ -141,8 +149,8 @@ Para valer em qualquer jogo com a mesma biblioteca:
 
 ## 6. Próximos passos (não executados)
 
-1. Comparar a função **inteira** (todos os `Span`) e o literal pool de `lightxf`,
-   `stripemit` e do laço do DOA2 nos jogos da tabela 3.1.
+1. Conferir o literal pool de `lightxf`, `stripemit` e do laço do DOA2 nos jogos da
+   tabela 3.1 (o código já bate; ver `docs/sdk_blocks/`), lendo a RAM pelo socket.
 2. `hle_fn` relocável (seção 5), mantendo o Napple e o DOA2 bit-exatos.
 3. Shenmue II e MvC2 com o laço do DOA2; Evolution 1/2, RE CV e Skies com
    `lightxf`/`stripemit`. Ordem por ganho esperado: Shenmue II (mais lento) primeiro.

@@ -354,3 +354,7 @@ As que custaram caro e se repetiram; as regras derivadas estão no `CLAUDE.md`.
   `lightxf`/`stripemit` em Evolution 1/2, RE CV e Skies; o laço do DOA2 em MvC2 e
   Shenmue II (prefixo). `hle_fn` só instala em endereço fixo → 4.125,
   `docs/native_sdk_code.md`.
+- **`docs/sdk_blocks/`** (gerado por `tools/sdk_blocks_doc.py`): um documento por
+  família de bloco de SDK com a listagem de cada jogo. `lightxf`, `stripemit` e o laço
+  do DOA2 idênticos nos outros jogos (no trecho executado); threads do Le Mans e do EGG
+  são variantes.
