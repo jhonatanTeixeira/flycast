@@ -42,7 +42,8 @@
 | 4.125 | `hle_fn` **relocável**: reconhece a função por bytes em qualquer endereço (base = vaddr − offset da entrada; literais lidos da RAM). Validado idêntico em Napple/DOA2 (regressão zero) e **Shenmue II** (laço do DOA2, base `8C1D8D22`, HLE on×off idêntico). Falta: Evolution 1/2, RE CV, Skies (`lightxf`/`stripemit`) e MvC2/Power Stone/Project Justice (laço do DOA2) — bytes idênticos confirmados no dump, mas o savestate não executa a função (precisa de cena); A/B de 2 rodadas em Shenmue II. `docs/native_sdk_code.md` | parcial (infra done; falta A/B/cenas) |
 | 4.126 | Espera de fim de quadro que **lê o TMU0** (grupo 009 do `sdk_find`, mesma função em 10 jogos de DC): gira até uma interrupção zerar uma flag ou estourar o timeout; o idle fast-forward não pega porque o 4.43 exclui laço que lê hardware. EGG ~9,6% da emu. Pular com segurança = avançar até o próximo evento sabendo o valor do TCNT0 nesse ponto. `docs/sdk_find/pseudo/espera_de_quadro_com_timeout_pseudo.cpp` | confirmado, sem fix |
 | 4.127 | Código quente do JIT não cabe na L1I e carrega peso morto: 90% do tempo em blocos = 80-160 KB (Shenmue II 345 KB) para 32 KB de L1I; 11-15% de cada bloco quente é caminho frio e 1-4% literal; blocos espalhados (DOA2 196 páginas de 4 KB); Shenmue executa a checagem de código em 24 dos 79 blocos mais quentes. Plano em `docs/jit_hot_path.md` | planejado |
-| 5.8 | Spill do HLE do DOA2: o cluster `8C101BC4..C4E` (~15% da emu) guarda e recarrega todo o estado a cada fronteira de bloco do JIT — rendeu só ~1%. Fechar o laço externo no nativo | confirmado, sem fix |
+| 5.8 | Spill do HLE do DOA2: o cluster `8C101BC4..C4E` (~15% da emu) guarda e recarrega todo o estado a cada fronteira de bloco do JIT — rendeu só ~1%. **Fechamento do laço externo tentado (2026-10-10, branch `wip/5.8-doa2-loop-closure`):** blocos `C52/C5C/C66/C6C/C78` nativos, ciclos exatos; **bit-exato no DOA2** mas **diverge no Shenmue II** (2 bytes de float em RAM no frame 60, `8C2E8900`; TA/VRAM/ctx batem). Falta achar a causa antes de mergear | parcial (DOA2 ok, Shenmue II diverge) |
+| 4.130 | **DOA2 apresenta ~30-36 fps de um jogo de 60 fps** (é 60: `ta[1v≈50 2v≈1]`, um frame de TA por vblank). O core **descarta ~40%** dos frames (`dropped_slot_busy` ~360 de ~950): a fila de 1 slot está ocupada porque o render do frame anterior não terminou. Não é o teto de frameskip (`frameskip_budget=0` descarta igual) nem a GPU/fill (320x240 só subiu 33,7→36,1 fps; é **draw-call-bound**, 4.37). O render custa `process ~5ms + render ~14ms ≈ 19ms`; o intervalo do jogo é 16,7 ms **emulados** = 16,7/VEL em wall (~19 ms a 87%, **encolhe** com o VEL). **Daí a inversão:** VEL↑ → intervalo em wall menor → render fica para trás → mais descartes → fps apresentado cai rumo a 30 (e a ~50% de descarte o padrão é regular → "mais fluido"). Teto é a apresentação, não a emulação | confirmado, sem fix |
 | 4.122 | Shenmue II: AICA/ARM7 >8% da emu (`FastControlBlock` 4,2% + `AICA_Sample32` 2,4% + `StreamStep`); 5-9% de amostras sem símbolo (`?`) na emu em vários jogos — identificar | não investigado |
 | 4.20/4.34 | DOA2/Zombie/Shenmue: teto é o throughput do SH4 (~116M instr/s × ~11 ciclos ARM). Sobra a *moldura* de blocos minúsculos no laço de vértices; superblocos dariam ≤~5% | confirmado, teto estimado |
 | 4.37 | Render DC: draw no driver Mali domina (~34 µs/draw, ~640 draws); quebras de lote são trocas reais de textura → só atlas/menos draws ajudaria | medido, sem fix |
@@ -207,6 +208,14 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   volume, culling, plano de fundo (recuo 1e-6 do upstream aplicado assim mesmo).
 - Cada draw custa ~24-34 µs no Mali: batching por primitive restart (+7%), um upload
   de index buffer por lista, `glDrawRangeElements` (KOF Evo 31→54 fps).
+- **O render pode virar o teto da APRESENTAÇÃO sem ser o teto da emulação (4.130,
+  2026-10-10).** No DOA2 (jogo de 60 fps) o core apresenta só ~30-36/s: descarta
+  ~40% dos frames porque o render (~19 ms: process 5 + render 14) não cabe no
+  intervalo de 16,7 ms emulados, que em **wall** é 16,7/VEL — quanto mais rápido o
+  emulador, menor o intervalo, mais descarta. O 4.37 ("DOA2 limitado pela emulação")
+  valia com o emu mais lento; acelerar o emu **inverteu** o gargalo. Lição: medir o
+  `dropped_slot_busy`/`new_fps` além do VEL — VEL alto com fps apresentado caindo é
+  sinal de apresentação, não de emulação.
 - `GetTexture` dominou mslug6/samsptk: shader de paleta bilinear (20→59 fps),
   `TextureUpscale` não inicializado, invalidação por página de 4 KB, skip de
   re-upload idêntico (default ON).
