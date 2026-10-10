@@ -141,7 +141,7 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
 - Idle: assinaturas por **forma**, exigindo desvio para trás e apertado; laço de
   espera encadeado e de contagem precisam de avanço até o evento; checar "endereço é
   RAM" para não pular timer de hardware; varredura (`strlen`) não é espera.
-- `sh4clock` d12 cobrava 1,2× (d10 padrão; override por jogo no Le Mans).
+- `sh4clock`: d12 (padrão antigo) cobrava 1,2×; d10 deu ganho geral; d8 piorou a maioria → d10 fixo (override por jogo no Le Mans).
 - Despacho: tabela FPCB custa ~1-2%; inline cache só vale com invalidação em **toda**
   escrita da tabela (incluindo `bm_AddBlock`/`bm_ResetTempCache`) — opt-in.
 - HLE por assinatura nativo (`hle_fn.cpp`): mesma ordem/fusão de float, mesma
