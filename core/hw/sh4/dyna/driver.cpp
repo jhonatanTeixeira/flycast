@@ -1,5 +1,8 @@
 #include "types.h"
 #include <unordered_set>
+#include <unordered_map>
+#include <algorithm>
+#include <vector>
 
 #include "deps/xxhash/xxhash.h"
 #include "../sh4_interpreter.h"
@@ -73,8 +76,23 @@ void clear_temp_cache(bool full)
 	bm_ResetTempCache(full);
 }
 
+static void jit_hot_reset_samples();
+
+// Limpezas do cache por motivo (FC_SYNC_STATS, fase 1b do docs/mmap_moe_mtp_plan.md):
+// 0 falha de checagem de codigo, 1 cache cheio / PC de boot, 2 externa (load de
+// savestate, MMU, ResetCache), 3 reset, 4 arena quente. Cada limpeza descarta todo o
+// codigo compilado (120-140 ms) e tudo e recompilado sob demanda.
+u32 g_ccClears[5];
+u64 g_ccClearUs;
+static int g_ccReason = 2;
+
 static void recSh4_ClearCache(void)
 {
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	g_ccClears[g_ccReason < 0 || g_ccReason > 4 ? 2 : g_ccReason]++;
+	g_ccReason = 2;		// quem nao marca o motivo e externo (cpu->ResetCache)
+	jit_hot_reset_samples();	// as amostras da arena quente apontam para o cache antigo
 	jit_dump_time();
 	jit_dump_line("Z full pc=%08X free=%u\n", next_pc, emit_FreeSpace());
 	INFO_LOG(DYNAREC, "recSh4:Dynarec Cache clear at %08X free space %d", next_pc, emit_FreeSpace());
@@ -82,6 +100,8 @@ static void recSh4_ClearCache(void)
 	bm_ResetCache();
 	smc_hotspots.clear();
 	clear_temp_cache(true);
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	g_ccClearUs += (u64)(t1.tv_sec - t0.tv_sec) * 1000000ull + (t1.tv_nsec - t0.tv_nsec) / 1000;
 }
 
 static void recSh4_Run(void)
@@ -216,17 +236,144 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	return true;
 }
 
+static RuntimeBlockInfo *compile_block(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures);
+
+// ---------------------------------------------------------------- D3: arena quente
+// docs/jit_hot_path.md fase 3, 4.127. O stub intc_sched guarda, a cada g_hotEvery fatias
+// (~448 ciclos do SH4 cada), o endereco de retorno da chamada -- que fica na cauda fria
+// do bloco onde a fatia acabou (D1). E uma amostragem do tempo por bloco, sem instrucao
+// extra nos blocos. Quando a maior parte das amostras cai fora da arena (cena nova, cache
+// limpo), num ponto seguro (rdv_DoInterrupts, que volta ao despachante) o cache e limpo
+// e os blocos mais quentes sao recompilados primeiro, um atras do outro, no comeco do
+// cache: o codigo quente fica contiguo (menos linhas de L1I e paginas). Mesmo codigo
+// gerado, mesma configuracao de FPU de cada bloco. FC_JIT_HOT=1 liga (diagnostico).
+u32 g_hotCountdown = 64;
+static const u32 g_hotEvery = 64;
+static const u32 HOT_RING = 16384;
+static void *g_hotRing[HOT_RING];
+static u32 g_hotN;			// amostras no anel desde a ultima limpeza do cache
+static u32 g_hotIn, g_hotOut;		// amostras dentro/fora da arena desde a ultima reorganizacao
+static u32 g_hotArenaEnd;		// fim da arena (offset no CodeCache); 0 = sem arena
+static u64 g_hotLastUs;		// ultima reorganizacao (ou o inicio)
+static bool g_hotDue;
+static u32 g_hotRelayouts;
+
+static u64 hot_now_us()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (u64)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000;
+}
+
+bool jit_hot_enabled()
+{
+	// Desligado por padrao ate a fase 2 do docs/mmap_moe_mtp_plan.md (promocao bloco a
+	// bloco): a reorganizacao por limpeza do cache travava 0,15-1 s e mudava as fronteiras.
+	static const bool en = getenv("FC_JIT_HOT") != nullptr && atoi(getenv("FC_JIT_HOT")) != 0;
+	return en;
+}
+
+void jit_hot_sample(void *host_pc)
+{
+	g_hotCountdown = g_hotEvery;
+	g_hotRing[g_hotN % HOT_RING] = host_pc;
+	g_hotN++;
+	const u8 *p = (const u8 *)CC_RX2RW(host_pc);
+	if (g_hotArenaEnd != 0 && p >= CodeCache + LastAddr_min && p < CodeCache + g_hotArenaEnd)
+		g_hotIn++;
+	else
+		g_hotOut++;
+	if (g_hotDue || (g_hotN & 1023) != 0)
+		return;
+	const u64 now = hot_now_us();
+	if (g_hotLastUs == 0)
+		g_hotLastUs = now;
+	// a primeira apos ~5 s; depois so se >= 20 s e mais de 15% das amostras fora da arena
+	const u64 wait = g_hotArenaEnd == 0 ? 5000000ull : 20000000ull;
+	const u32 total = g_hotIn + g_hotOut;
+	if (now - g_hotLastUs >= wait && g_hotN >= 8192 && total > 0 && g_hotOut * 100 > total * 15)
+		g_hotDue = true;
+}
+
+static void jit_hot_reset_samples()
+{
+	g_hotN = g_hotIn = g_hotOut = 0;
+	g_hotArenaEnd = 0;
+}
+
+static void recSh4_ClearCache(void);
+
+static void jit_hot_relayout()
+{
+	g_hotDue = false;
+	const u64 t0 = hot_now_us();
+	struct Ent { u32 n; fpscr_t cfg; };
+	std::unordered_map<u32, Ent> cnt;
+	const u32 n = std::min(g_hotN, HOT_RING);
+	for (u32 i = 0; i < n; i++)
+	{
+		RuntimeBlockInfoPtr b = bm_GetBlock2(g_hotRing[i]);
+		if (!b || b->temp_block)
+			continue;
+		Ent &e = cnt[b->vaddr];
+		e.n++;
+		e.cfg = b->fpu_cfg;
+	}
+	std::vector<std::pair<u32, Ent>> hot(cnt.begin(), cnt.end());
+	std::sort(hot.begin(), hot.end(), [](const std::pair<u32, Ent> &a, const std::pair<u32, Ent> &b) {
+		return a.second.n > b.second.n || (a.second.n == b.second.n && a.first < b.first);
+	});
+	u32 total = 0;
+	for (auto &h : hot)
+		total += h.second.n;
+	const u64 tSort = hot_now_us();
+	g_ccReason = 4;
+	recSh4_ClearCache();		// zera as amostras (o anel apontava para o cache antigo)
+	const u64 tClear = hot_now_us();
+	static const bool noCompile = getenv("FC_JIT_HOT_NOCOMPILE") != nullptr;	// diagnostico
+	u32 acc = 0, compiled = 0;
+	for (auto &h : hot)
+	{
+		if (noCompile)
+			break;
+		if (acc * 100 >= total * 95 || compiled >= 1500)
+			break;
+		acc += h.second.n;
+		if (bm_GetBlock(h.first))
+			continue;
+		if (compile_block(h.first, h.second.cfg, 0) != nullptr)
+			compiled++;
+	}
+	g_hotArenaEnd = LastAddr;
+	g_hotLastUs = hot_now_us();
+	g_hotRelayouts++;
+	fprintf(stderr, "jit hot: reorganizacao %u -- %u amostras, %u blocos quentes (de %zu), arena %u KB, %.1f ms (contagem %.1f, limpeza %.1f, compilacao %.1f)\n",
+			g_hotRelayouts, total, compiled, hot.size(), (g_hotArenaEnd - LastAddr_min) / 1024,
+			(g_hotLastUs - t0) / 1000.0, (tSort - t0) / 1000.0, (tClear - tSort) / 1000.0, (g_hotLastUs - tClear) / 1000.0);
+}
+
 DynarecCodeEntryPtr rdv_CompilePC(u32 blockcheck_failures)
 {
 	u32 pc=next_pc;
 	//printf("rdv_CompilePC next_pc %p\n", next_pc);
 
 	if (emit_FreeSpace()<16*1024 || pc==0x8c0000e0 || pc==0xac010000 || pc==0xac008300)
+	{
+		g_ccReason = 1;
 		recSh4_ClearCache();
+	}
 
+	RuntimeBlockInfo *rbi = compile_block(pc, fpscr, blockcheck_failures);
+	return rbi != nullptr ? rbi->code : nullptr;
+}
+
+// Compila o bloco de pc com a configuracao de FPU dada e o registra (rdv_CompilePC e a
+// arena quente).
+static RuntimeBlockInfo *compile_block(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures)
+{
 	RuntimeBlockInfo* rbi = ngen_AllocateBlock();
 
-	if (!rbi->Setup(pc,fpscr))
+	if (!rbi->Setup(pc,fpu_cfg))
 	{
 		delete rbi;
 		return NULL;
@@ -267,7 +414,7 @@ DynarecCodeEntryPtr rdv_CompilePC(u32 blockcheck_failures)
 		emit_ptr_limit = NULL;
 	}
 
-	return rbi->code;
+	return rbi;
 }
 
 DynarecCodeEntryPtr DYNACALL rdv_FailedToFindBlock_pc()
@@ -303,7 +450,12 @@ void (*ngen_FailedToFindBlock)() = &ngen_FailedToFindBlock_internal;
 u32 DYNACALL rdv_DoInterrupts(void* block_cpde)
 {
 	RuntimeBlockInfoPtr rbi = bm_GetBlock2(block_cpde);
-	return rdv_DoInterrupts_pc(rbi->vaddr);
+	const u32 pc = rdv_DoInterrupts_pc(rbi->vaddr);
+	// Ponto seguro para reorganizar o cache: daqui o stub vai ao despachante (no_update)
+	// e o bloco de onde viemos nao continua.
+	if (g_hotDue && !mmu_enabled())
+		jit_hot_relayout();
+	return pc;
 }
 
 // addr must be the physical address of the start of the block
@@ -325,6 +477,7 @@ DynarecCodeEntryPtr DYNACALL rdv_BlockCheckFail(u32 addr)
 	else
 	{
 		next_pc = addr;
+		g_ccReason = 0;
 		recSh4_ClearCache();
 	}
 #if !defined(NO_MMU)
@@ -491,6 +644,7 @@ static void recSh4_Skip(void)
 static void recSh4_Reset(bool hard)
 {
 	Sh4_int_Reset(hard);
+	g_ccReason = 3;
 	recSh4_ClearCache();
 }
 

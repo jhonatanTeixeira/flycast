@@ -662,6 +662,13 @@ void sync_dump_stats(const char *path)
 			g_queueOk, g_queueDrops, g_queueBusyDrops, g_queueDrops - g_queueBusyDrops, g_queueWaits);
 	fprintf(f, "new_frames\t%u\tsecs\t%.1f\tnew_fps\t%.2f\n", g_syncNewFrames, secs, secs > 0 ? g_syncNewFrames / secs : 0);
 	fprintf(f, "game_frame_ema\t%.3f\tms\n", g_gameFrameUsEma.load(std::memory_order_relaxed) / 1000.0);
+	{
+		// limpezas do cache de codigo por motivo (driver.cpp, fase 1b)
+		extern u32 g_ccClears[5];
+		extern u64 g_ccClearUs;
+		fprintf(f, "cache_clears\tchecagem\t%u\tcheio_boot\t%u\texterna\t%u\treset\t%u\tarena\t%u\ttempo_total_ms\t%.1f\n",
+				g_ccClears[0], g_ccClears[1], g_ccClears[2], g_ccClears[3], g_ccClears[4], g_ccClearUs / 1000.0);
+	}
 	const double velSecs = g_velT0 != 0 ? (rend_now_us() - g_velT0) / 1e6 : 0;
 	if (velSecs > 0)
 	{

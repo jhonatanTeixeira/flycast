@@ -77,6 +77,11 @@ static bool ColdTailEnabled()
 	return en;
 }
 
+// D3, arena quente (driver.cpp)
+bool jit_hot_enabled();
+void jit_hot_sample(void *host_pc);
+extern u32 g_hotCountdown;
+
 static bool IfbCountEnabled()
 {
 	static int enabled = -1; // -1: not checked yet, 0: disabled, 1: enabled
@@ -2469,6 +2474,20 @@ public:
 			Str(w2, MemOperand(x1));
 		}
 		Mov(x29, lr);				// Trashing pc here but it will be reset at the end of the block or in DoInterrupts
+		if (jit_hot_enabled() && !mmu_enabled())
+		{
+			// D3 (4.127): a cada g_hotEvery fatias, guarda de qual bloco a fatia veio
+			// (endereco de retorno da chamada ao intc_sched, na cauda do bloco)
+			Label no_sample;
+			Mov(x1, reinterpret_cast<uintptr_t>(&g_hotCountdown));
+			Ldr(w0, MemOperand(x1));
+			Subs(w0, w0, 1);
+			Str(w0, MemOperand(x1));
+			B(&no_sample, ne);
+			Mov(x0, x29);
+			GenCallRuntime(jit_hot_sample);
+			Bind(&no_sample);
+		}
 		GenCallRuntime(UpdateSystem);
 		Mov(lr, x29);
 		Cbnz(w0, &do_interrupts);

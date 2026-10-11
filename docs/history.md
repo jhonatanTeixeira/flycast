@@ -600,3 +600,12 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   mais alto) — candidato ao "som estourado" sem DSP. Corrigido.
 - Cfg de debug com DSP: `/home/ark/r_cur_shenmue2_dsp.cfg`.
 
+## 2026-10-11 — Fase 1b: limpezas do cache contadas — nada a corrigir agora
+
+- `FC_SYNC_STATS` ganhou `cache_clears` por motivo (falha de checagem, cheio/boot, externa,
+  reset, arena) e o tempo total. DOA2, Shenmue II, MvC2 e Napple (~50 s cada, savestate): **0
+  limpezas por falha de checagem**; só as 4 da partida (boot, load, 2 resets), 4-9 ms no total
+  com o cache quase vazio. Os 120-140 ms medidos antes eram a limpeza com o cache cheio (a D3
+  por limpeza). A troca do `rdv_BlockCheckFail` por descarte por página fica para quando um
+  jogo mostrar limpezas durante o jogo.
+
