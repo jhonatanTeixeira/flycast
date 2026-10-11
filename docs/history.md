@@ -500,4 +500,11 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   base roda a 1,0-1,2 GHz (4.132). Novo script `tools/rtabt.sh` (esfria < 63 °C, loga clock/temp/GPU).
 - A GPU **não** está saturada no DOA2 base (~45%), mas gasta ~16 ms por frame: o caminho para
   mostrar os ~50 frames/s que o jogo produz é baixar o custo de GPU por frame.
+- **A VEL não é frágil:** o `FC_SYNC_STATS` ganhou `vel_sh4_cycles`, `vel_vblank`,
+  `vel_audio_generated` e `vel_audio_delivered` (mesma janela, contados no core). No DOA2
+  batem em 0,05% (base 86,74/86,71/86,74/86,74%; rt 81,79/81,76/81,80/81,80%); o core não
+  perde áudio. A VEL do retrorun mede outra janela (20 s após 8 s de warmup), mesma diferença.
+- **Correção do 4.132:** numa rodada fria o clock rt caiu só 1,8% (1485 vs 1512 MHz) e a VEL
+  caiu 4,4 pontos mesmo assim — o corte térmico é parte; o resto deve ser memória
+  compartilhada CPU/GPU (GPU 45 → 74%). Hipótese, falta medir.
 

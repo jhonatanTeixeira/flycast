@@ -384,6 +384,12 @@ static std::atomic<u32> g_syncSeq{0};
 static u32 g_syncSeqSeen;		// main thread
 static u64 g_syncDequeueUs;		// main thread
 static u64 g_syncLastNewUs, g_syncT0;	// main thread
+// Velocidade por tres relogios, na janela do g_syncT0 ao dump: ciclos do SH4 (o tempo
+// emulado), vblanks e amostras de audio do AICA (geradas e entregues ao frontend). Se
+// baterem, a VEL do frontend (amostras recebidas / 44100) mede a emulacao.
+static u64 g_syncCyc0, g_syncAudGen0, g_syncAudOut0;
+static u32 g_syncVblk0;
+extern std::atomic<u64> g_audioGenerated, g_audioDelivered;	// audiostream.cpp
 static u32 g_syncNewFrames;		// main thread
 bool g_syncPagesArmed;			// emu thread (lido no fault, que roda na emu)
 u32 g_syncPagesCount, g_syncPagesTexCount;	// emu thread
@@ -605,7 +611,13 @@ void sync_new_frame_presented(u64 presentUs)
 	sync_add(g_syncPresent, presentUs);
 	u64 now = rend_now_us();
 	if (g_syncT0 == 0)
+	{
 		g_syncT0 = now;
+		g_syncCyc0 = sh4_sched_now64();
+		g_syncVblk0 = spg_vblank_count();
+		g_syncAudGen0 = g_audioGenerated.load(std::memory_order_relaxed);
+		g_syncAudOut0 = g_audioDelivered.load(std::memory_order_relaxed);
+	}
 	if (g_syncLastNewUs != 0)
 		sync_add(g_syncNewInt, now - g_syncLastNewUs);
 	g_syncLastNewUs = now;
@@ -645,6 +657,21 @@ void sync_dump_stats(const char *path)
 			g_queueOk, g_queueDrops, g_queueBusyDrops, g_queueDrops - g_queueBusyDrops, g_queueWaits);
 	fprintf(f, "new_frames\t%u\tsecs\t%.1f\tnew_fps\t%.2f\n", g_syncNewFrames, secs, secs > 0 ? g_syncNewFrames / secs : 0);
 	fprintf(f, "game_frame_ema\t%.3f\tms\n", g_gameFrameUsEma.load(std::memory_order_relaxed) / 1000.0);
+	if (secs > 0)
+	{
+		const double emuSecs = (double)(sh4_sched_now64() - g_syncCyc0) / SH4_MAIN_CLOCK;
+		const u32 vblk = spg_vblank_count() - g_syncVblk0;
+		const u64 aGen = g_audioGenerated.load(std::memory_order_relaxed) - g_syncAudGen0;
+		const u64 aOut = g_audioDelivered.load(std::memory_order_relaxed) - g_syncAudOut0;
+		fprintf(f, "vel_sh4_cycles\t%.2f\t%%\temu_secs\t%.2f\n", 100.0 * emuSecs / secs, emuSecs);
+		// taxa nominal do modo de video (NTSC 59,94 / PAL 50); vblank_hz e a medida no
+		// relogio emulado, para conferir
+		const double hz = emuSecs > 0 ? vblk / emuSecs : 0;
+		const double nominal = hz > 55 ? 59.94 : 50.0;
+		fprintf(f, "vel_vblank\t%.2f\t%%\tvblanks\t%u\tvblank_hz\t%.3f\n", 100.0 * vblk / nominal / secs, vblk, hz);
+		fprintf(f, "vel_audio_generated\t%.2f\t%%\tsamples\t%llu\n", 100.0 * aGen / 44100.0 / secs, (unsigned long long)aGen);
+		fprintf(f, "vel_audio_delivered\t%.2f\t%%\tsamples\t%llu\n", 100.0 * aOut / 44100.0 / secs, (unsigned long long)aOut);
+	}
 	sync_dist(f, "latency_queue_to_dequeue", lat, 0.001, "ms");
 	sync_dist(f, "process_dequeue_to_reset", proc, 0.001, "ms");
 	sync_dist(f, "render", rd, 0.001, "ms");
