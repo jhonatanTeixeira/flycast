@@ -678,4 +678,12 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   `dif rms 0`, defasagem 0 amostras em 5 trechos).
 - **Opt-in** (`FC_AICA_DUAL=0` volta ao síncrono). Ligar por padrão fica a critério do
   usuário (o ganho é do Shenmue II; DOA2/MvC2 neutros).
+- **Deploy (2026-10-11, pedido do usuário: "oficial com opt-in ligado nas configs"):** o core
+  oficial `flycast2026_libretro.so` = o build do dual core (md5 `30c5e1a1`; backup
+  `fea67b12` em `/roms2/backups/flycast2026_libretro.so.bak-pre-dualcore-20261011`). O opt-in
+  ficou **ligado no `rr_capture.sh`** (o wrapper que o `dreamcast.sh`/`naomi.sh`/
+  `atomiswave.sh` usam no `retrorun3`): `FC_AICA_DUAL=${FC_AICA_DUAL:-32}
+  FC_AICA_DUAL_CPU=${FC_AICA_DUAL_CPU:--1}` (backup `rr_capture.sh.bak-pre-dualcore-20261011`);
+  dá para desligar por jogo com `FC_AICA_DUAL=0`. Smoke com o core oficial + env (MvC2):
+  dual ativo (30.295 quanta), sem crash nem watchdog.
 
