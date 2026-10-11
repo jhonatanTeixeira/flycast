@@ -192,6 +192,15 @@ Validação:
 A/B: Shenmue II (DSP desligado e ligado), DOA2, MvC2. Contar as drenagens por frame: se forem
 muitas, o ganho some, como na 1ª tentativa.
 
+**Resultado (2026-10-11, commit `32d5a04c9`):** implementado e medido. Shenmue II (o alvo, ARAM
+quase não é tocada): **VEL 72,8 → 86,4% (DSP off) e 73,0 → 85,8% (DSP on)**, fps novos +19/+25%,
+core p50 −19%; 28 drenagens, 33 ms de espera. **DOA2/MvC2 neutros:** as leituras de ARAM do SH4
+(62/s e 192/s) drenam e o custo come a folga (DOA2 2,4 s, MvC2 11,4 s), sem derrubar a VEL.
+Estado bit-exato (Shenmue II 826, DOA2 952, MvC2 1238 quadros, 0 dif) e áudio bit-idêntico ao
+síncrono. `lag=4` corta o custo por espera mas multiplica as esperas; pinning no núcleo 0 piora
+→ mantido `lag=32`. Opt-in (`FC_AICA_DUAL`); ligar por padrão é decisão do usuário. Fix real das
+drenagens (visão própria da ARAM na thread do som) fica como trabalho futuro.
+
 ---
 
 ## Arquivos principais

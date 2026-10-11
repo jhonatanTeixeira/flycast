@@ -638,3 +638,44 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   drenam.
 - Usuário sobre o DOA2: "é outro jogo já desde ontem, chegamos a 50 fps e visual mais fluido".
 
+## 2026-10-11 — Fase 3: dual core do som (ARM7 + vozes em thread) — Shenmue II +13 VEL
+
+- **Feito:** o ARM7 + o controle das vozes saem da thread de emulação para uma thread
+  própria, um quantum (32 amostras) por vez, com **folga de N quanta** (`FC_AICA_DUAL=N`,
+  `FC_AICA_DUAL_CPU` = núcleo; padrão fora do 3). A emu entrega as escritas do SH4 na ARAM
+  por fila (aplicadas no início do quantum seguinte), entrega a interrupção do SPU em T_{k+N}
+  e dispara o quantum; **leituras de ARAM e pontos de sincronia (registradores, DMA G2,
+  savestate, hash) drenam**. Commit `32d5a04c9`.
+- **Bug corrigido no caminho (despertar perdido):** o `notify` da fila do mix fora da trava
+  podia cair entre o worker conferir a fila e dormir → `aica_mix_sync` esperava para sempre
+  (hang de 2 quadros no N=32). Os `notify` passaram para dentro da trava (`sgc_if.cpp`).
+- **Medido** (`tools/rtabt.sh`, mesmo savestate, 20 s + 8 s, `perfmax`, rodadas curtas):
+
+  | Jogo (cfg) | modo | VEL% | apres | novos | core p50/p95/p99 | und |
+  |---|---|---|---|---|---|---|
+  | Shenmue II (DSP off) | sync | 72,8 | 22,0 | 20,36 | 41,4/61,6/75,7 | 26 |
+  | | **dual** | **86,4** | 25,9 | 24,26 | **33,6**/57,2/71,4 | 21 |
+  | Shenmue II (DSP on) | sync | 73,0 | 21,9 | 19,26 | 41,1/66,3/79,2 | 23 |
+  | | **dual** | **85,8** | 26,0 | 24,07 | **33,9**/56,2/75,6 | 19 |
+  | DOA2 | sync | 84,8 | 49,9 | 45,89 | 17,3/28,6/41,9 | 17 |
+  | | dual | 85,2 | 50,0 | 45,98 | 17,0/31,2/42,6 | 20 |
+  | MvC2 | sync | 100,0 | 59,8 | 53,65 | 8,6/29,9/34,6 | 3 |
+  | | dual | 100,0 | 59,4 | 55,34 | 9,3/31,2/36,5 | 2 |
+
+- **Leitura:** ganho grande e limpo no **Shenmue II** (+13,6 pts com DSP off, +12,8 com DSP
+  on), igual nos dois (a fase 1a já tirou o DSP da emu; o dual tira o ARM7 + controle). O
+  Shenmue II quase não toca a ARAM (portão 3.0 = 0), então o dual quase não drena (28
+  drenagens, 33 ms). **DOA2/MvC2 neutros:** as **leituras de ARAM** do SH4 (62/s e 192/s)
+  fazem drenar e o custo come a folga (DOA2 2,4 s de espera, MvC2 11,4 s), sem derrubar a
+  VEL.
+- **Passo 1 (reduzir as drenagens) medido:** `lag=4` corta o custo por espera ~6-18× mas
+  multiplica as esperas (DOA2: drain 2431 → 2153 ms, mesma VEL 85,2; MvC2 ~11,5 → 10,5 s,
+  VEL 100). **Pinning no núcleo 0 piora** o DOA2 (85,2 → 81,3). As drenagens **não derrubam
+  a VEL** — comem folga. Mantido `lag=32` (melhor para o Shenmue II, o alvo). Fix real das
+  drenagens exigiria a thread do som com visão própria da ARAM (trabalho futuro).
+- **Validação:** `FC_STATE_HASH` bit-exato (Shenmue II N=32×N=32 826 quadros e sync×N=32 792,
+  DOA2 952, MvC2 1238 — 0 diferenças); **áudio bit-idêntico** ao síncrono (RMS/pico iguais,
+  `dif rms 0`, defasagem 0 amostras em 5 trechos).
+- **Opt-in** (`FC_AICA_DUAL=0` volta ao síncrono). Ligar por padrão fica a critério do
+  usuário (o ganho é do Shenmue II; DOA2/MvC2 neutros).
+

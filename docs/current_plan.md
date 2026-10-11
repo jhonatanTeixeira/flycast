@@ -99,3 +99,18 @@ e kofxi (Atomiswave). Commit `tier2` (2026-10-10).
 
 Nas rodadas de A/B do D, medir também `L1-icache-load-misses` e `iTLB-load-misses` da
 thread de emulação (`perf stat`), nas mesmas rodadas.
+
+## Frente paralela — som (`docs/mmap_moe_mtp_plan.md`)
+
+Não é uma das três frentes acima (é o plano `mmap`/MoE/MTP do som), mas fechou em
+2026-10-11:
+
+- **Fase 1a (DSP em lote):** feito — Shenmue II com DSP 57,0 → 73,9% (4.122).
+- **Fase 1b (limpezas do cache):** medido, 0 limpezas por falha de checagem nos 4 jogos.
+- **Fase 2 (arena quente, MoE):** feita, sem ganho, desligada (4.127).
+- **Fase 3 (dual core do som):** **feito** — ARM7 + vozes em thread própria, opt-in
+  `FC_AICA_DUAL=N` (commit `32d5a04c9`). **Shenmue II 72,8 → 86,4% (DSP off) e 73,0 →
+  85,8% (DSP on)**; DOA2/MvC2 neutros (as leituras de ARAM drenam). Estado/áudio
+  bit-exatos. Ligar por padrão é decisão do usuário.
+- Próximo do plano: a Fase 3 poderia virar o padrão e/ou a thread do som ganhar visão
+  própria da ARAM (tira as drenagens nos jogos que leem ARAM).
