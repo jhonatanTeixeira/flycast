@@ -141,12 +141,14 @@ void main()
 	vtx_uv = in_uv;
 	highp vec4 vpos = normal_matrix * in_pos;
 	vpos.w = 1.0 / vpos.z;
-#if TARGET_GL != GLES2
-   vpos.z = vpos.w;
-#else
+#if TARGET_GL == GLES2
    fog_depth = vpos.z * sp_FOG_DENSITY;
-   vpos.z=depth_scale.x+depth_scale.y*vpos.w; 
 #endif
+   // Profundidade no vertice, linear no 1/w do Dreamcast com escala por frame (exata
+   // na interpolacao). Nada de gl_FragDepth: escrever profundidade no shader de pixel
+   // desliga o descarte antecipado de pixel escondido da Mali (DOA2: 16,6 -> 7,2 ms de
+   // GPU por frame, 4.133).
+   vpos.z=depth_scale.x+depth_scale.y*vpos.w; 
 	vpos.xy *= vpos.w;
 	gl_Position = vpos;
 }
@@ -484,10 +486,6 @@ void main()
 		color.a=1.0;
 	#endif 
 	//color.rgb=vec3(gl_FragCoord.w * sp_FOG_DENSITY / 128.0);
-#if TARGET_GL != GLES2
-	highp float w = gl_FragCoord.w * 100000.0;
-	gl_FragDepth = log2(1.0 + w) / 34.0;
-#endif
 	gl_FragColor =color;
 }
 )";
@@ -515,10 +513,6 @@ uniform lowp float sp_ShaderColor;
 /* Vertex input*/
 void main()
 {
-#if TARGET_GL != GLES2
-   highp float w = gl_FragCoord.w * 100000.0;
-   gl_FragDepth = log2(1.0 + w) / 34.0;
-#endif
    gl_FragColor=vec4(0.0, 0.0, 0.0, sp_ShaderColor);
 }
 )";

@@ -73,7 +73,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | Jogo | Teste | VEL% | fps | Estado |
 |---|---|---|---|---|
 | Capcom vs SNK 2 (CvS2) | 2026-09-27 | 100 | 56 | descrachou; cauda baixa |
-| DOA2 | 2026-10-11 | 89 | 27 | Base (esfriado < 63 °C): VEL 89,2%, 27 fps novos (descarta ~48% dos ~53 que produz). Render threads: 35 fps novos mas VEL 83,2% — GPU 45 → 70% e o controle térmico corta o clock da CPU (4.132). Gargalo real: ~16 ms de GPU por frame |
+| DOA2 | 2026-10-11 | 82 | 44 | Render threads + profundidade no vértice (4.131/4.133): **44 fps novos** (base 27), quase sem descarte, frame p99 45 ms (base 59); VEL 82% (base 90,6%) — a CPU do render (~640 draws/frame) tira clock da emulação (4.132). Falta o usuário ver |
 | EGG | 2026-10-07 | 99,5 | 46 | tier2 OFF: **destravou** (travava a 11 fps com tier2) |
 | Evolution (1) | 2026-10-09 | 99 | 30 | "roda muito bem, 30 fps"; chão completo desde a correção do sort dos translúcidos (4.124, sem custo). **FMV a 100% (era ~78%)**, vídeo 30 quadros/s, usuário: "vídeo perfeito, áudio certo" (4.123). Obs.: há CHD com zstd que não abre (`cdzs`) |
 | Evolution 2 | 2026-10-07 | 97 | 28 | jogável a 30, quedas p/ 24; save/load a ver |

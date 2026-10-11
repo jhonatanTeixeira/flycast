@@ -201,3 +201,9 @@ não está cheia (`/sys/devices/platform/ff400000.gpu/utilisation` < ~80%). Medi
   hardware do libretro precisa recriar os N contextos.
 - Ganho limitado pela GPU de 1 núcleo: quando a GPU passar de ~80% de ocupação, mais
   renderers não ajudam.
+
+**2026-10-11 — GPU por frame (4.133):** o `gl_FragDepth` em todo pixel desligava o descarte
+antecipado da Mali; com a profundidade no vértice o DOA2 cai de 16,6 para 7,2 ms de GPU por
+frame. Com as threads: 44 fps novos (base 27), GPU 42%, VEL 82% (base 90,6%) — o que sobra é
+CPU do render (~640 draws/frame) nas 2 threads. Próximo: menos draws por frame.
+

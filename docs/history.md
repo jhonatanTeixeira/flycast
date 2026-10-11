@@ -508,3 +508,19 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   caiu 4,4 pontos mesmo assim — o corte térmico é parte; o resto deve ser memória
   compartilhada CPU/GPU (GPU 45 → 74%). Hipótese, falta medir.
 
+## 2026-10-11 — DOA2: o render gastava GPU à toa com `gl_FragDepth` (4.133)
+
+- O usuário: "não é produtivo pôr a culpa no hardware; tem algo ineficiente no render".
+  Medido por eliminação (`FC_SKIP_LIST`, nova; o timer de GPU da Mali deu ~0,3 ms para
+  qualquer trecho, até vazio, e foi descartado): DOA2 16,6 ms de GPU por frame, opacos
+  ~10 ms, 320×240 6,7 ms → custo de pixel. Causa: todo shader de pixel GLES3 escrevia
+  `gl_FragDepth` (log2), o que desliga o descarte antecipado de pixel escondido da Mali.
+- Correção: profundidade no vertex shader (linear no 1/w, escala por frame — o caminho
+  GLES2 que já existia). DOA2 **16,6 → 7,2 ms de GPU por frame**, GPU 45 → 20% no mesmo
+  fps. Imagem ≤3 px/frame diferentes no DOA2, ~13 no MvC2, igual a olho nu no Shenmue II.
+- DOA2 rt + profundidade no vértice: **44 fps novos** (base 27), descartes 54 (base 650),
+  frame p50/p95/p99 19,4/34,4/45,6 (base 34,9/44,2/58,7), GPU 42%; VEL 82% (base 90,6%):
+  agora é a CPU do render (~640 draws/frame em 2 threads) que tira clock da emulação.
+- `FC_SYNC_STATS`: a janela de VEL recomeça na carga do savestate (o relógio emulado
+  saltava e dava 313%).
+

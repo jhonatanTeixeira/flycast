@@ -387,9 +387,18 @@ static u64 g_syncLastNewUs, g_syncT0;	// main thread
 // Velocidade por tres relogios, na janela do g_syncT0 ao dump: ciclos do SH4 (o tempo
 // emulado), vblanks e amostras de audio do AICA (geradas e entregues ao frontend). Se
 // baterem, a VEL do frontend (amostras recebidas / 44100) mede a emulacao.
-static u64 g_syncCyc0, g_syncAudGen0, g_syncAudOut0;
-static u32 g_syncVblk0;
 extern std::atomic<u64> g_audioGenerated, g_audioDelivered;	// audiostream.cpp
+static u64 g_syncCyc0, g_syncAudGen0, g_syncAudOut0, g_velT0;
+static u32 g_syncVblk0;
+static std::atomic<bool> g_velRearm{false};	// carga de savestate: o relogio emulado salta
+static void vel_arm(u64 now)
+{
+	g_velT0 = now;
+	g_syncCyc0 = sh4_sched_now64();
+	g_syncVblk0 = spg_vblank_count();
+	g_syncAudGen0 = g_audioGenerated.load(std::memory_order_relaxed);
+	g_syncAudOut0 = g_audioDelivered.load(std::memory_order_relaxed);
+}
 static u32 g_syncNewFrames;		// main thread
 bool g_syncPagesArmed;			// emu thread (lido no fault, que roda na emu)
 u32 g_syncPagesCount, g_syncPagesTexCount;	// emu thread
@@ -611,13 +620,9 @@ void sync_new_frame_presented(u64 presentUs)
 	sync_add(g_syncPresent, presentUs);
 	u64 now = rend_now_us();
 	if (g_syncT0 == 0)
-	{
 		g_syncT0 = now;
-		g_syncCyc0 = sh4_sched_now64();
-		g_syncVblk0 = spg_vblank_count();
-		g_syncAudGen0 = g_audioGenerated.load(std::memory_order_relaxed);
-		g_syncAudOut0 = g_audioDelivered.load(std::memory_order_relaxed);
-	}
+	if (g_velT0 == 0 || g_velRearm.exchange(false))
+		vel_arm(now);
 	if (g_syncLastNewUs != 0)
 		sync_add(g_syncNewInt, now - g_syncLastNewUs);
 	g_syncLastNewUs = now;
@@ -657,8 +662,10 @@ void sync_dump_stats(const char *path)
 			g_queueOk, g_queueDrops, g_queueBusyDrops, g_queueDrops - g_queueBusyDrops, g_queueWaits);
 	fprintf(f, "new_frames\t%u\tsecs\t%.1f\tnew_fps\t%.2f\n", g_syncNewFrames, secs, secs > 0 ? g_syncNewFrames / secs : 0);
 	fprintf(f, "game_frame_ema\t%.3f\tms\n", g_gameFrameUsEma.load(std::memory_order_relaxed) / 1000.0);
-	if (secs > 0)
+	const double velSecs = g_velT0 != 0 ? (rend_now_us() - g_velT0) / 1e6 : 0;
+	if (velSecs > 0)
 	{
+		const double secs = velSecs;
 		const double emuSecs = (double)(sh4_sched_now64() - g_syncCyc0) / SH4_MAIN_CLOCK;
 		const u32 vblk = spg_vblank_count() - g_syncVblk0;
 		const u64 aGen = g_audioGenerated.load(std::memory_order_relaxed) - g_syncAudGen0;
@@ -1105,6 +1112,7 @@ void state_hash_mark_load()
       fflush(g_stateHashFile);
    }
    g_stateHashFrame = 0;
+   g_velRearm.store(true);	// FC_SYNC_STATS: a janela de VEL recomeca depois da carga
    {
       std::lock_guard<std::mutex> lk(g_fidM);
       g_fidNext = 0;		// FC_RT_HASH: ids a partir da carga

@@ -1094,6 +1094,16 @@ static void dbg_pick_log()
 	}
 }
 
+// FC_SKIP_LIST=<mascara> (diagnostico, 4.133): nao desenha a lista -- 1 opacos,
+// 2 punch-through, 4 modifier volumes, 8 translucidos. Mede, por eliminacao, quanto
+// de GPU cada lista custa (o GL_EXT_disjoint_timer_query da Mali nao mede trechos
+// dentro do frame: todo trecho deu ~0,3 ms, ate os vazios).
+static int skip_lists()
+{
+	static const int m = getenv("FC_SKIP_LIST") != nullptr ? atoi(getenv("FC_SKIP_LIST")) : 0;
+	return m;
+}
+
 void DrawStrips()
 {
 	dbg_pick_log();
@@ -1120,19 +1130,21 @@ void DrawStrips()
 
 		u64 rs0 = g_rendSplitEnabled ? rs_now_us() : 0;
 		//Opaque
+		if (!(skip_lists() & 1))
 		DrawList<ListType_Opaque, false>(pvrrc.global_param_op, 
 			previous_pass.op_count, current_pass.op_count - previous_pass.op_count);
 		u64 rs1 = g_rendSplitEnabled ? rs_now_us() : 0;
 		if (g_rendSplitEnabled) g_rsUs[3] += rs1 - rs0;
 
 		//Alpha tested
+		if (!(skip_lists() & 2))
 		DrawList<ListType_Punch_Through, false>(pvrrc.global_param_pt,
 			previous_pass.pt_count, current_pass.pt_count - previous_pass.pt_count);
 		u64 rs2 = g_rendSplitEnabled ? rs_now_us() : 0;
 		if (g_rendSplitEnabled) g_rsUs[4] += rs2 - rs1;
 
 		// Modifier volumes
-		if (gl.stencil_present && settings.rend.ModifierVolumes)
+		if (gl.stencil_present && settings.rend.ModifierVolumes && !(skip_lists() & 4))
 			DrawModVols(previous_pass.mvo_count, current_pass.mvo_count - previous_pass.mvo_count);
 
 		u64 rs3 = g_rendSplitEnabled ? rs_now_us() : 0;
@@ -1152,6 +1164,7 @@ void DrawStrips()
 		// completely untouched here -- confirmed inactive in this project's
 		// config (tech_debits.md item 4.1), so there's no value in adding
 		// risk to a dead path.
+		if (!(skip_lists() & 8))
 		{
 			int trCount = current_pass.tr_count - previous_pass.tr_count;
 			if (current_pass.autosort)
