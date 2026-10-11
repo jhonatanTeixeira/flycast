@@ -73,7 +73,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | Jogo | Teste | VEL% | fps | Estado |
 |---|---|---|---|---|
 | Capcom vs SNK 2 (CvS2) | 2026-09-27 | 100 | 56 | descrachou; cauda baixa |
-| DOA2 | 2026-10-10 | 89 | 37 | tier2 OFF: slowdowns, "quase jogável"; teto = throughput do SH4 (4.20). HLE do laço de vértices ~+1%. `FC_RT=2` (4.131): mais fps novos (27 → 33) mas VEL cai para 73,5% (espera do Process) |
+| DOA2 | 2026-10-11 | 89 | 27 | Base (esfriado < 63 °C): VEL 89,2%, 27 fps novos (descarta ~48% dos ~53 que produz). Render threads: 35 fps novos mas VEL 83,2% — GPU 45 → 70% e o controle térmico corta o clock da CPU (4.132). Gargalo real: ~16 ms de GPU por frame |
 | EGG | 2026-10-07 | 99,5 | 46 | tier2 OFF: **destravou** (travava a 11 fps com tier2) |
 | Evolution (1) | 2026-10-09 | 99 | 30 | "roda muito bem, 30 fps"; chão completo desde a correção do sort dos translúcidos (4.124, sem custo). **FMV a 100% (era ~78%)**, vídeo 30 quadros/s, usuário: "vídeo perfeito, áudio certo" (4.123). Obs.: há CHD com zstd que não abre (`cdzs`) |
 | Evolution 2 | 2026-10-07 | 97 | 28 | jogável a 30, quedas p/ 24; save/load a ver |
@@ -81,7 +81,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | KOF Evolution | 2026-10-07 | 98 | 51 | 60 fps fora da chuva; chuva ~54 com quedas p/ 32 e hicups |
 | Le Mans | 2026-10-07 | 95 | 30 | cold, HLE: velocidade perfeita, 30 fps; **áudio quebrado (uma batida em loop, bug antigo)**; load demorado; `declared_fps=7.5` a investigar |
 | Macross M3 | 2026-10-07 | 97 | 6,8 | **tela preta após o logo, preso em ~145 ms/frame** (4.115) |
-| MvC2 | 2026-10-10 | 100 | 47 | 33-45 fps, **glitches** e suspeita de regressão (4.118); sem tier2 44 fps. **Com `FC_RT=2` (render threads, 4.131): 53 fps novos, 0 descartes, core p99 33 ms**, imagem idêntica; falta o usuário ver |
+| MvC2 | 2026-10-11 | 100 | 52 | **Render threads (4.131, padrão): 40 → 52 fps novos, frame p99 55 → 40 ms, VEL 100%**, imagem idêntica; falta o usuário ver. Antes: glitches e suspeita de regressão (4.118) |
 | Napple Tale | 2026-10-07 | 99 | 30 | 30 cravado, partes pesadas ~27; áudio afinado (WSOLA) mas **som estourado** (4.116); **reclama de espaço no memory card / crash ao salvar** (4.117); 2026-10-09: sort dos translúcidos corrigido (4.124) — "bem menos erros gráficos, mais coerente, mesmo fps" |
 | Phantasy Star Online v2 | 2026-10-07 | 98 | 16,5 | **trava após load game** (preso em ~71 ms/frame); new game/save funcionou antes |
 | Power Stone | 2026-10-07 | 97 | 38 | parece 100% mas a ~45 contados (dupes/frameskip?) |
@@ -90,7 +90,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | Sonic Adventure 2 | 2026-10-07 | — | — | **crash após os logos** (exit 134, `SH4ThrownException`, 4.114); só com tier2 ON — rever com OFF |
 | Sonic Shuffle | 2026-10-07 | 68 | 14,8 | cena pesada do savestate a ~7 fps, p95 141 ms; laço de busca linear sem fix (ver tech_debits) |
 | Shenmue | 2026-10-07 | 83 | 25 | tier2 OFF: não crasha; 30 fps dentro de casa. Crash no loading entre lugares era tier2 |
-| Shenmue II | 2026-10-10 | 54 | 15 | Save pesado, cfg oficial (DSP ligado) + auto_load: **VEL 54,5%**, 15,2 fps novos, frame p50/p95/p99 57/75/90 ms, 0 dupes; **GPU só ~30% ocupada** (18-37%, 520 MHz), render 6,2 + 21,6 ms de 60 → limite é a emulação; ARM7 da AICA ~23 ms/frame (4.122). Antes (07/10, ON): 19-30 fps, jogável a ≥25; reclama de memory card cheio (4.117) |
+| Shenmue II | 2026-10-11 | 56 | 15,5 | Render threads (padrão): empate (VEL 56,0 → 55,8%, 15,5 → 16,0 fps novos). Save pesado, cfg oficial (DSP ligado) + auto_load: **VEL 54,5%**, 15,2 fps novos, frame p50/p95/p99 57/75/90 ms, 0 dupes; **GPU só ~30% ocupada** (18-37%, 520 MHz), render 6,2 + 21,6 ms de 60 → limite é a emulação; ARM7 da AICA ~23 ms/frame (4.122). Antes (07/10, ON): 19-30 fps, jogável a ≥25; reclama de memory card cheio (4.117) |
 | Skies of Arcadia (Disc 1) | 2026-10-07 | 99,6 | 29,8 | **30 cravados, rodando muito bem** |
 | Skies of Arcadia (Disc 2) | 2026-10-07 | — | — | **não boota** (exit 133, SIGSEGV; suspeita CHD) |
 | Soulcalibur | 2026-10-07 | 89 | 53,5 | 60 cravados; no ES do zero congelou no boot (4.30, não reconferido) |

@@ -482,3 +482,22 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   emulação espera mais o Process (`g_emuWaitRe`). Sem a espera 83,5%, com afinidade
   87,8%. Próximo: snapshot da VRAM no lugar da espera.
 
+## 2026-10-11 — Render threads ligadas por padrão; o R36 corta o clock da CPU pela GPU (4.131, 4.132)
+
+- **DOA2 perdia VEL com as threads (90,6 → 73,5%)** porque o frame ficava na fila esperando
+  um worker (a main só despacha no ritmo do frontend) e a emulação esperava o Process dele.
+  Correções: a emulação entrega o frame direto a um worker livre (`rt_dispatch_pending`),
+  o gate da fila descarta o frame se não há worker livre, e o núcleo 3 fica só com a
+  emulação. Espera da emulação 1,2 → 0,3 ms/frame; latência fila→worker p95 9 → 0,05 ms.
+- **Ligado para todos** (pedido do usuário: sem `if` por jogo; uma opção do core + LUT foi
+  feita e descartada antes do commit). `FC_RT=0` volta ao render antigo para A/B.
+- Hash idêntico ao render antigo: MvC2, DOA2, Napple Tale (RTT). MvC2 40 → 52 fps novos, p99
+  55 → 40 ms, VEL 100%. Shenmue II empata.
+- **DOA2 ainda perde VEL (89,2 → 83,2%, rodadas esfriadas) e não é espera:** `perf` mostra a
+  emulação ~99% ocupada nos dois modos, mesma distribuição; o clock da CPU é que cai (1478
+  → 1344 MHz médios), porque o `power_allocator` do RK3326 (liga a 70 °C) divide a potência
+  entre CPU e GPU e a GPU subiu de ~45% para ~70%. Em rodadas seguidas sem esfriar, até a
+  base roda a 1,0-1,2 GHz (4.132). Novo script `rtabt.sh` (esfria < 63 °C, loga clock/temp/GPU).
+- A GPU **não** está saturada no DOA2 base (~45%), mas gasta ~16 ms por frame: o caminho para
+  mostrar os ~50 frames/s que o jogo produz é baixar o custo de GPU por frame.
+

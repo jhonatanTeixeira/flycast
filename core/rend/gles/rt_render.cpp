@@ -35,7 +35,10 @@
 #include "gles.h"
 #include "hw/pvr/Renderer_if.h"
 #include "hw/pvr/ta_ctx.h"
+#include <dirent.h>
 #include <dlfcn.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <sched.h>
 #include <sys/sysinfo.h>
 #include <atomic>
@@ -54,6 +57,8 @@ void gl_rt_after_process();		// gles.cpp
 void gl_rt_thread_term();		// gles.cpp
 void rt_release_after_process(TA_context *ctx, TA_context *shadow);	// Renderer_if.cpp
 void rt_wake_main();			// Renderer_if.cpp
+void rt_dispatch_pending();		// Renderer_if.cpp
+extern std::atomic<u64> g_rendBusyUntilUs;	// Renderer_if.cpp (gate da fila)
 extern thread_local u32 t_rtFrameId;	// Renderer_if.cpp (FC_RT_HASH)
 
 void rt_collect_deferred();
@@ -167,6 +172,22 @@ std::atomic<u64> g_completed{0};
 // (RTT/framebuffer) espera este fence ao comecar e o troca pelo seu ao terminar;
 // como o Process e serial, a corrente e linear.
 RtSync g_chainFence = nullptr;
+
+// Gate da fila (QueueRender, ta_ctx.cpp): com todas as threads desenhando, o proximo
+// frame ficaria na fila esperando uma delas e a emulacao, no fim do render emulado,
+// esperaria o Process dele (re.Wait): DOA2 90,6 -> 73,5% de VEL. O g_rendBusyUntilUs
+// (o mesmo da liberacao antecipada do render antigo) fica "ocupado para sempre"
+// enquanto nao houver thread livre e o QueueRender descarta o frame. Estimar o fim do
+// desenho (como o render antigo) deixava passar frames quando o desenho atrasava:
+// emulacao esperando p99 12 ms. (g_m)
+void update_busy_locked()
+{
+	u64 busy = ~0ull;
+	for (Worker *w : g_workers)
+		if (w->job == nullptr)
+			busy = 0;
+	g_rendBusyUntilUs.store(busy, std::memory_order_relaxed);
+}
 
 std::mutex g_texM;
 std::vector<std::pair<GLuint, u64>> g_deferred;	// texturas para apagar quando o frame terminar
@@ -404,9 +425,14 @@ void worker_main(Worker *w)
 			gl_rt_after_process();	// registradores/paleta/fog deste frame, antes de soltar a emulacao
 			chain_signal();		// os uploads deste Process ficam visiveis a quem vier depois
 		}
+		{
+			std::lock_guard<std::mutex> lk(g_m);
+			update_busy_locked();	// antes de soltar o slot
+		}
 		rt_release_after_process(ctx, w->shadow);	// re.Set + listas para o shadow + libera o slot
 		_pvrrc = w->shadow;
 		g_slotOwned.store(false, std::memory_order_release);
+		rt_dispatch_pending();	// frame que entrou entre o FinishRender e a linha acima
 		rt_wake_main();
 
 		bool swap = false;
@@ -444,9 +470,11 @@ void worker_main(Worker *w)
 			}
 			w->job = nullptr;
 			g_rendering--;
+			g_rendBusyUntilUs.store(0, std::memory_order_relaxed);	// esta thread esta livre
 		}
 		_pvrrc = nullptr;
 		t_rtCurSeq = 0;
+		rt_dispatch_pending();
 		rt_wake_main();
 	}
 	free_fbos(w);
@@ -460,17 +488,16 @@ void worker_main(Worker *w)
 
 // ---------------------------------------------------------------- API
 
-// FC_RT=<N>, N >= 2, e o modo de render permite (sem filtro PowerVR2, sem troca
-// de frame atrasada, sem a textura Morton na GPU).
+// Padrao: 2 threads, se o modo de render permite (sem filtro PowerVR2, sem troca de
+// frame atrasada, sem a textura Morton na GPU). FC_RT=<N> muda: 0/1 = render antigo
+// (A/B), 2-4 threads.
 bool rt_requested()
 {
-	if (g_want < 0)
-	{
-		const char *e = getenv("FC_RT");
-		g_want = e != nullptr ? atoi(e) : 0;
-		if (g_want > 4)
-			g_want = 4;
-	}
+	static const char *e = getenv("FC_RT");
+	int want = e != nullptr ? atoi(e) : 2;
+	if (want > 4)
+		want = 4;
+	g_want = want;
 	return g_want >= 2 && !g_failed && settings.rend.ThreadedRendering && !settings.rend.PowerVR2Filter
 			&& !settings.rend.DelayFrameSwapping && getenv("FC_TEX_GPU_MORTON") == nullptr;
 }
@@ -601,6 +628,7 @@ void rt_stop()
 	}
 	g_completed.store(0);
 	g_slotOwned.store(false);
+	g_rendBusyUntilUs.store(0, std::memory_order_relaxed);
 	g_started = false;
 }
 
@@ -638,10 +666,16 @@ bool rt_can_submit()
 	return false;
 }
 
-// Entrega o frame (que esta no slot da fila) a uma thread de render livre.
-void rt_submit(TA_context *ctx, u32 frameId)
+// Entrega o frame (que esta no slot da fila) a uma thread de render livre. Chamada
+// pela emulacao (logo depois de enfileirar), pelas threads (ao ficarem livres) e pela
+// main: quem pegar o slot primeiro entrega. false = slot ja entregue ou nenhuma livre.
+bool rt_submit(TA_context *ctx, u32 frameId)
 {
-	g_slotOwned.store(true, std::memory_order_release);
+	if (!g_started)
+		return false;
+	bool expect = false;
+	if (!g_slotOwned.compare_exchange_strong(expect, true, std::memory_order_acq_rel))
+		return false;
 	{
 		std::lock_guard<std::mutex> lk(g_m);
 		Worker *w = nullptr;
@@ -651,8 +685,11 @@ void rt_submit(TA_context *ctx, u32 frameId)
 				w = x;
 				break;
 			}
-		if (w == nullptr)	// rt_can_submit garante que ha uma
-			w = g_workers[0];
+		if (w == nullptr)
+		{
+			g_slotOwned.store(false, std::memory_order_release);
+			return false;
+		}
 		w->job = ctx;
 		w->jobSeq = g_nextSeq++;
 		w->jobFrameId = frameId;
@@ -660,6 +697,7 @@ void rt_submit(TA_context *ctx, u32 frameId)
 		g_rendering++;
 	}
 	g_cv.notify_all();
+	return true;
 }
 
 // Main: marca os frames cuja GPU ja terminou (versionamento de textura).
@@ -806,6 +844,25 @@ void rt_pin_emu_thread()
 		return;
 	pinned = true;
 	pin_self(3, 3);
+	// O nucleo 3 fica so com a emulacao: as outras threads do processo que podiam ir
+	// para ele (apresentacao e audio do frontend, criadas antes) vao para o 0-2.
+	const pid_t self = (pid_t)syscall(SYS_gettid);
+	if (DIR *d = opendir("/proc/self/task"))
+	{
+		while (dirent *e = readdir(d))
+		{
+			const pid_t tid = (pid_t)atoi(e->d_name);
+			cpu_set_t cur;
+			if (tid <= 0 || tid == self || sched_getaffinity(tid, sizeof(cur), &cur) != 0 || !CPU_ISSET(3, &cur))
+				continue;
+			cpu_set_t set;
+			CPU_ZERO(&set);
+			for (int c = 0; c <= 2; c++)
+				CPU_SET(c, &set);
+			sched_setaffinity(tid, sizeof(set), &set);
+		}
+		closedir(d);
+	}
 }
 
 // A textura foi referenciada por um frame que ainda nao terminou na GPU (e nao e

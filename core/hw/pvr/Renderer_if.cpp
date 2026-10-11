@@ -406,6 +406,8 @@ static u64 g_lastNewFrameUs = 0;
 static std::atomic<u64> g_newFrameCount{0};
 static void note_new_frame()
 {
+	static std::mutex m;	// render threads: emulacao e threads de render tambem chamam
+	std::lock_guard<std::mutex> lk(m);
 	u64 now = rend_now_us();
 	if (g_lastNewFrameUs != 0)
 	{
@@ -756,7 +758,8 @@ bool rt_slot_owned() __attribute__((weak));
 int rt_rendering() __attribute__((weak));
 bool rt_has_unpresented() __attribute__((weak));
 bool rt_can_submit() __attribute__((weak));
-void rt_submit(TA_context *ctx, u32 frameId) __attribute__((weak));
+bool rt_submit(TA_context *ctx, u32 frameId) __attribute__((weak));
+bool rt_active() __attribute__((weak));
 void rt_poll_completion() __attribute__((weak));
 int rt_try_present() __attribute__((weak));
 void rt_main_before_fallback() __attribute__((weak));
@@ -820,6 +823,23 @@ void rt_release_after_process(TA_context *ctx, TA_context *shadow)
 	FinishRender(ctx);
 }
 
+// Entrega direta do frame da fila a uma thread de render livre, sem passar pela
+// main (que so volta ao rend_single_frame no ritmo do frontend: DOA2, frame parado
+// na fila p95 9 ms, e a emulacao esperando o Process dele). RTT e framebuffer ficam
+// com a main.
+void rt_dispatch_pending()
+{
+	TA_context *ctx = DequeueRender();
+	if (ctx == nullptr || ctx->rend.isRTT || ctx->rend.isRenderFramebuffer)
+		return;
+	if (rt_submit(ctx, rend_frame_id(ctx)))
+	{
+		note_new_frame();
+		if (g_syncStats == 1)
+			sync_frame_dequeued();
+	}
+}
+
 static bool rt_mode()
 {
 	if (rt_requested == nullptr || !rt_requested())
@@ -854,13 +874,15 @@ static bool rt_single_frame()
 						_pvrrc = ctx;
 						t_rtFrameId = rend_frame_id(ctx);
 						bool do_swp = rend_frame(ctx, true);
+						// antes de soltar o slot: o proximo frame pode ir direto a uma
+						// thread (rt_dispatch_pending) e o Process dele espera este fence
+						rt_main_after_fallback();
 						if (settings.rend.ThreadedRendering && ctx->rend.isRTT)
 							re.Set();
 						if (!rend_early_released)
 							FinishRender(ctx);
 						rend_early_released = false;
 						_pvrrc = nullptr;
-						rt_main_after_fallback();
 						if (do_swp)
 							return true;
 						continue;
@@ -868,10 +890,12 @@ static bool rt_single_frame()
 				}
 				else if (rt_can_submit())
 				{
-					note_new_frame();
-					if (g_syncStats == 1)
-						sync_frame_dequeued();
-					rt_submit(ctx, rend_frame_id(ctx));
+					if (rt_submit(ctx, rend_frame_id(ctx)))
+					{
+						note_new_frame();
+						if (g_syncStats == 1)
+							sync_frame_dequeued();
+					}
 					continue;
 				}
 			}
@@ -1238,6 +1262,8 @@ void rend_start_render(void)
                sync_frame_queued();
             palette_update();
 #if !defined(TARGET_NO_THREADS)
+            if (rt_active != nullptr && rt_active())
+               rt_dispatch_pending();	// depois do palette_update: o Process le a paleta
             if (settings.rend.ThreadedRendering)
             	rs.Set();
             else

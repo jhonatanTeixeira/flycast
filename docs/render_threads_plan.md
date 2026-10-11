@@ -1,6 +1,6 @@
 # Plano futuro: mais threads de render (round robin de frames)
 
-Status: **implementado, opt-in `FC_RT=2` (2026-10-10)** — fora do `current_plan.md`. Itens:
+Status: **implementado e ligado por padrão (2026-10-11)**; `FC_RT=0` volta ao render antigo (A/B) — fora do `current_plan.md`. Itens:
 `tech_debits.md` 4.131 (teste de viabilidade) e 4.130 (DOA2, o caso que motiva).
 Teste isolado: `tools/gl_two_threads.c`.
 
@@ -61,8 +61,36 @@ clear/readback correto.
   VRAM/TA em vez de a emulação esperar por ele, e descartar no despacho os frames que
   não vão ser mostrados.
 
-**Falta também:** testar Napple (RTT) e um jogo com framebuffer; ligar por jogo (opção
-do core) quando estiver provado.
+**2026-10-11 — espera eliminada, padrão para todos:**
+
+- **Entrega direta:** a emulação, logo depois de enfileirar (e do `palette_update`), entrega
+  o frame a um worker livre (`rt_dispatch_pending`); os workers também puxam a fila ao
+  ficarem livres. Antes o frame esperava a main voltar ao `rend_single_frame` (no ritmo do
+  frontend): latência fila→worker p95 9 ms → 0,05 ms.
+- **Gate estrito:** sem worker livre, o `g_rendBusyUntilUs` fica "ocupado" e o
+  `QueueRender` descarta o frame (como a liberação antecipada do render antigo). Estimar o
+  fim do desenho deixava passar frames quando ele atrasava. Espera da emulação pelo Process
+  1,2 → 0,3 ms/frame (base 0,4).
+- **Núcleo 3 só da emulação:** as outras threads do processo (apresentação/áudio do
+  frontend) saem dele.
+- Sem opção por jogo (pedido do usuário): ligado para todos; `FC_RT=0` só para A/B.
+
+| Jogo | Modo | VEL% | fps novos | frame p50/p95/p99 (ms) | underruns |
+|---|---|---|---|---|---|
+| MvC2 | base | 99,8 | 40,1 | 20,3 / 45,5 / 55,0 | 0 |
+| MvC2 | rt | 99,9 | **52,0** | **16,6 / 34,7 / 39,5** | 1 |
+| Shenmue II | base | 56,0 | 15,5 | 56,7 / 76,8 / 88,4 | 33 |
+| Shenmue II | rt | 55,8 | 16,0 | 57,0 / 75,7 / 89,7 | 25 |
+| DOA2 (esfriado) | base | 89,2 | 27,0 | 35,7 / 44,6 / 62,0 | 11 |
+| DOA2 (esfriado) | rt | 83,2 | 35,3 | 22,1 / 50,8 / 59,7 | 18 |
+
+Hash idêntico ao render antigo: MvC2, DOA2, Napple (RTT, 1003/1003).
+
+**A queda do DOA2 não é espera** (a emulação fica ~99% ocupada nos dois modos, mesma
+distribuição de tempo no `perf`): é o **4.132** — a GPU sobe de ~45% para ~70% e o
+`power_allocator` do RK3326 corta o clock da CPU (1478 → 1344 MHz médios). Para mostrar os
+~50 frames que o DOA2 produz, o que precisa cair é o **custo de GPU por frame** (~16 ms):
+próximo passo é medir onde ele vai (resolução, modifier volumes, translúcidos, shader).
 
 ## 1. A ideia
 
