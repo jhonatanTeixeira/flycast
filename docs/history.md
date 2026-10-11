@@ -695,4 +695,16 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   false` já estava na config oficial. Smoke pelo caminho novo: nenhuma pasta de captura criada,
   sem benchmark no log, jogo sobe. `rr_capture.sh` fica só como ferramenta (não é mais chamado
   pelo ES).
+- **Revertido no mesmo dia (pedido do usuário: "ligue a instrumentação de volta"):** os três
+  launch scripts voltaram a chamar `/home/ark/rr_capture.sh` (a versão com captura). O
+  `FC_AICA_DUAL` continua ligado (o `rr_capture.sh` exporta `FC_AICA_DUAL=32
+  FC_AICA_DUAL_CPU=-1`).
+- **Limpeza dos dados de instrumentação do device (pedido do usuário):** removidos
+  `/roms2/dcbat/*` (capturas, 1,1 GB), `/roms2/jitdump_napple*` (148 MB), `/roms2/dcbase`,
+  `/roms2/cold`, `/roms2/ab`, os arquivos de medição de `/roms2/dumps` (json/log/cfg/data/gl) e
+  de `/home/ark` (420 `.log`, 93 `.json`, `.data`/`.txt`/`.gz`/`.map`/`.pcm`/`.raw`). **Movidos**
+  os 49 cores de teste (`/home/ark/*.so` + `/roms2/dumps/*.so`) para
+  `/roms2/backups/old_test_cores/`. **Preservados** `/roms2/dumps/savestates_backup` (1,0 GB de
+  savestates), os cfgs/scripts do `/home/ark` e `dcbat_tools`. `/` 7,1 → 6,5 GB usados; `/roms2`
+  ~1,5 GB liberados.
 
