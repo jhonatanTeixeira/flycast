@@ -543,3 +543,14 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   deixa a emulação mais lenta. Com as threads o DOA2 desenha 95% do que produz: 84,4% é a
   velocidade honesta e passa a ser a referência. Regra: VEL só se lê junto com os descartes.
 
+## 2026-10-11 — Por que desenhar mais frames deixa a emulação mais lenta (4.132)
+
+- Mesmo build, 1 thread de render, clock 1512 MHz cravado, só a taxa de desenho muda
+  (`FC_RENDER_BUDGET_MS=36` limita a ~21 frames/s): VEL 90,7% (21,5 desenhados/s) × 86,7%
+  (36,5/s). Contadores de hardware só na thread da emulação (`tools/rtpmu.sh` +
+  `tools/rtpmu.py`), por segundo emulado: instruções 668 × 665 M (iguais), faltas no L2 4,4 ×
+  4,5 M (iguais), ciclos 1404 × 1474 M (+5%), IPC 0,476 × 0,451; faults e trocas de contexto
+  desprezíveis. Mesmo trabalho e mesmas idas à RAM; cada ida fica ~15 ciclos mais cara com o
+  tráfego do render. Ciclos +5% ≈ VEL −4,4%.
+- Alvos: menos bytes por frame no render; menos faltas de L2 na emulação (4.127).
+
