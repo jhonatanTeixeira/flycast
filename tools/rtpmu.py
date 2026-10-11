@@ -12,5 +12,5 @@ for d in sys.argv[1:]:
     fr=[l.split() for l in open(d+'/freq.txt')]; mhz=sum(int(x[0]) for x in fr)/len(fr)/1000; gpu=sum(int(x[2]) for x in fr)/len(fr)
     emusec=12*vel/100
     i=emu['instructions']; c=emu['cycles']
-    print('%-8s VEL %5.1f  fps novos %5s  enfil/desc %s/%s  CPU %4.0f MHz GPU %2.0f%% | emu: tempo %5.0f ms, instr/s-emu %5.0fM, ciclos/s-emu %5.0fM, IPC %.3f, L2 refill/s-emu %5.1fM, L2 acc/s-emu %5.1fM, bus/s-emu %5.1fM, faults %d, ctxsw %d'%(
-      d.split('rtpmu_')[-1],vel,nf,q[0],q[1],mhz,gpu,emu.get('task-clock',0),i/emusec/1e6,c/emusec/1e6,i/c,emu.get('r17',0)/emusec/1e6,emu.get('r16',0)/emusec/1e6,emu.get('r19',0)/emusec/1e6,emu.get('page-faults',0),emu.get('context-switches',0)))
+    print('%-8s VEL %5.1f  fps novos %5s  enfil/desc %s/%s  CPU %4.0f MHz GPU %2.0f%% | emu: tempo %5.0f ms, instr/s-emu %5.0fM, ciclos/s-emu %5.0fM, IPC %.3f, L2 refill/s-emu %5.1fM, L1I refill/s-emu %5.1fM, iTLB refill/s-emu %5.2fM, faults %d, ctxsw %d'%(
+      d.split('rtpmu_')[-1],vel,nf,q[0],q[1],mhz,gpu,emu.get('task-clock',0),i/emusec/1e6,c/emusec/1e6,i/c,emu.get('r17',0)/emusec/1e6,emu.get('r01',0)/emusec/1e6,emu.get('r02',0)/emusec/1e6,emu.get('page-faults',0),emu.get('context-switches',0)))

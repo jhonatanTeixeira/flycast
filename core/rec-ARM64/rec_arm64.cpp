@@ -65,6 +65,18 @@ static bool BlockProfEnabled()
 	return enabled == 1;
 }
 
+// Caminho quente/frio (D1, docs/jit_hot_path.md, 4.127): o que quase nunca executa
+// -- fim de fatia (intc_sched), falha da checagem de codigo, excecao de FPU -- vai para
+// uma cauda fria depois do fim do bloco. A entrada do bloco fica sem desvio tomado
+// (antes: `b.pl` tomado em toda entrada pulando ~6 instrucoes) e o codigo quente fica
+// contiguo nas linhas de cache. Mesmo codigo executado: estado identico.
+// FC_JIT_COLD=0 volta ao layout antigo (A/B).
+static bool ColdTailEnabled()
+{
+	static const bool en = getenv("FC_JIT_COLD") == nullptr || atoi(getenv("FC_JIT_COLD")) != 0;
+	return en;
+}
+
 static bool IfbCountEnabled()
 {
 	static int enabled = -1; // -1: not checked yet, 0: disabled, 1: enabled
@@ -941,6 +953,15 @@ public:
 			Add(w10, w10, 1);
 			Str(w10, MemOperand(x9));
 		}
+		if (ColdTailEnabled())
+		{
+			// fim de fatia (raro): `b.mi` nao tomado no caminho normal; o resto na cauda
+			B(&coldSlice, mi);
+			coldSliceUsed = true;
+			Bind(&sliceResume);
+		}
+		else
+		{
 		Label cycles_remaining;
 		B(&cycles_remaining, pl);
 		GenCall(*arm64_intc_sched);
@@ -951,6 +972,7 @@ public:
 		GenBranch(*arm64_no_update);
 		Bind(&cpu_running);
 		Bind(&cycles_remaining);
+		}
 
 		if (JitTraceEnabled())
 		{
@@ -1818,7 +1840,40 @@ public:
 
 		RelinkBlock(block);
 
+		EmitColdTail();
+
 		Finalize();
+	}
+
+	// Cauda fria do bloco (D1): depois do relink, que nunca cresce ao ser reescrito.
+	// Nada daqui e alcancado por queda: so pelos desvios condicionais da entrada.
+	void EmitColdTail()
+	{
+		if (coldSliceUsed)
+		{
+			Bind(&coldSlice);
+			GenCall(*arm64_intc_sched);
+			Cbnz(w0, &sliceResume);
+			Mov(w29, block->vaddr);
+			Str(w29, sh4_context_mem_operand(&next_pc));
+			GenBranch(*arm64_no_update);
+		}
+		if (coldCheckUsed)
+		{
+			Bind(&coldCheckFail);
+			Ldr(w0, block->addr);
+			TailCallRuntime(ngen_blockcheckfail);
+		}
+		if (coldFpuUsed)
+		{
+			Bind(&coldFpu);
+			Mov(*call_regs[0], block->vaddr);	// pc
+			Mov(*call_regs[1], 0x800);			// event
+			Mov(*call_regs[2], 0x100);			// vector
+			CallRuntime(Do_Exception);
+			Ldr(w29, sh4_context_mem_operand(&next_pc));
+			GenBranch(*arm64_no_update);
+		}
 	}
 
 	void ngen_CC_Start(shil_opcode* op)
@@ -3491,7 +3546,11 @@ private:
 		if (!mmu_enabled() && !force_checks)
 			return;
 
-		Label blockcheck_fail;
+		const bool cold = ColdTailEnabled();
+		Label blockcheck_fail_inline;
+		Label &blockcheck_fail = cold ? coldCheckFail : blockcheck_fail_inline;
+		if (cold)
+			coldCheckUsed = true;
 
 		if (mmu_enabled())
 		{
@@ -3538,6 +3597,8 @@ private:
 				}
 			}
 		}
+		if (!cold)
+		{
 		Label blockcheck_success;
 		B(&blockcheck_success);
 		Bind(&blockcheck_fail);
@@ -3545,12 +3606,19 @@ private:
 		TailCallRuntime(ngen_blockcheckfail);
 
 		Bind(&blockcheck_success);
+		}
 
 		// Checagem de FPU desabilitada em RUNTIME (ver 4.92): o bloco e
 		// compilado mesmo com SR.FD==1 e, na entrada, testa-se SR.FD. Antes
 		// isso so valia para MMU; sem MMU a excecao era levantada no decode,
 		// o que era fragil (a excecao espuria travava a BIOS -- cvs2).
-		if (block->has_fpu_op)
+		if (block->has_fpu_op && cold)
+		{
+			Ldr(w10, sh4_context_mem_operand(&sr));
+			Tbnz(w10, 15, &coldFpu);			// SR.FD: excecao na cauda fria
+			coldFpuUsed = true;
+		}
+		else if (block->has_fpu_op)
 		{
 			Label fpu_enabled;
 			Ldr(w10, sh4_context_mem_operand(&sr));
@@ -3638,6 +3706,9 @@ private:
 	// FC_JIT_DUMP: offsets do codigo gerado (entrada, cada op, fim das ops)
 	u32 jitDumpEntryEnd = 0, jitDumpLoopEnd = 0;
 	std::vector<std::array<u32, 4>> jitDumpOps;
+	// cauda fria do bloco (D1, EmitColdTail)
+	Label coldSlice, sliceResume, coldCheckFail, coldFpu;
+	bool coldSliceUsed = false, coldCheckUsed = false, coldFpuUsed = false;
 	const int read_memory_rewrite_size = 3;	// ubfx, add, ldr
 	const int write_memory_rewrite_size = 3; // ubfx, add, str
 };

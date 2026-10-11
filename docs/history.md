@@ -554,3 +554,19 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   tráfego do render. Ciclos +5% ≈ VEL −4,4%.
 - Alvos: menos bytes por frame no render; menos faltas de L2 na emulação (4.127).
 
+## 2026-10-11 — Caminho quente do JIT, fase D1: cauda fria (4.127)
+
+- `rec_arm64.cpp`: fim de fatia (`intc_sched`), falha da checagem de código e exceção de
+  FPU saem do meio do bloco para uma cauda fria depois do fim do bloco (`EmitColdTail`). A
+  entrada do bloco troca o `b.pl` tomado (pulando ~6 instruções) por `b.mi` não tomado.
+  `FC_JIT_COLD=0` volta ao layout antigo.
+- Bug achado no caminho: o `rdv_LinkBlock` encolhia o `host_code_size` para terminar no
+  relink; a cauda saía do bloco e o `rdv_DoInterrupts` (que acha o bloco pelo endereço de
+  retorno da chamada ao `intc_sched`) dava ponteiro nulo. Agora não encolhe.
+- Estado idêntico (`FC_STATE_HASH`, comparado por ciclo emulado — `tools/sthcmp.py`; a
+  numeração de frames pode deslocar 1 entre rodadas): DOA2 966/966, Napple 942/942, Shenmue
+  II 771 (RAM/VRAM/ARAM/ctx iguais em todos).
+- Shenmue II (contadores na thread da emulação, `tools/rtpmu.sh`): VEL 54,3 → 55,1%, ciclos
+  por segundo emulado −1%, **faltas de L1I 10,5 → 10,0 M por segundo emulado**. Esse número
+  (~7-9% do tempo esperando código) é o alvo da D3 (arena quente).
+

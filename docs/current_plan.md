@@ -91,7 +91,7 @@ e kofxi (Atomiswave). Commit `tier2` (2026-10-10).
 
 | # | Item | Status |
 |---|------|--------|
-| D1 | Separar quente/frio no emissor: área fria por fatia de 1 MB do cache; falha da checagem de código, fim de fatia (`intc_sched`), misses do fim de bloco e literais vão para o frio. Mesmo código executado → hash idêntico. | pendente |
+| D1 | Separar quente/frio no emissor. **Feito (2026-10-11), versão simples:** fim de fatia (`intc_sched`), falha da checagem de código e exceção de FPU vão para uma cauda fria depois do fim de cada bloco (`EmitColdTail`; a entrada perde o `b.pl` tomado). O relink não encolhe mais o `host_code_size` (a cauda é do bloco). Estado idêntico (DOA2 966/966, Napple 942/942, Shenmue II 771). Shenmue II: VEL 54,3 → 55,1%, faltas L1I 10,5 → 10,0 M/s emulado. `FC_JIT_COLD=0` = layout antigo. Falta: literais no frio, área fria por fatia (se a D3 pedir) | feito (parcial) |
 | D2 | Versão por página no lugar da checagem byte a byte dos blocos em página não protegida (`ro=0`): 3 instruções na entrada; o frio compara os bytes só quando a versão muda. Alvo: Shenmue (24 dos 79 blocos mais quentes). | pendente |
 | D3 | Arena quente: amostrar no `intc_sched` o bloco onde a fatia termina, promover os quentes para uma área contígua em ordem de cadeia (salto provável vira queda direta), com decaimento e saída quando enche. | pendente |
 | D4 | Menos bytes por instrução SH4: T direto no desvio; registradores do SH4 em registradores do host dentro do bloco. | pendente |

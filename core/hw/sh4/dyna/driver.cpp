@@ -455,7 +455,11 @@ void* DYNACALL rdv_LinkBlock(u8* code,u32 dpc)
 		}
 		u32 ncs = rbi->relink_offset + rbi->Relink();
 		verify(rbi->host_code_size >= ncs);
-		rbi->host_code_size = ncs;
+		// Nao encolhe o tamanho registrado: depois do relink ficam a cauda fria (D1,
+		// 4.127) e os literais, que continuam sendo do bloco. Encolher tirava a cauda
+		// do bloco e o bm_GetBlock2 do rdv_DoInterrupts (endereco de retorno da chamada
+		// ao intc_sched, na cauda) nao achava mais o bloco.
+		(void)ncs;
 	}
 	else
 	{
