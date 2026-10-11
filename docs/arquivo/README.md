@@ -38,5 +38,5 @@ raciocínio quando um doc ativo aponta para "ver history/tech_debits <item>".
 `arm64jit.md`, `x86jit.md`, `jit_study.md`, `mali_gles_best_practices.md`
 (referência) · `sync_emu_render.md` (referência do mecanismo; fases 1-3 e a espera
 com prazo já feitas) · `padroes_ineficiencia_analise.md`, `fmv_plan.md`,
-`standalone_plan.md`, `refactor_x64.md` (futuro), `jit_hot_path.md`, `sh4_threading_model.md`, `native_sdk_code.md` + `sdk_blocks/` (planos vivos) · `ctrl_socket.md` (ferramenta) ·
+`standalone_plan.md`, `refactor_x64.md` (futuro), `render_threads_plan.md` (futuro), `jit_hot_path.md`, `sh4_threading_model.md`, `native_sdk_code.md` + `sdk_blocks/` (planos vivos) · `ctrl_socket.md` (ferramenta) ·
 `current_plan.md`, `tech_debits.md`, `history.md`, `game_status.md`.

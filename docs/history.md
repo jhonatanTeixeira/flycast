@@ -419,7 +419,7 @@ II** (savestate) com o laço do DOA2 na base `8C1D8D22`: HLE on × off **idênti
 (283 quadros) — o Shenmue II agora usa o nativo. MvC2 e Evolution 1 têm os bytes
 idênticos (confirmado no dump), mas o savestate não executa a função (falta cena).
 Falta A/B de 2 rodadas no Shenmue II e ligar as demais cenas (4.125).
-- **Teste de 2 renderers na Mali (4.130, `tools/gl_two_threads.c`):** 1 thread 88,8
+- **Teste de 2 renderers na Mali (4.131 — saiu como 4.130 no commit, número já usado pelo DOA2; `tools/gl_two_threads.c`):** 1 thread 88,8
   frames/s → 2 threads com contextos compartilhados 155,2 (1,75×), custo por draw igual;
   o driver não serializa. A 1ª versão do teste usava pbuffer no GBM e deu oops no kernel
   (GPU travada até o reboot); com janela GBM, todos os modos limpos.
@@ -428,3 +428,8 @@ Falta A/B de 2 rodadas no Shenmue II e ligar as demais cenas (4.125).
   novos → o limite é a emulação, não a GPU (a afirmação "Shenmue é GPU-bound" vinha do
   Shenmue 1 em 09/2026). ARM7 da AICA ~23 ms/frame (4.122). Dados em
   `/roms2/dcbat/gpu_shenmue2/`.
+- **Plano futuro `docs/render_threads_plan.md`** (round robin de renderers): caso ideal
+  DOA2 (4.130, render ~19 ms > 16,7 ms, descarta ~40%), MvC2 candidato, Shenmue II não.
+  Desenho: contextos compartilhados sem superfície (nunca pbuffer), programas por
+  contexto, texturas versionadas, RTT/framebuffer serializados, apresentação em ordem.
+  O 4.131 (teste de viabilidade) foi renumerado (colidia com o 4.130 do DOA2) e corrigido.
