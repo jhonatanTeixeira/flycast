@@ -329,6 +329,7 @@ ifeq ($(HAVE_GL), 1)
 	SOURCES_CXX += $(CORE_DIR)/core/rend/gles/gles.cpp \
 						$(CORE_DIR)/core/rend/gles/gldraw.cpp \
 						$(CORE_DIR)/core/rend/gles/gltex.cpp \
+						$(CORE_DIR)/core/rend/gles/rt_proto.cpp \
 						$(CORE_DIR)/core/rend/gles/postprocess.cpp
 	ifeq ($(HAVE_OIT), 1)
 		SOURCES_CXX += $(CORE_DIR)/core/rend/gl4/gles.cpp \

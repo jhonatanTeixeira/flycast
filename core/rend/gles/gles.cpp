@@ -1511,6 +1511,9 @@ bool ProcessFrame(TA_context* ctx)
    return !ctx->rend.Overrun;
 }
 
+// Render threads (4.131): fundacao do 2o contexto EGL compartilhado (rt_proto.cpp).
+namespace rt_proto { void rt_init(); }
+
 struct glesrend : Renderer
 {
    bool Init() override
@@ -1539,6 +1542,10 @@ struct glesrend : Renderer
 
       if (settings.rend.PowerVR2Filter)
       	postProcessor.Init();
+
+      // Render threads (4.131, docs/render_threads_plan.md): fundacao do 2o
+      // contexto EGL compartilhado + FBO. Opt-in (FC_RT=1), nao muda o render.
+      rt_proto::rt_init();
 
       return true;
    }

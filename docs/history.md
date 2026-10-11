@@ -433,6 +433,18 @@ off **idênticos** — DOA2 916 quadros, Shenmue II 355. `stripluz` instala nos 
 Shenmue II no B1 levemente melhor (VEL 70,7 → 71,8, p99 88 → 78 ms); DOA2 confundido
 (cenas divergem). Falta o `r8` ímpar (grupo 004) e as variantes Power Stone/callback.
 Item 4.125.
+
+## 2026-10-10 — Render threads (4.131): fundação do 2º contexto EGL
+
+Início da implementação do `docs/render_threads_plan.md` (2 renderers em round robin
+para o DOA2/MvC2, render-bound). Etapa 2, fundação: `core/rend/gles/rt_proto.cpp` pega o
+display/contexto EGL do frontend (via `dlopen("libEGL.so")`, sem linkar EGL, como o
+`hle_gpu.cpp`) e cria um **2º contexto EGL compartilhado** com ele, faz corrente **sem
+superfície** (`EGL_KHR_surfaceless_context`; sem pbuffer — pbuffer no GBM derrubou o
+kernel) e desenha/lê num FBO próprio. Opt-in `FC_RT=1`, no `glesrend::Init`; não toca o
+render normal. Testado no device (DOA2): contexto ok, FBO completo, clear/readback =
+64,128,191,255. Falta desenhar o frame real (reset do `glcache` por contexto) e
+apresentar. 4.131.
 - **Teste de 2 renderers na Mali (4.131 — saiu como 4.130 no commit, número já usado pelo DOA2; `tools/gl_two_threads.c`):** 1 thread 88,8
   frames/s → 2 threads com contextos compartilhados 155,2 (1,75×), custo por draw igual;
   o driver não serializa. A 1ª versão do teste usava pbuffer no GBM e deu oops no kernel

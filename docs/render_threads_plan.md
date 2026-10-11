@@ -1,8 +1,17 @@
 # Plano futuro: mais threads de render (round robin de frames)
 
-Status: **plano futuro (2026-10-10)** — fora do `current_plan.md`; não executar sem
-pedido. Itens: `tech_debits.md` 4.131 (teste de viabilidade) e 4.130 (DOA2, o caso que
-motiva). Teste isolado: `tools/gl_two_threads.c`.
+Status: **em execução (2026-10-10)** — fora do `current_plan.md`. Itens:
+`tech_debits.md` 4.131 (teste de viabilidade) e 4.130 (DOA2, o caso que motiva).
+Teste isolado: `tools/gl_two_threads.c`.
+
+**Feito (etapa 2, fundação):** `core/rend/gles/rt_proto.cpp` — o core pega o
+display/contexto EGL do frontend (corrente na thread principal, `eglGetCurrentDisplay`/
+`GetCurrentContext` via `dlopen`, sem linkar EGL) e cria um **2º contexto EGL
+compartilhado** com ele, faz corrente **sem superfície** (`EGL_KHR_surfaceless_context`,
+sem pbuffer) e desenha/lê num FBO próprio. Opt-in `FC_RT=1`, chamado no `glesrend::Init`;
+não toca o render normal. Testado no device (DOA2): contexto ok, FBO completo,
+clear/readback correto. **Falta:** desenhar o frame real nesse contexto (reset do
+`glcache` por contexto) e apresentar.
 
 ## 1. A ideia
 
