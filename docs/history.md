@@ -419,3 +419,7 @@ II** (savestate) com o laço do DOA2 na base `8C1D8D22`: HLE on × off **idênti
 (283 quadros) — o Shenmue II agora usa o nativo. MvC2 e Evolution 1 têm os bytes
 idênticos (confirmado no dump), mas o savestate não executa a função (falta cena).
 Falta A/B de 2 rodadas no Shenmue II e ligar as demais cenas (4.125).
+- **Teste de 2 renderers na Mali (4.130, `tools/gl_two_threads.c`):** 1 thread 88,8
+  frames/s → 2 threads com contextos compartilhados 155,2 (1,75×), custo por draw igual;
+  o driver não serializa. A 1ª versão do teste usava pbuffer no GBM e deu oops no kernel
+  (GPU travada até o reboot); com janela GBM, todos os modos limpos.
