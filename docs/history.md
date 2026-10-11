@@ -582,3 +582,21 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   42,4/65,6/76,4. Sem regressão; bate com os ~22 fps do DeepSeek.
 - `tools/rtabt.sh` aceita `CORE=<.so>` para medir outro core.
 
+## 2026-10-11 — Plano mmap/MoE/MTP; fase 1a: DSP no render do som em lote (4.122)
+
+- Plano novo `docs/mmap_moe_mtp_plan.md` (técnicas inspiradas em LLM + dual core do Dolphin):
+  fase 1 ganhos rápidos (DSP em lote, parar de limpar o cache por uma falha de checagem), fase 2
+  arena quente bloco a bloco (a D3 por limpeza ficou desligada, `FC_JIT_HOT=1` só diagnóstico:
+  travava 0,15-1 s e mudava as fronteiras dos blocos), fase 3 ARM7 em thread própria 1 quantum
+  adiantado. Cache de código em disco descartado (ponteiros absolutos por execução).
+- **DSP em lote:** DSP ligado forçava `NoBatch=1` → mixagem + DSP por amostra na emu thread
+  (~23 ms/frame). Agora o render do som (thread já existente do 4.44) acumula `MIXS[ISEL]` por
+  amostra, roda o `dsp_step` e soma o EFREG; `dyndirty` atômico; a fila é drenada antes do
+  `FC_STATE_HASH`. Shenmue II com DSP, mesma cena: **VEL 57,0 → 73,9%**, fps 17,1/16,3 →
+  22,3/20,7 (apresentados/novos), frame p50/p95/p99 55,7/78,2/92,1 → 42,0/67,5/87,3. Estado: 2
+  rodadas em lote idênticas (762 frames); áudio lote × lote idêntico, lote × por amostra com o
+  mesmo nível (RMS ±2%) e as vozes deslocadas até ~30 amostras (o controle já é por bloco de 32).
+- **Bug achado:** o render em lote tocava a voz só-DSP com `oDsp` em vez de `oDsp >> 4` (16×
+  mais alto) — candidato ao "som estourado" sem DSP. Corrigido.
+- Cfg de debug com DSP: `/home/ark/r_cur_shenmue2_dsp.cfg`.
+

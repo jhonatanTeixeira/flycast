@@ -863,7 +863,7 @@ struct RVoice
 };
 struct RChanHdr
 {
-	u8 ch, n, flags, pad;	// flags: 1 FEG ativo, 2 zerar filtro (KEY_ON), 4 VOFF
+	u8 ch, n, flags, isel;	// flags: 1 FEG ativo, 2 zerar filtro (KEY_ON), 4 VOFF; isel: entrada do DSP (MIXS)
 	u32 dl, dr, ds;
 	s32 q;
 };
@@ -878,6 +878,9 @@ struct RBlock
 	u8 efsdl16, efpan16, efsdl17, efpan17;
 	u8 cddaMute, mono, dac18b, noSound;
 	u32 mvol;
+	// DSP no lote (docs/mmap_moe_mtp_plan.md fase 1a): o DSP roda no render, por amostra
+	u8 dspOn, pad[3];
+	u8 efsdl[16], efpan[16];	// saidas EFREG do DSP
 };
 
 bool ChannelEx::ControlStep(RVoice& v)
@@ -1592,6 +1595,9 @@ static void aica_render_block(const RBlock& b)
 	u64 k0 = g_rendSplitEnabled ? aica_rticks() : 0;
 	SampleType mxlr[64];
 	memset(mxlr, 0, sizeof(mxlr));
+	SampleType dmix[32][16];	// entradas do DSP (MIXS) por amostra
+	if (b.dspOn)
+		memset(dmix, 0, sizeof(dmix));
 
 	for (u32 k = 0; k < b.nch; k++)
 	{
@@ -1637,8 +1643,13 @@ static void aica_render_block(const RBlock& b)
 			SampleType oRight = FPMul(sample, logtable[dr], 15);
 			SampleType oDsp = FPMul(sample, logtable[ds], 11);	// 20 bits
 
-			if (oLeft + oRight == 0)
-				oLeft = oRight = oDsp;
+			// Como o Step por amostra: com DSP, a voz entra na mixagem do DSP (MIXS[ISEL]);
+			// sem DSP, a voz que so manda som para o DSP toca direto com oDsp >> 4.
+			// Antes faltava o >> 4: essas vozes saiam 16x mais altas (som estourado).
+			if (b.dspOn)
+				dmix[i][h.isel] += oDsp;
+			else if (oLeft + oRight == 0)
+				oLeft = oRight = oDsp >> 4;
 
 			mxlr[i*2+0] += oLeft;
 			mxlr[i*2+1] += oRight;
@@ -1664,6 +1675,16 @@ static void aica_render_block(const RBlock& b)
 		{
 			VOLPAN(EXTS0L,b.efsdl16,b.efpan16,mixl,mixr);
 			VOLPAN(EXTS0R,b.efsdl17,b.efpan17,mixl,mixr);
+		}
+		// DSP (antes so no caminho por amostra, na emu thread): mesma conta do AICA_Sample
+		if (b.dspOn)
+		{
+			memcpy(dsp.MIXS, dmix[i], sizeof(dsp.MIXS));
+			DSPData->EXTS[0] = b.cddaMute ? 0 : EXTS0L;
+			DSPData->EXTS[1] = b.cddaMute ? 0 : EXTS0R;
+			dsp_step();
+			for (int j = 0; j < 16; j++)
+				VOLPAN(*(s16*)&DSPData->EFREG[j], b.efsdl[j], b.efpan[j], mixl, mixr);
 		}
 
 		//Mono !
@@ -1813,6 +1834,7 @@ void AICA_Sample32()
 			continue;
 		RChanHdr& h = b.hdr[nch];
 		h.ch = ch;
+		h.isel = c.ccd->ISEL;
 		h.flags = (c.FEG.active ? 1 : 0) | (c.ccd->VOFF == 1 ? 4 : 0);
 		if (c.FEG.resetGen != rSentGen[ch])
 		{
@@ -1867,6 +1889,13 @@ void AICA_Sample32()
 	b.dac18b = CommonData->DAC18B;
 	b.mvol = CommonData->MVOL;
 	b.noSound = settings.aica.NoSound != 0;
+	b.dspOn = settings.aica.DSPEnabled ? 1 : 0;
+	if (b.dspOn)
+		for (int j = 0; j < 16; j++)
+		{
+			b.efsdl[j] = dsp_out_vol[j].EFSDL;
+			b.efpan[j] = dsp_out_vol[j].EFPAN;
+		}
 
 	aica_block_publish(b);
 }

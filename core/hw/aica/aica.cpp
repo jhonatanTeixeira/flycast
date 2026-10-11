@@ -106,7 +106,8 @@ static int AicaUpdate(int tag, int c, int j)
 	u64 k0 = g_rendSplitEnabled ? aica_ticks() : 0;
    aicaarm::run(32);
 	u64 k1 = g_rendSplitEnabled ? aica_ticks() : 0;
-	if (!settings.aica.NoBatch && !settings.aica.DSPEnabled)
+	// Com DSP tambem em lote (o DSP roda no render, docs/mmap_moe_mtp_plan.md fase 1a)
+	if (!settings.aica.NoBatch)
 		AICA_Sample32();
 	if (g_rendSplitEnabled)
 	{

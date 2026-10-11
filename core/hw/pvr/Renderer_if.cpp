@@ -1183,6 +1183,9 @@ void rend_start_render(void)
          }
          if (hashFrame % every == 0)
          {
+            // o render do som (com o DSP, fase 1a) escreve na ARAM: drena antes do hash
+            extern void aica_mix_sync();
+            aica_mix_sync();
             // jdyn (reg_pc_dyn) e' scratch interno do dynarec, nao registrador
             // do SH4: zera antes do hash. Sem isso, um bloco antigo compilado
             // antes de um patch de codigo via DMA (que nao dispara SMC) deixa

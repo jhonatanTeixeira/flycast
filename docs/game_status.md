@@ -90,7 +90,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | Sonic Adventure 2 | 2026-10-07 | — | — | **crash após os logos** (exit 134, `SH4ThrownException`, 4.114); só com tier2 ON — rever com OFF |
 | Sonic Shuffle | 2026-10-07 | 68 | 14,8 | cena pesada do savestate a ~7 fps, p95 141 ms; laço de busca linear sem fix (ver tech_debits) |
 | Shenmue | 2026-10-07 | 83 | 25 | tier2 OFF: não crasha; 30 fps dentro de casa. Crash no loading entre lugares era tier2 |
-| Shenmue II | 2026-10-11 | 73,5 | 22 | DSP desligado (cfg oficial): **VEL 73,5%, 22,1 fps apresentados (20,6 novos)**, frame p50/p95/p99 42/66/76 ms, com render threads + D1; core oficial na mesma cena 70,8% / 21,3 fps. Limite é a emulação (GPU ~30%). Com DSP ligado ~55% / 16 fps. ARM7 da AICA ~23 ms/frame (4.122); memory card cheio (4.117) |
+| Shenmue II | 2026-10-11 | 73,9 | 22 | **Com DSP ligado agora igual ao desligado** (DSP em lote, 4.122): VEL 73,9%, 22,3 fps apresentados (20,6 novos), frame p50/p95/p99 42/68/87 ms; DSP desligado 73,5% / 22,1. Core oficial (DSP off) 70,8%. Falta o usuário ouvir (DSP ligado e o `>> 4` sem DSP). ARM7 + controle ~8 ms/frame (fase 3); memory card cheio (4.117) |
 | Skies of Arcadia (Disc 1) | 2026-10-07 | 99,6 | 29,8 | **30 cravados, rodando muito bem** |
 | Skies of Arcadia (Disc 2) | 2026-10-07 | — | — | **não boota** (exit 133, SIGSEGV; suspeita CHD) |
 | Soulcalibur | 2026-10-07 | 89 | 53,5 | 60 cravados; no ES do zero congelou no boot (4.30, não reconferido) |

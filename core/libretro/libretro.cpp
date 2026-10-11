@@ -1120,7 +1120,9 @@ static void update_variables(bool first_startup)
       if (!strcmp("enabled", var.value))
       {
          settings.aica.DSPEnabled = true;
-         settings.aica.NoBatch    = 1;
+         // DSP em lote, no render do som (fase 1a); FC_AICA_NOBATCH=1 volta ao
+         // caminho por amostra na emu thread (A/B)
+         settings.aica.NoBatch    = getenv("FC_AICA_NOBATCH") != nullptr ? 1 : 0;
       }
       else
       {
@@ -1130,7 +1132,7 @@ static void update_variables(bool first_startup)
    else if (first_run)
    {
       settings.aica.DSPEnabled = true;
-      settings.aica.NoBatch    = 1;
+      settings.aica.NoBatch    = getenv("FC_AICA_NOBATCH") != nullptr ? 1 : 0;
    }
 
    var.key = CORE_OPTION_NAME "_digital_triggers";

@@ -449,9 +449,11 @@ void dsp_init()
 
 void dsp_step()
 {
-	if (dsp.dyndirty)
+	// O DSP roda no render do som (outra thread, fase 1a do docs/mmap_moe_mtp_plan.md) e
+	// o dyndirty e marcado pela emu thread (dsp_writenmem): acesso atomico.
+	if (__atomic_load_n(&dsp.dyndirty, __ATOMIC_ACQUIRE))
 	{
-		dsp.dyndirty = false;
+		__atomic_store_n(&dsp.dyndirty, false, __ATOMIC_RELAXED);
 		dsp_recompile();
 	}
    if (dsp.Stopped)
@@ -463,7 +465,7 @@ void dsp_writenmem(u32 addr)
 {
 	if (addr >= 0x3400 && addr < 0x3C00)
 	{
-		dsp.dyndirty = true;
+		__atomic_store_n(&dsp.dyndirty, true, __ATOMIC_RELEASE);
 	}
 	else if (addr >= 0x4000 && addr < 0x4400)
 	{
