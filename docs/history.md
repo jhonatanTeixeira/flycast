@@ -538,4 +538,8 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   hipótese aberta: memória compartilhada (4.132).
 - `FC_REND_SPLIT` derruba a VEL (DOA2 ~54%): os números de render dele valem para comparar,
   a VEL não.
+- **Leitura corrigida pelo usuário:** os 90,6% do render antigo eram velocidade inflada — ele
+  descartava 47% dos frames de um jogo de 60 (27 fps novos) e desenhar frames comprovadamente
+  deixa a emulação mais lenta. Com as threads o DOA2 desenha 95% do que produz: 84,4% é a
+  velocidade honesta e passa a ser a referência. Regra: VEL só se lê junto com os descartes.
 
