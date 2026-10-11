@@ -497,7 +497,7 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   emulação ~99% ocupada nos dois modos, mesma distribuição; o clock da CPU é que cai (1478
   → 1344 MHz médios), porque o `power_allocator` do RK3326 (liga a 70 °C) divide a potência
   entre CPU e GPU e a GPU subiu de ~45% para ~70%. Em rodadas seguidas sem esfriar, até a
-  base roda a 1,0-1,2 GHz (4.132). Novo script `rtabt.sh` (esfria < 63 °C, loga clock/temp/GPU).
+  base roda a 1,0-1,2 GHz (4.132). Novo script `tools/rtabt.sh` (esfria < 63 °C, loga clock/temp/GPU).
 - A GPU **não** está saturada no DOA2 base (~45%), mas gasta ~16 ms por frame: o caminho para
   mostrar os ~50 frames/s que o jogo produz é baixar o custo de GPU por frame.
 
