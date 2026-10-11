@@ -443,6 +443,8 @@ T DYNACALL ReadMem_area0(u32 addr)
 	//map 0x0080 to 0x00FF
 	else if ((base >=0x0080) && (base <=0x00FF) /*&& (addr>= 0x00800000) && (addr<=0x00FFFFFF)*/) //	:AICA- Wave Memory
 	{
+      extern u64 g_sh4AramR;	// portao 3.0 (com FC_ARAM_COUNT, todo acesso do SH4 passa aqui)
+      g_sh4AramR++;
       return (T)ReadMemArr<sz>(aica_ram.data, addr & ARAM_MASK);
 	}
 	//map 0x0100 to 0x01FF
@@ -537,6 +539,8 @@ void  DYNACALL WriteMem_area0(u32 addr,T data)
 	//map 0x0080 to 0x00FF
 	else if ((base >=0x0080) && (base <=0x00FF) /*&& (addr>= 0x00800000) && (addr<=0x00FFFFFF)*/) // AICA- Wave Memory
 	{
+      extern u64 g_sh4AramW;
+      g_sh4AramW++;
       WriteMemArr<sz>(aica_ram.data, addr & ARAM_MASK, data);
 	}
 	//map 0x0100 to 0x01FF

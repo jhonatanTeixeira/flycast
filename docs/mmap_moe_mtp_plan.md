@@ -171,6 +171,13 @@ levantamento (`aica_if.cpp`, `aica_mem.cpp`, `aica.cpp`, `sb_mem.cpp`, `_vmem.cp
     "~0" no Shenmue II, DOA2, Shenmue e MBAA.
   - Se ~0: aceitar a corrida. Senão: nesse modo, a visão do SH4 vai pelo handler que drena
     (como no modo 512 MB, `_vmem.cpp:489`).
+  - **Resultado (2026-10-11, `FC_ARAM_COUNT=1` + `sh4_aica_por_s_emulado` no `FC_SYNC_STATS`):**
+    registradores do AICA pelo SH4 = **0** em DOA2, MvC2, Shenmue II, Napple (os ~60/frame do
+    4.44 eram o ARM7). ARAM: DOA2 44.298 escritas e 62 leituras por segundo emulado; MvC2
+    44.316 / 192; Shenmue II 0; Napple pouco. **Desenho ajustado:** no modo dual core a visão
+    da ARAM do SH4 passa pelo handler (como no diagnóstico); as escritas vão para uma fila
+    aplicada pela thread do som no início do quantum seguinte (determinístico, sem espera); as
+    leituras drenam (esperam o quantum em voo), ~1-3% de custo estimado.
 - **Thread e núcleo:** a thread do som produz os `RBlock` e funde com o worker de mixagem do
   4.44. Cuidado com o achado: o worker hoje pode nascer depois do pin e herdar o núcleo 3,
   disputando com o SH4. Primeiro no núcleo 0 (main/apresentação); medir.

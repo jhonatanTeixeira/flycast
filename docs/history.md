@@ -627,3 +627,14 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
 - Nota de método: no `sthash.sh` a primeira rodada de cada par carrega o jogo a frio e avança
   menos tempo emulado; o estado vale (comparado nos frames em comum), a velocidade não.
 
+## 2026-10-11 — Fase 3, portão 3.0: o SH4 não toca nos registradores do som; escreve muito na ARAM
+
+- Contadores `sh4_aica_por_s_emulado` no `FC_SYNC_STATS` (registradores por tipo, ARAM, DMA G2)
+  e o diagnóstico `FC_ARAM_COUNT=1` (ARM7/DSP num apelido da ARAM em 0x20000000; as visões do
+  SH4 ficam `PROT_NONE`, cada acesso vira chamada do handler da área 0 e é contado).
+- Por segundo emulado: registradores = 0 nos 4 jogos; ARAM DOA2 44.298 escritas / 62 leituras,
+  MvC2 44.316 / 192, Shenmue II 0, Napple pouco (DMA G2 3,6/s). Desenho do dual core
+  ajustado: escritas do SH4 na ARAM em fila aplicada no início do quantum seguinte; leituras
+  drenam.
+- Usuário sobre o DOA2: "é outro jogo já desde ontem, chegamos a 50 fps e visual mais fluido".
+

@@ -86,9 +86,16 @@ void WriteMem_aica_rtc(u32 addr,u32 data,u32 sz)
 	}
 }
 
+// Portao 3.0 do docs/mmap_moe_mtp_plan.md (dual core do som): acessos do SH4 ao AICA,
+// por tipo -- 0 canais (0x0000-0x1FFF), 1 comuns (0x2000-0x2FFF), 2 DSP (0x3000+).
+// Impressos no FC_SYNC_STATS por segundo emulado.
+u64 g_sh4AicaRegR[3], g_sh4AicaRegW[3], g_sh4AramR, g_sh4AramW, g_sh4AicaDma;
+static inline int aica_reg_kind(u32 addr) { return addr < 0x2000 ? 0 : addr < 0x3000 ? 1 : 2; }
+
 u32 ReadMem_aica_reg(u32 addr,u32 sz)
 {
 	addr&=0x7FFF;
+	g_sh4AicaRegR[aica_reg_kind(addr)]++;
 	if (sz==1)
 	{
 		if (addr==0x2C01)
@@ -125,6 +132,7 @@ static void ArmSetRST()
 void WriteMem_aica_reg(u32 addr,u32 data,u32 sz)
 {
 	addr&=0x7FFF;
+	g_sh4AicaRegW[aica_reg_kind(addr)]++;
 
 	if (sz==1)
 	{
@@ -333,6 +341,7 @@ void Write_DmaStart(u32 addr, u32 data)
 
 static void Write_SB_ADST(u32 addr, u32 data)
 {
+	g_sh4AicaDma++;
 	//0x005F7800	SB_ADSTAG	RW	AICA:G2-DMA G2 start address 
 	//0x005F7804	SB_ADSTAR	RW	AICA:G2-DMA system memory start address 
 	//0x005F7808	SB_ADLEN	RW	AICA:G2-DMA length 

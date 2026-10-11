@@ -73,7 +73,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | Jogo | Teste | VEL% | fps | Estado |
 |---|---|---|---|---|
 | Capcom vs SNK 2 (CvS2) | 2026-09-27 | 100 | 56 | descrachou; cauda baixa |
-| DOA2 | 2026-10-11 | 84 | 45 | Render threads + profundidade no vértice + opacos ordenados (4.131/4.133/4.134): **45,5 fps novos, descarte 5%**, frame p50/p95/p99 19/32/42 ms, **VEL 84,4% — a velocidade honesta** (desenha o jogo inteiro). O render antigo dava 90,6% descartando 47% dos frames (27 fps novos): velocidade inflada pelo descarte. Falta o usuário ver |
+| DOA2 | 2026-10-11 | 84 | 45-50 | **Usuário: "é outro jogo já desde ontem, chegamos a 50 fps e visual mais fluido".** Render threads + profundidade no vértice + opacos ordenados (4.131/4.133/4.134): 45,5 fps novos medidos, descarte 5%, frame p50/p95/p99 19/32/42 ms, VEL 84,4% (a honesta; o render antigo dava 90,6% descartando 47%) |
 | EGG | 2026-10-07 | 99,5 | 46 | tier2 OFF: **destravou** (travava a 11 fps com tier2) |
 | Evolution (1) | 2026-10-09 | 99 | 30 | "roda muito bem, 30 fps"; chão completo desde a correção do sort dos translúcidos (4.124, sem custo). **FMV a 100% (era ~78%)**, vídeo 30 quadros/s, usuário: "vídeo perfeito, áudio certo" (4.123). Obs.: há CHD com zstd que não abre (`cdzs`) |
 | Evolution 2 | 2026-10-07 | 97 | 28 | jogável a 30, quedas p/ 24; save/load a ver |

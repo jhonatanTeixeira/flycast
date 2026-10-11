@@ -391,9 +391,14 @@ extern std::atomic<u64> g_audioGenerated, g_audioDelivered;	// audiostream.cpp
 static u64 g_syncCyc0, g_syncAudGen0, g_syncAudOut0, g_velT0;
 static u32 g_syncVblk0;
 static std::atomic<bool> g_velRearm{false};	// carga de savestate: o relogio emulado salta
+extern u64 g_sh4AicaRegR[3], g_sh4AicaRegW[3], g_sh4AramR, g_sh4AramW, g_sh4AicaDma;	// aica_if.cpp
+static u64 g_acc0[9];	// contadores do portao 3.0 no inicio da janela
 static void vel_arm(u64 now)
 {
 	g_velT0 = now;
+	const u64 cur[9] = { g_sh4AicaRegR[0], g_sh4AicaRegW[0], g_sh4AicaRegR[1], g_sh4AicaRegW[1],
+			g_sh4AicaRegR[2], g_sh4AicaRegW[2], g_sh4AramR, g_sh4AramW, g_sh4AicaDma };
+	memcpy(g_acc0, cur, sizeof(cur));
 	g_syncCyc0 = sh4_sched_now64();
 	g_syncVblk0 = spg_vblank_count();
 	g_syncAudGen0 = g_audioGenerated.load(std::memory_order_relaxed);
@@ -685,6 +690,15 @@ void sync_dump_stats(const char *path)
 		fprintf(f, "vel_vblank\t%.2f\t%%\tvblanks\t%u\tvblank_hz\t%.3f\n", 100.0 * vblk / nominal / secs, vblk, hz);
 		fprintf(f, "vel_audio_generated\t%.2f\t%%\tsamples\t%llu\n", 100.0 * aGen / 44100.0 / secs, (unsigned long long)aGen);
 		fprintf(f, "vel_audio_delivered\t%.2f\t%%\tsamples\t%llu\n", 100.0 * aOut / 44100.0 / secs, (unsigned long long)aOut);
+		// portao 3.0 (dual core do som): acessos do SH4 ao AICA por segundo emulado, na
+		// janela da VEL (a ARAM so e contada com FC_ARAM_COUNT=1)
+		const u64 cur[9] = { g_sh4AicaRegR[0], g_sh4AicaRegW[0], g_sh4AicaRegR[1], g_sh4AicaRegW[1],
+				g_sh4AicaRegR[2], g_sh4AicaRegW[2], g_sh4AramR, g_sh4AramW, g_sh4AicaDma };
+		double r[9];
+		for (int k = 0; k < 9; k++)
+			r[k] = emuSecs > 0 ? (cur[k] - g_acc0[k]) / emuSecs : 0;
+		fprintf(f, "sh4_aica_por_s_emulado\tregs_canal_r\t%.0f\tw\t%.0f\tregs_comuns_r\t%.0f\tw\t%.0f\tregs_dsp_r\t%.0f\tw\t%.0f\taram_r\t%.0f\taram_w\t%.0f\tdma_g2\t%.1f\n",
+				r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]);
 	}
 	sync_dist(f, "latency_queue_to_dequeue", lat, 0.001, "ms");
 	sync_dist(f, "process_dequeue_to_reset", proc, 0.001, "ms");

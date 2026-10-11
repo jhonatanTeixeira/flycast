@@ -7,6 +7,9 @@
 
 #if defined(HAVE_LIBNX)
 #include <malloc.h>
+#include <sys/mman.h>
+#elif !defined(_WIN32)
+#include <sys/mman.h>	// mprotect (FC_ARAM_COUNT)
 #endif
 
 #define HANDLER_MAX 0x1F
@@ -555,6 +558,20 @@ bool _vmem_reserve(void)
 			aica_ram.data = &virt_ram_base[0x80800000];  // Points to the first AICA addrspace in P1
 			vram.data = &virt_ram_base[0x84000000];   // Points to first vram mirror (writable and lockable) in P1
 			mem_b.data = &virt_ram_base[0x8C000000];   // Main memory, first mirror in P1
+
+			// FC_ARAM_COUNT=1 (diagnostico, portao 3.0 do docs/mmap_moe_mtp_plan.md): o
+			// ARM7/DSP ganham um apelido proprio da ARAM em 0x20000000 (P0 sem uso no modo
+			// 4GB) e as visoes do SH4 ficam sem acesso: todo acesso do SH4 a ARAM falha, vira
+			// chamada do handler da area 0 (sb_mem.cpp) e e contado.
+			if (getenv("FC_ARAM_COUNT") != nullptr)
+			{
+				const vmem_mapping alias[] = { {0x20000000, 0x20800000, MAP_ARAM_START_OFFSET, ARAM_SIZE, true} };
+				vmem_platform_create_mappings(&alias[0], 1);
+				aica_ram.data = &virt_ram_base[0x20000000];
+				for (u32 b : { 0x00800000u, 0x02800000u, 0x80800000u, 0x82800000u, 0xA0800000u, 0xA2800000u, 0xC0800000u, 0xC2800000u })
+					mprotect(&virt_ram_base[b], 0x00800000, PROT_NONE);
+				NOTICE_LOG(VMEM, "FC_ARAM_COUNT: visoes da ARAM do SH4 sem acesso; ARM7 em 0x20000000");
+			}
 
 			vmem_4gb_space = true;
 		}
