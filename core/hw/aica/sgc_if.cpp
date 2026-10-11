@@ -1748,8 +1748,11 @@ static void aica_render_worker()
 			t = rqTail.load(std::memory_order_relaxed);
 		}
 		aica_render_block(rq[t % rqCap]);
-		rqTail.store(t + 1, std::memory_order_release);
-		rqCvSpace.notify_one();	// liberou um slot pro produtor
+		{
+			std::lock_guard<std::mutex> l(rqMx);	// idem: sem despertar perdido do produtor
+			rqTail.store(t + 1, std::memory_order_release);
+		}
+		rqCvSpace.notify_all();	// liberou um slot pro produtor (e acorda o aica_mix_sync)
 	}
 }
 
@@ -1760,9 +1763,10 @@ void aica_mix_sync()
 		return;
 	// savestate/reset/term: espera o worker drenar. Park em futex, nao spin.
 	std::unique_lock<std::mutex> l(rqMx);
-	rqCvSpace.wait(l, [] {
+	while (!rqCvSpace.wait_for(l, std::chrono::seconds(2), [] {
 		return rqTail.load(std::memory_order_acquire) == rqHead.load(std::memory_order_relaxed);
-	});
+	}))
+		fprintf(stderr, "aica mix: sync > 2 s -- cabeca %u cauda %u\n", rqHead.load(), rqTail.load());
 }
 
 static void aica_render_stop()
@@ -1814,8 +1818,32 @@ static void aica_block_publish(RBlock& b)
 		aica_render_block(b);
 		return;
 	}
-	rqHead.store(rqHead.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+	{
+		// sob a trava: sem ela o aviso podia cair entre o worker conferir a fila e dormir
+		// (despertar perdido). O bloco seguinte o acordava; numa drenagem (dual core, hash,
+		// savestate) nao vem bloco seguinte e o aica_mix_sync esperava para sempre.
+		std::lock_guard<std::mutex> l(rqMx);
+		rqHead.store(rqHead.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+	}
 	rqCvData.notify_one();
+}
+
+// Dual core do som (aica.cpp): o CDDA (estado do GD-ROM) e lido na emu thread no instante
+// do quantum e o AICA_Sample32 da thread do som usa estas 32 amostras.
+s16 *g_cddaPreL, *g_cddaPreR;	// CDDA do quantum em execucao (null = ler aqui)
+void aica_cdda_prefill(s16 *L, s16 *R)
+{
+	for (int i=0;i<32;i++)
+	{
+		if (cdda_index>=CDDA_SIZE)
+		{
+			cdda_index=0;
+			libCore_CDDA_Sector(cdda_sector);
+		}
+		L[i]=cdda_sector[cdda_index];
+		R[i]=cdda_sector[cdda_index+1];
+		cdda_index+=2;
+	}
 }
 
 void AICA_Sample32()
@@ -1869,6 +1897,13 @@ void AICA_Sample32()
 	b.steps = steps;
 
 	//CDDA EXTS input
+	if (g_cddaPreL != nullptr)
+	{
+		// dual core: lido na emu thread antes de disparar o quantum (aica_cdda_prefill)
+		memcpy(b.extsL, g_cddaPreL, sizeof(b.extsL));
+		memcpy(b.extsR, g_cddaPreR, sizeof(b.extsR));
+	}
+	else
 	for (int i=0;i<32;i++)
 	{
 		if (cdda_index>=CDDA_SIZE)

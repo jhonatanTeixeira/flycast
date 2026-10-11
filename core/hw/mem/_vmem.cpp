@@ -563,7 +563,8 @@ bool _vmem_reserve(void)
 			// ARM7/DSP ganham um apelido proprio da ARAM em 0x20000000 (P0 sem uso no modo
 			// 4GB) e as visoes do SH4 ficam sem acesso: todo acesso do SH4 a ARAM falha, vira
 			// chamada do handler da area 0 (sb_mem.cpp) e e contado.
-			if (getenv("FC_ARAM_COUNT") != nullptr)
+			if (getenv("FC_ARAM_COUNT") != nullptr
+					|| (getenv("FC_AICA_DUAL") != nullptr && atoi(getenv("FC_AICA_DUAL")) != 0))
 			{
 				const vmem_mapping alias[] = { {0x20000000, 0x20800000, MAP_ARAM_START_OFFSET, ARAM_SIZE, true} };
 				vmem_platform_create_mappings(&alias[0], 1);

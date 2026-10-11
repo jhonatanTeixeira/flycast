@@ -445,6 +445,8 @@ T DYNACALL ReadMem_area0(u32 addr)
 	{
       extern u64 g_sh4AramR;	// portao 3.0 (com FC_ARAM_COUNT, todo acesso do SH4 passa aqui)
       g_sh4AramR++;
+      extern void aica_dual_drain();
+      aica_dual_drain();	// dual core do som: le a ARAM depois do quantum em voo e da fila
       return (T)ReadMemArr<sz>(aica_ram.data, addr & ARAM_MASK);
 	}
 	//map 0x0100 to 0x01FF
@@ -541,7 +543,9 @@ void  DYNACALL WriteMem_area0(u32 addr,T data)
 	{
       extern u64 g_sh4AramW;
       g_sh4AramW++;
-      WriteMemArr<sz>(aica_ram.data, addr & ARAM_MASK, data);
+      extern bool aica_dual_aram_write(u32 addr, u32 data, u32 sz);
+      if (!aica_dual_aram_write(addr, data, sz))	// dual core do som: fila ate a fronteira
+         WriteMemArr<sz>(aica_ram.data, addr & ARAM_MASK, data);
 	}
 	//map 0x0100 to 0x01FF
 	else if (base >= 0x0100 && base <= 0x01FF) // G2 Ext. Device #1

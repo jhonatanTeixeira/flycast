@@ -92,8 +92,11 @@ void WriteMem_aica_rtc(u32 addr,u32 data,u32 sz)
 u64 g_sh4AicaRegR[3], g_sh4AicaRegW[3], g_sh4AramR, g_sh4AramW, g_sh4AicaDma;
 static inline int aica_reg_kind(u32 addr) { return addr < 0x2000 ? 0 : addr < 0x3000 ? 1 : 2; }
 
+void aica_dual_drain();	// aica.cpp (dual core do som)
+
 u32 ReadMem_aica_reg(u32 addr,u32 sz)
 {
+	aica_dual_drain();
 	addr&=0x7FFF;
 	g_sh4AicaRegR[aica_reg_kind(addr)]++;
 	if (sz==1)
@@ -131,6 +134,7 @@ static void ArmSetRST()
 }
 void WriteMem_aica_reg(u32 addr,u32 data,u32 sz)
 {
+	aica_dual_drain();
 	addr&=0x7FFF;
 	g_sh4AicaRegW[aica_reg_kind(addr)]++;
 
@@ -341,6 +345,7 @@ void Write_DmaStart(u32 addr, u32 data)
 
 static void Write_SB_ADST(u32 addr, u32 data)
 {
+	aica_dual_drain();
 	g_sh4AicaDma++;
 	//0x005F7800	SB_ADSTAG	RW	AICA:G2-DMA G2 start address 
 	//0x005F7804	SB_ADSTAR	RW	AICA:G2-DMA system memory start address 

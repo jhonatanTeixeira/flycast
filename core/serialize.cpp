@@ -321,6 +321,8 @@ bool dc_serialize(void **data, unsigned int *total_size)
 	int j = 0;
 	serialize_version_enum version = VCUR_LIBRETRO;
 
+	extern void aica_dual_drain();
+	aica_dual_drain();	// dual core do som: quantum em voo terminado
 	aica_mix_sync();	// render das vozes em thread: fila vazia antes de salvar
 	*total_size = 0 ;
 
@@ -614,6 +616,8 @@ bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_si
 	int dummy_int ;
 	serialize_version_enum version = V1 ;
 
+	extern void aica_dual_drain();
+	aica_dual_drain();
 	aica_mix_sync();
 
 	*total_size = 0 ;

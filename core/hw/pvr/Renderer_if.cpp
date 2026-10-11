@@ -697,6 +697,15 @@ void sync_dump_stats(const char *path)
 		double r[9];
 		for (int k = 0; k < 9; k++)
 			r[k] = emuSecs > 0 ? (cur[k] - g_acc0[k]) / emuSecs : 0;
+		{
+			// dual core do som: espera da emu pela thread do som e drenagens (sessao inteira)
+			extern u64 g_aicaDualWaitUs, g_aicaDualDrains, g_aicaDualWaits, g_aicaDualQuanta, g_aicaDualWorkUs, g_aicaDualWakeUs;
+			const double q = g_aicaDualQuanta ? (double)g_aicaDualQuanta : 1.0;
+			fprintf(f, "aica_dual\tespera_total_ms\t%.1f\tdrenagens\t%llu\tquanta\t%llu\tesperas_que_bloquearam\t%llu\tespera_media_us\t%.1f\ttrabalho_medio_us\t%.1f\tacordar_medio_us\t%.1f\n",
+					g_aicaDualWaitUs / 1000.0, (unsigned long long)g_aicaDualDrains, (unsigned long long)g_aicaDualQuanta,
+					(unsigned long long)g_aicaDualWaits, g_aicaDualWaits ? g_aicaDualWaitUs / (double)g_aicaDualWaits : 0.0,
+					g_aicaDualWorkUs / q, g_aicaDualWakeUs / q);
+		}
 		fprintf(f, "sh4_aica_por_s_emulado\tregs_canal_r\t%.0f\tw\t%.0f\tregs_comuns_r\t%.0f\tw\t%.0f\tregs_dsp_r\t%.0f\tw\t%.0f\taram_r\t%.0f\taram_w\t%.0f\tdma_g2\t%.1f\n",
 				r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]);
 	}
@@ -1206,6 +1215,8 @@ void rend_start_render(void)
          {
             // o render do som (com o DSP, fase 1a) escreve na ARAM: drena antes do hash
             extern void aica_mix_sync();
+            extern void aica_dual_drain();
+            aica_dual_drain();
             aica_mix_sync();
             // jdyn (reg_pc_dyn) e' scratch interno do dynarec, nao registrador
             // do SH4: zera antes do hash. Sem isso, um bloco antigo compilado
