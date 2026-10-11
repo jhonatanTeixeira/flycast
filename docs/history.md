@@ -570,3 +570,15 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   por segundo emulado −1%, **faltas de L1I 10,5 → 10,0 M por segundo emulado**. Esse número
   (~7-9% do tempo esperando código) é o alvo da D3 (arena quente).
 
+## 2026-10-11 — Shenmue II: os ~16 fps eram cfg de debug velho (DSP ligado)
+
+- Os testes de hoje no Shenmue II usaram `r_shenmue2_gpu.cfg` (cópia do oficial do dia 10,
+  com `flycast2026_enable_dsp = enabled`); o oficial está com o DSP desligado desde o dia 10.
+  Novos cfgs de debug = oficial + `retrorun_auto_load = true`: `/home/ark/r_cur_{doa2,mvc2,
+  shenmue2,napple}.cfg`. As comparações A/B de hoje continuam válidas (mesmo cfg dos dois
+  lados), o nível absoluto do Shenmue II não.
+- Shenmue II, mesma cena, DSP desligado: core oficial VEL 70,8%, 21,3 fps apresentados (19,9
+  novos), frame p50/p95/p99 44,0/63,7/80,5; build atual 73,5%, 22,1 (20,6 novos),
+  42,4/65,6/76,4. Sem regressão; bate com os ~22 fps do DeepSeek.
+- `tools/rtabt.sh` aceita `CORE=<.so>` para medir outro core.
+
