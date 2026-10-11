@@ -609,3 +609,21 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   por limpeza). A troca do `rdv_BlockCheckFail` por descarte por página fica para quando um
   jogo mostrar limpezas durante o jogo.
 
+## 2026-10-11 — Fase 2 (MoE): arena quente bloco a bloco — funciona, não ganha
+
+- Promoção bloco a bloco para o `TempCodeCache` (1 MB, ocioso sem MMU): seleção pelas amostras
+  do `intc_sched` (95% das amostras, até 1500 blocos; `FC_JIT_HOT_PCT`/`FC_JIT_HOT_MAX`), fila em
+  ordem de cadeia, descarta e recompila no mesmo endereço/`fpu_cfg`, 1 ms por ponto seguro
+  (`rdv_DoInterrupts`), troca de época quando a arena enche. **Estado idêntico** a
+  `FC_JIT_HOT=0` (DOA2 494, Shenmue II 532, Napple 536 frames). DOA2 1615 blocos/281 KB,
+  Shenmue II 2074/352 KB.
+- **Piorou** (Shenmue II, `rtpmu.sh`): sem arena VEL 71,1%, L1I 7,3 M/s emulado, iTLB 0,12 M;
+  arena 95% 66,5% / 9,3 M / 0,19 M; arena 50% (140 blocos) 69,9% / 8,7 M / 0,11 M. Desligada por
+  padrão.
+- `perf record -e r01` (falta de L1I) na thread da emulação: 76,5% no código do JIT do SH4,
+  5,4% `hle_fn_run`, ~4% kernel, ~2,7% ARM7. O JIT já põe junto o que roda junto (compila na
+  primeira execução); o limite é o tamanho do código quente (250-350 KB contra 32 KB). Próximo
+  alvo da etapa D: D4, menos bytes por instrução SH4.
+- Nota de método: no `sthash.sh` a primeira rodada de cada par carrega o jogo a frio e avança
+  menos tempo emulado; o estado vale (comparado nos frames em comum), a velocidade não.
+

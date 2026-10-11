@@ -236,27 +236,36 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	return true;
 }
 
-static RuntimeBlockInfo *compile_block(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures);
+static RuntimeBlockInfo *compile_block_ex(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures, bool arena);
+static RuntimeBlockInfo *compile_block(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures)
+{
+	return compile_block_ex(pc, fpu_cfg, blockcheck_failures, false);
+}
 
 // ---------------------------------------------------------------- D3: arena quente
-// docs/jit_hot_path.md fase 3, 4.127. O stub intc_sched guarda, a cada g_hotEvery fatias
-// (~448 ciclos do SH4 cada), o endereco de retorno da chamada -- que fica na cauda fria
-// do bloco onde a fatia acabou (D1). E uma amostragem do tempo por bloco, sem instrucao
-// extra nos blocos. Quando a maior parte das amostras cai fora da arena (cena nova, cache
-// limpo), num ponto seguro (rdv_DoInterrupts, que volta ao despachante) o cache e limpo
-// e os blocos mais quentes sao recompilados primeiro, um atras do outro, no comeco do
-// cache: o codigo quente fica contiguo (menos linhas de L1I e paginas). Mesmo codigo
-// gerado, mesma configuracao de FPU de cada bloco. FC_JIT_HOT=1 liga (diagnostico).
+// docs/jit_hot_path.md fase 3, docs/mmap_moe_mtp_plan.md fase 2, 4.127. O stub intc_sched
+// guarda, a cada g_hotEvery fatias (~448 ciclos do SH4 cada), o endereco de retorno da
+// chamada -- na cauda fria do bloco onde a fatia acabou (D1): amostragem do tempo por
+// bloco sem instrucao extra nos blocos. Os blocos mais quentes sao promovidos UM A UM
+// para a arena (o TempCodeCache, 1 MB, ocioso sem MMU), em ordem de cadeia (o sucessor
+// quente logo depois): descarta o bloco e o recompila na arena, no mesmo endereco SH4 e
+// com o mesmo fpu_cfg. Nada mais e limpo -- as fronteiras dos outros blocos nao mudam e o
+// estado fica identico. A promocao roda no ponto seguro (rdv_DoInterrupts, que volta ao
+// despachante) com orcamento de ~1 ms por chamada. FC_JIT_HOT=1 liga (desligado: ver 4.127).
 u32 g_hotCountdown = 64;
 static const u32 g_hotEvery = 64;
 static const u32 HOT_RING = 16384;
 static void *g_hotRing[HOT_RING];
 static u32 g_hotN;			// amostras no anel desde a ultima limpeza do cache
-static u32 g_hotIn, g_hotOut;		// amostras dentro/fora da arena desde a ultima reorganizacao
-static u32 g_hotArenaEnd;		// fim da arena (offset no CodeCache); 0 = sem arena
-static u64 g_hotLastUs;		// ultima reorganizacao (ou o inicio)
+static u32 g_hotIn, g_hotOut;		// amostras dentro/fora da arena desde a ultima selecao
+static u64 g_hotLastUs;		// ultima selecao (ou o inicio)
 static bool g_hotDue;
-static u32 g_hotRelayouts;
+static u32 g_hotSelections, g_hotPromoted, g_hotEpochs;
+static u32 g_arenaUsed;			// bytes usados no TempCodeCache
+struct HotItem { u32 vaddr; fpscr_t cfg; };
+static std::vector<HotItem> g_promoteQ;	// fila de promocao (ordem de cadeia)
+static size_t g_promoteIdx;
+static std::vector<u32> g_arenaBlocks;	// vaddr dos blocos na arena (para a troca de epoca)
 
 static u64 hot_now_us()
 {
@@ -267,8 +276,8 @@ static u64 hot_now_us()
 
 bool jit_hot_enabled()
 {
-	// Desligado por padrao ate a fase 2 do docs/mmap_moe_mtp_plan.md (promocao bloco a
-	// bloco): a reorganizacao por limpeza do cache travava 0,15-1 s e mudava as fronteiras.
+	// Desligado por padrao: a promocao funciona (estado identico) mas piorou o Shenmue II
+	// (faltas de L1I 7,3 -> 8,7-9,3 M por segundo emulado). FC_JIT_HOT=1 liga.
 	static const bool en = getenv("FC_JIT_HOT") != nullptr && atoi(getenv("FC_JIT_HOT")) != 0;
 	return en;
 }
@@ -279,7 +288,7 @@ void jit_hot_sample(void *host_pc)
 	g_hotRing[g_hotN % HOT_RING] = host_pc;
 	g_hotN++;
 	const u8 *p = (const u8 *)CC_RX2RW(host_pc);
-	if (g_hotArenaEnd != 0 && p >= CodeCache + LastAddr_min && p < CodeCache + g_hotArenaEnd)
+	if (p >= TempCodeCache && p < TempCodeCache + g_arenaUsed)
 		g_hotIn++;
 	else
 		g_hotOut++;
@@ -289,67 +298,161 @@ void jit_hot_sample(void *host_pc)
 	if (g_hotLastUs == 0)
 		g_hotLastUs = now;
 	// a primeira apos ~5 s; depois so se >= 20 s e mais de 15% das amostras fora da arena
-	const u64 wait = g_hotArenaEnd == 0 ? 5000000ull : 20000000ull;
+	const u64 wait = g_hotSelections == 0 ? 5000000ull : 20000000ull;
 	const u32 total = g_hotIn + g_hotOut;
 	if (now - g_hotLastUs >= wait && g_hotN >= 8192 && total > 0 && g_hotOut * 100 > total * 15)
 		g_hotDue = true;
 }
 
+// limpeza do cache: as amostras e a arena apontam para o codigo antigo
 static void jit_hot_reset_samples()
 {
 	g_hotN = g_hotIn = g_hotOut = 0;
-	g_hotArenaEnd = 0;
+	g_arenaUsed = 0;
+	g_promoteQ.clear();
+	g_promoteIdx = 0;
+	g_arenaBlocks.clear();
+	g_hotSelections = 0;
 }
 
-static void recSh4_ClearCache(void);
+static bool in_arena(const void *code)
+{
+	const u8 *c = (const u8 *)CC_RX2RW((void *)code);
+	return c >= TempCodeCache && c < TempCodeCache + TEMP_CODE_SIZE;
+}
 
-static void jit_hot_relayout()
+// Escolhe os blocos quentes (95% das amostras, ate 1500) que ainda nao estao na arena e
+// monta a fila em ordem de cadeia: o mais quente, depois o sucessor quente dele, e assim
+// por diante. Se nao cabem, troca de epoca: todos os blocos da arena voltam para o cache
+// principal (descartados, recompilam sob demanda) e a arena recomeca.
+static void jit_hot_select()
 {
 	g_hotDue = false;
-	const u64 t0 = hot_now_us();
-	struct Ent { u32 n; fpscr_t cfg; };
+	struct Ent { u32 n; fpscr_t cfg; u32 next, branch, bytes; };
 	std::unordered_map<u32, Ent> cnt;
 	const u32 n = std::min(g_hotN, HOT_RING);
+	u32 total = 0;
 	for (u32 i = 0; i < n; i++)
 	{
 		RuntimeBlockInfoPtr b = bm_GetBlock2(g_hotRing[i]);
 		if (!b || b->temp_block)
 			continue;
+		total++;
 		Ent &e = cnt[b->vaddr];
 		e.n++;
 		e.cfg = b->fpu_cfg;
+		e.next = b->NextBlock;
+		e.branch = b->BranchBlock;
+		e.bytes = b->host_code_size;
+		if (in_arena(b->code))
+			e.bytes = 0;	// ja promovido
 	}
 	std::vector<std::pair<u32, Ent>> hot(cnt.begin(), cnt.end());
 	std::sort(hot.begin(), hot.end(), [](const std::pair<u32, Ent> &a, const std::pair<u32, Ent> &b) {
 		return a.second.n > b.second.n || (a.second.n == b.second.n && a.first < b.first);
 	});
-	u32 total = 0;
-	for (auto &h : hot)
-		total += h.second.n;
-	const u64 tSort = hot_now_us();
-	g_ccReason = 4;
-	recSh4_ClearCache();		// zera as amostras (o anel apontava para o cache antigo)
-	const u64 tClear = hot_now_us();
-	static const bool noCompile = getenv("FC_JIT_HOT_NOCOMPILE") != nullptr;	// diagnostico
-	u32 acc = 0, compiled = 0;
-	for (auto &h : hot)
+	// conjunto quente: FC_JIT_HOT_PCT% das amostras (95), ate FC_JIT_HOT_MAX blocos (1500)
+	static const u32 pct = getenv("FC_JIT_HOT_PCT") != nullptr ? (u32)atoi(getenv("FC_JIT_HOT_PCT")) : 95;
+	static const size_t maxb = getenv("FC_JIT_HOT_MAX") != nullptr ? (size_t)atoi(getenv("FC_JIT_HOT_MAX")) : 1500;
+	std::unordered_map<u32, size_t> pos;
+	u32 acc = 0, need = 0;
+	size_t take = 0;
+	for (; take < hot.size() && take < maxb && acc * 100 < total * pct; take++)
 	{
-		if (noCompile)
-			break;
-		if (acc * 100 >= total * 95 || compiled >= 1500)
-			break;
-		acc += h.second.n;
-		if (bm_GetBlock(h.first))
-			continue;
-		if (compile_block(h.first, h.second.cfg, 0) != nullptr)
-			compiled++;
+		acc += hot[take].second.n;
+		need += hot[take].second.bytes;
+		pos[hot[take].first] = take;
 	}
-	g_hotArenaEnd = LastAddr;
+	if (need == 0)
+		return;
+	if (need + 16 * 1024 > TEMP_CODE_SIZE - g_arenaUsed)
+	{
+		// troca de epoca: a arena inteira volta ao cache principal
+		for (u32 v : g_arenaBlocks)
+		{
+			RuntimeBlockInfoPtr b = bm_GetBlock(v);
+			if (b && in_arena(b->code))
+				bm_DiscardBlock(b.get());
+		}
+		g_arenaBlocks.clear();
+		g_arenaUsed = 0;
+		g_hotEpochs++;
+		for (size_t i = 0; i < take; i++)
+			if (hot[i].second.bytes == 0)
+				hot[i].second.bytes = 1;	// precisa voltar para a arena nova
+	}
+	// ordem de cadeia
+	std::vector<bool> placed(take, false);
+	g_promoteQ.clear();
+	g_promoteIdx = 0;
+	for (size_t i = 0; i < take; i++)
+	{
+		size_t cur = i;
+		while (!placed[cur])
+		{
+			placed[cur] = true;
+			if (hot[cur].second.bytes != 0)
+				g_promoteQ.push_back({ hot[cur].first, hot[cur].second.cfg });
+			// sucessor quente ainda nao colocado (o mais quente dos dois)
+			size_t best = (size_t)-1;
+			for (u32 s : { hot[cur].second.next, hot[cur].second.branch })
+			{
+				auto it = pos.find(s);
+				if (it != pos.end() && !placed[it->second] && (best == (size_t)-1 || it->second < best))
+					best = it->second;
+			}
+			if (best == (size_t)-1)
+				break;
+			cur = best;
+		}
+	}
+	g_hotIn = g_hotOut = 0;
 	g_hotLastUs = hot_now_us();
-	g_hotRelayouts++;
-	fprintf(stderr, "jit hot: reorganizacao %u -- %u amostras, %u blocos quentes (de %zu), arena %u KB, %.1f ms (contagem %.1f, limpeza %.1f, compilacao %.1f)\n",
-			g_hotRelayouts, total, compiled, hot.size(), (g_hotArenaEnd - LastAddr_min) / 1024,
-			(g_hotLastUs - t0) / 1000.0, (tSort - t0) / 1000.0, (tClear - tSort) / 1000.0, (g_hotLastUs - tClear) / 1000.0);
+	g_hotSelections++;
+	fprintf(stderr, "jit hot: selecao %u -- %u amostras, %zu blocos quentes, %zu a promover (%u KB), arena %u KB, epocas %u\n",
+			g_hotSelections, total, take, g_promoteQ.size(), need / 1024, g_arenaUsed / 1024, g_hotEpochs);
+}
+
+static RuntimeBlockInfo *compile_block_ex(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures, bool arena);
+
+// Promove o proximo bloco da fila: descarta a copia atual e recompila na arena.
+static bool jit_hot_promote_one(const HotItem &it)
+{
+	RuntimeBlockInfoPtr old = bm_GetBlock(it.vaddr);
+	if (!old || old->temp_block || in_arena(old->code))
+		return false;
+	if (old->has_fpu_op && sr.FD)	// o decode levantaria a excecao de FPU fora de hora
+		return false;
+	if (TEMP_CODE_SIZE - g_arenaUsed < 16 * 1024)
+		return false;
+	const u32 vaddr = old->vaddr;
+	const fpscr_t cfg = old->fpu_cfg;
+	const u32 bcf = old->blockcheck_failures;
+	// descarta ANTES de compilar a copia: com NO_VERIFY, a ordem inversa zeraria a
+	// entrada nova da FPCB
+	bm_DiscardBlock(old.get());
+	old.reset();
+	if (compile_block_ex(vaddr, cfg, bcf, true) == nullptr)
+		return false;
+	g_arenaBlocks.push_back(vaddr);
+	g_hotPromoted++;
+	return true;
+}
+
+static void jit_hot_promote_some()
+{
+	if (g_promoteIdx >= g_promoteQ.size())
+		return;
+	const u64 t0 = hot_now_us();
+	while (g_promoteIdx < g_promoteQ.size())
+	{
+		jit_hot_promote_one(g_promoteQ[g_promoteIdx++]);
+		if (hot_now_us() - t0 >= 1000)
+			break;
+	}
+	if (g_promoteIdx >= g_promoteQ.size())
+		fprintf(stderr, "jit hot: fila promovida -- %u blocos na arena, %u KB\n",
+				(u32)g_arenaBlocks.size(), g_arenaUsed / 1024);
 }
 
 DynarecCodeEntryPtr rdv_CompilePC(u32 blockcheck_failures)
@@ -368,10 +471,10 @@ DynarecCodeEntryPtr rdv_CompilePC(u32 blockcheck_failures)
 }
 
 // Compila o bloco de pc com a configuracao de FPU dada e o registra (rdv_CompilePC e a
-// arena quente).
-static RuntimeBlockInfo *compile_block(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures)
+// arena quente: arena=true emite no TempCodeCache a partir de g_arenaUsed).
+static RuntimeBlockInfo *compile_block_ex(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_failures, bool arena)
 {
-	RuntimeBlockInfo* rbi = ngen_AllocateBlock();
+	RuntimeBlockInfo* rbi = ngen_AllocateBlock();	// antes de trocar o emit_ptr (gera o mainloop)
 
 	if (!rbi->Setup(pc,fpu_cfg))
 	{
@@ -379,7 +482,12 @@ static RuntimeBlockInfo *compile_block(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_f
 		return NULL;
 	}
 	rbi->blockcheck_failures = blockcheck_failures;
-	if (smc_hotspots.find(rbi->addr) != smc_hotspots.end())
+	if (arena)
+	{
+		emit_ptr = (u32 *)(TempCodeCache + g_arenaUsed);
+		emit_ptr_limit = (u32 *)(TempCodeCache + TEMP_CODE_SIZE);
+	}
+	else if (smc_hotspots.find(rbi->addr) != smc_hotspots.end())
 	{
 		if (TEMP_CODE_SIZE - TempLastAddr < 16 * 1024)
 			clear_temp_cache(false);
@@ -409,7 +517,10 @@ static RuntimeBlockInfo *compile_block(u32 pc, fpscr_t fpu_cfg, u32 blockcheck_f
 
 	if (emit_ptr != NULL)
 	{
-		TempLastAddr = (u8*)emit_ptr - TempCodeCache;
+		if (arena)
+			g_arenaUsed = (u32)(((u8*)emit_ptr - TempCodeCache + 15) & ~15u);
+		else
+			TempLastAddr = (u8*)emit_ptr - TempCodeCache;
 		emit_ptr = NULL;
 		emit_ptr_limit = NULL;
 	}
@@ -453,8 +564,12 @@ u32 DYNACALL rdv_DoInterrupts(void* block_cpde)
 	const u32 pc = rdv_DoInterrupts_pc(rbi->vaddr);
 	// Ponto seguro para reorganizar o cache: daqui o stub vai ao despachante (no_update)
 	// e o bloco de onde viemos nao continua.
-	if (g_hotDue && !mmu_enabled())
-		jit_hot_relayout();
+	if (!mmu_enabled() && jit_hot_enabled())
+	{
+		if (g_hotDue)
+			jit_hot_select();
+		jit_hot_promote_some();
+	}
 	return pc;
 }
 
