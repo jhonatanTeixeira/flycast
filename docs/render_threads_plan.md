@@ -1,6 +1,6 @@
 # Plano futuro: mais threads de render (round robin de frames)
 
-Status: **em execução (2026-10-10)** — fora do `current_plan.md`. Itens:
+Status: **implementado, opt-in `FC_RT=2` (2026-10-10)** — fora do `current_plan.md`. Itens:
 `tech_debits.md` 4.131 (teste de viabilidade) e 4.130 (DOA2, o caso que motiva).
 Teste isolado: `tools/gl_two_threads.c`.
 
@@ -10,8 +10,59 @@ display/contexto EGL do frontend (corrente na thread principal, `eglGetCurrentDi
 compartilhado** com ele, faz corrente **sem superfície** (`EGL_KHR_surfaceless_context`,
 sem pbuffer) e desenha/lê num FBO próprio. Opt-in `FC_RT=1`, chamado no `glesrend::Init`;
 não toca o render normal. Testado no device (DOA2): contexto ok, FBO completo,
-clear/readback correto. **Falta:** desenhar o frame real nesse contexto (reset do
-`glcache` por contexto) e apresentar.
+clear/readback correto.
+
+**Feito (etapas 3-5, `core/rend/gles/rt_render.cpp`, `FC_RT=2`):**
+
+- **Workers:** 2 threads, cada uma com contexto compartilhado sem superfície, 2 FBOs de
+  saída, `glsm`/`glcache`/estado do render `thread_local` (`_pvrrc`, `vtx_sort_base`,
+  programas compilados por worker). As funções GLES3 (fence, sampler, blit) vêm por
+  `dlsym`: o build é GLES2 e os wrappers do `glsm` para elas são vazios.
+- **Process serializado, render em paralelo:** o `Process` (TA → listas, sobe texturas)
+  roda um de cada vez, na ordem dos frames, numa **cadeia de fences** (cada Process
+  espera o fence do anterior, para ver as texturas que ele subiu). O fim do Process
+  libera o slot da fila (`rt_release_after_process`): o próximo frame já pode entrar
+  enquanto este desenha.
+- **Texturas versionadas:** textura lida por um frame que ainda não terminou na GPU
+  ganha nome GL novo **no momento do upload** (`UploadToGPU`); o nome antigo é apagado
+  quando o fence daquele frame passar. Versionar antes do `Update` deixava o HUD do MvC2
+  preto (o `Update` pula o upload quando os bytes da VRAM não mudaram).
+- **Sampler objects por worker** no lugar de `glTexParameter` (o parâmetro é do objeto
+  de textura, compartilhado entre contextos).
+- **Paleta, tabela de fog e registradores do PVR:** cópia por frame (versão atômica +
+  snapshot dos registradores no fim do Process).
+- **RTT e framebuffer** rodam na thread principal, como hoje, entrando na cadeia de fences.
+- **Apresentação:** a thread principal mostra o frame pronto **mais novo** (blit para o
+  FBO do frontend) e descarta os mais velhos; frame atrasado (id ≤ o último mostrado)
+  é descartado sem mostrar.
+- **Afinidade:** emulação no núcleo 3, workers nos núcleos 1-2, principal em 0-2
+  (`FC_RT_PIN`, ligada por padrão com 4 núcleos).
+- **Validação:** `FC_RT_HASH=<arquivo>` grava o hash dos pixels por id de frame (todos os
+  pedidos de render desde a carga do savestate); `tools/rt_hash_compare.py` compara.
+  `FC_RT_DUMP=<id> FC_RT_DUMP_N=<n>` grava PPMs. Com `FC_RTC_FIXED=1 FC_INPUT_NEUTRAL=1
+  FC_EMU_WAIT_RE=1`: **MvC2 952/952 frames idênticos, DOA2 546/546**.
+
+**Medido (2026-10-10, savestate, `perfmax`):**
+
+| Jogo | Modo | VEL% | fps novos | descartes | core p50/p95/p99 (ms) |
+|---|---|---|---|---|---|
+| MvC2 | atual | 100 | 38,8 | 34% | 19,4 / 44,5 / 51,0 |
+| MvC2 | `FC_RT=2` | 100,2 | **53,4** | **0** | **13,7 / 29,7 / 33,3** |
+| DOA2 | atual | 90,6 | 27,0 | 48% | 33,8 / 43,9 / 64,6 |
+| DOA2 | `FC_RT=2` | 73,5 | 33,2 | — | — |
+| DOA2 | `FC_RT=2` sem espera do Process | 83,5-87,8 | 30,5-31,4 | — | — |
+
+- **MvC2 é o caso que fecha:** 60 fps de jogo quase sem descarte, com a VEL igual.
+  Underruns subiram de 1 para 13 (a olhar).
+- **DOA2 perde VEL:** com a espera da emulação pelo Process (`g_emuWaitRe`, padrão,
+  protege a VRAM dos sprites 2D) a emulação espera mais, porque agora todo frame é
+  processado (antes ~48% eram descartados sem Process). Sem a espera
+  (`FC_EMU_WAIT_RE=0`) volta para 83,5-87,8%. **Falta:** o Process ler um snapshot da
+  VRAM/TA em vez de a emulação esperar por ele, e descartar no despacho os frames que
+  não vão ser mostrados.
+
+**Falta também:** testar Napple (RTT) e um jogo com framebuffer; ligar por jogo (opção
+do core) quando estiver provado.
 
 ## 1. A ideia
 

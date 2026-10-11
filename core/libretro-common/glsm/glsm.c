@@ -202,7 +202,8 @@ struct gl_cached_state
 static GLuint default_framebuffer;
 static GLint glsm_max_textures;
 struct retro_hw_render_callback hw_render;
-static struct gl_cached_state gl_state;
+/* Render threads (4.131): estado anotado por thread -- cada contexto GL tem o seu. */
+static __thread struct gl_cached_state gl_state;
 
 /* GL wrapper-side */
 
@@ -2689,6 +2690,43 @@ void rglReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
 }
 
 /* GLSM-side */
+
+/* Render threads (flycast 4.131): gl_state e por thread. Uma thread de render nova
+ * (contexto GL proprio) precisa da tabela de traducao dos caps e do vetor de
+ * texturas ligadas na sua copia; nao mexe nos globais do frontend. */
+void glsm_thread_state_init(void)
+{
+   unsigned i;
+   if (gl_state.bind_textures.ids)
+      return;
+   gl_state.cap_translate[SGL_DEPTH_TEST]           = GL_DEPTH_TEST;
+   gl_state.cap_translate[SGL_BLEND]                = GL_BLEND;
+   gl_state.cap_translate[SGL_POLYGON_OFFSET_FILL]  = GL_POLYGON_OFFSET_FILL;
+   gl_state.cap_translate[SGL_FOG]                  = GL_FOG;
+   gl_state.cap_translate[SGL_CULL_FACE]            = GL_CULL_FACE;
+   gl_state.cap_translate[SGL_ALPHA_TEST]           = GL_ALPHA_TEST;
+   gl_state.cap_translate[SGL_SCISSOR_TEST]         = GL_SCISSOR_TEST;
+   gl_state.cap_translate[SGL_STENCIL_TEST]         = GL_STENCIL_TEST;
+#ifndef HAVE_OPENGLES
+   gl_state.cap_translate[SGL_COLOR_LOGIC_OP]       = GL_COLOR_LOGIC_OP;
+   gl_state.cap_translate[SGL_CLIP_DISTANCE0]       = GL_CLIP_DISTANCE0;
+   gl_state.cap_translate[SGL_DEPTH_CLAMP]          = GL_DEPTH_CLAMP;
+#endif
+   for (i = 0; i < MAX_ATTRIB; i++)
+   {
+      gl_state.vertex_attrib_pointer.enabled[i] = 0;
+      gl_state.attrib_pointer.used[i] = 0;
+   }
+   {
+      GLint n = 0;
+      glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &n);
+      if (n < 32)
+         n = 32;
+      gl_state.bind_textures.ids = (GLuint*)calloc(n, sizeof(GLuint));
+   }
+   gl_state.cullface.mode  = GL_BACK;
+   gl_state.frontface.mode = GL_CCW;
+}
 
 static void glsm_state_setup(void)
 {

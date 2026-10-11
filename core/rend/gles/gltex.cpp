@@ -59,6 +59,20 @@ GlTextureCache TexCache;
 
 extern "C" struct retro_hw_render_callback hw_render;
 
+// Render threads (4.131, rt_render.cpp): textura usada por um frame que ainda nao
+// terminou na GPU nao e alterada nem apagada; ganha nome novo e o antigo vai para
+// a fila de exclusao adiada.
+bool rt_tex_in_flight(u64 lastUse);
+void rt_defer_delete(GLuint tex, u64 lastUse);
+void rt_mark_tex_use(u64 &lastUse);
+static void rt_release_texid(GLuint texID, u64 lastUse)
+{
+	if (rt_tex_in_flight(lastUse))
+		rt_defer_delete(texID, lastUse);
+	else
+		glcache.DeleteTextures(1, &texID);
+}
+
 void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded)
 {
 	// FC_TEX_GPU_MORTON: sobe os bytes CRUS twiddled (R8UI); o shader faz o
@@ -103,6 +117,17 @@ void TextureCacheData::UploadToGPU(int width, int height, u8 *temp_tex_buffer, b
 			}
 		}
 		return;
+	}
+	if (texID != 0 && rt_tex_in_flight(rtLastUse))
+	{
+		// Render threads (4.131): um frame em voo ainda le esta textura; o upload vai
+		// para um nome novo e o antigo e apagado quando aquele frame termina. Aqui, e
+		// nao antes do Update: o Update pula o upload quando os bytes nao mudaram
+		// (FC_TEX_SKIP_UNCHANGED), e um nome novo sem upload sai preto (HUD do MvC2).
+		rt_defer_delete(texID, rtLastUse);
+		texID = glcache.GenTexture();
+		gl_w = gl_h = gl_comps = gl_type = 0;
+		rtLastUse = 0;
 	}
 	if (texID != 0)
 	{
@@ -281,7 +306,7 @@ bool TextureCacheData::Delete()
 
 	if (texID) {
 		gl_UnregisterRawTexture(texID);
-		glcache.DeleteTextures(1, &texID);
+		rt_release_texid(texID, rtLastUse);
 	}
 	
 	return true;
@@ -442,10 +467,11 @@ void ReadRTTBuffer() {
 
     	TextureCacheData *texture_data = TexCache.getTextureCacheData(tsp, tcw);
     	if (texture_data->texID != 0)
-    		glcache.DeleteTextures(1, &texture_data->texID);
+    		rt_release_texid(texture_data->texID, texture_data->rtLastUse);
     	else
     		texture_data->Create();
     	texture_data->texID = gl.rtt.tex;
+    	texture_data->rtLastUse = 0;
     	texture_data->dirty = 0;
       libCore_vramlock_Lock(texture_data->sa_tex, texture_data->sa + texture_data->size - 1, texture_data);
     }
@@ -496,7 +522,8 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
       if (tf->IsCustomTextureAvailable())
       {
       	gl_UnregisterRawTexture(tf->texID);
-      	glcache.DeleteTextures(1, &tf->texID);
+      	rt_release_texid(tf->texID, tf->rtLastUse);
+      	tf->rtLastUse = 0;
       	tf->texID = glcache.GenTexture();
       	gl_UnregisterRawTexture(tf->texID);
       	tf->gl_w = tf->gl_h = tf->gl_comps = tf->gl_type = 0;	// alocacao nova
@@ -505,6 +532,7 @@ u64 gl_GetTexture(TSP tsp, TCW tcw)
       TexCacheHits++;
       g_texHits++;
    }
+	rt_mark_tex_use(tf->rtLastUse);	// render threads: este frame usa este texID
 
 	// Return gl texture
 	return tf->texID;

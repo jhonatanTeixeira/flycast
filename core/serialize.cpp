@@ -1,6 +1,7 @@
 // serialize.cpp : save states
 
 #include "types.h"
+#include <atomic>
 #include "hw/aica/dsp.h"
 #include "hw/aica/aica.h"
 #include "hw/aica/sgc_if.h"
@@ -147,6 +148,7 @@ extern u32 YUV_y_size;
 
 //./core/hw/pvr/pvr_regs.o
 extern bool fog_needs_update;
+extern std::atomic<u32> g_fogVersion;
 extern u8 pvr_regs[pvr_RegSize];
 
 //./core/hw/pvr/spg.o
@@ -787,6 +789,7 @@ bool dc_unserialize(void **data, unsigned int *total_size, size_t actual_data_si
 		LIBRETRO_SKIP(1); // fog_needs_update
 	LIBRETRO_USA(pvr_regs,pvr_RegSize);
 	fog_needs_update = true ;
+	g_fogVersion.fetch_add(1, std::memory_order_relaxed);
 
 
 	LIBRETRO_US(in_vblank);

@@ -139,6 +139,7 @@ u32 palette32_ram[1024];
 u32 pal_hash_256[4];
 u32 pal_hash_16[64];
 bool palette_updated;
+std::atomic<u32> g_fogVersion{1}, g_palVersion{1};
 
 // No-wait (docs/frame_pacing_plan.md): a emu thread escreve a paleta em
 // palette_update() ENQUANTO a main thread sobe a textura de paleta
@@ -215,6 +216,7 @@ void palette_update()
 	std::lock_guard<std::mutex> lock(g_palMutex);
 	pal_needs_update = false;
 	palette_updated = true;
+	g_palVersion.fetch_add(1, std::memory_order_relaxed);
 
 	switch(PAL_RAM_CTRL&3)
 	{

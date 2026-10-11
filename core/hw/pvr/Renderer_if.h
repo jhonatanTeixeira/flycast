@@ -32,7 +32,8 @@ GetTexture(TSP tsp,TCW tcw);
 
 
 ///////
-extern TA_context* _pvrrc;
+// Por thread (render threads, 4.131): cada thread de render desenha o seu frame.
+extern thread_local TA_context* _pvrrc;
 
 #define pvrrc (_pvrrc->rend)
 

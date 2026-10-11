@@ -51,9 +51,9 @@ u32 g_batchBreakTotal;
 // quase toda strip tem estado próprio e não há o que fundir.
 u32 g_opaqueRuns;
 u32 g_opaqueDistinctSum, g_opaqueFramesCounted;
-static std::unordered_set<u64> s_opaqueKeys;
-static u32 s_opaqueKeyFrame;
-static bool s_opaqueKeyFrameValid;
+static thread_local std::unordered_set<u64> s_opaqueKeys;
+static thread_local u32 s_opaqueKeyFrame;
+static thread_local bool s_opaqueKeyFrameValid;
 
 
 /*
@@ -120,10 +120,17 @@ const u32 SrcBlendGL[] =
 extern int screen_width;
 extern int screen_height;
 
-PipelineShader* CurrentShader;
-extern u32 gcflip;
-GLuint vmuTextureId[4]={0,0,0,0};
-GLuint lightgunTextureId[4]={0,0,0,0};
+extern thread_local bool t_rtWorker;		// rt_render.cpp
+// Render threads (4.131): registradores do PVR pelo snapshot da thread (gles.cpp)
+extern thread_local u8 *t_rendRegs;
+#undef PvrReg
+#define PvrReg(x,t) (*(t*)&t_rendRegs[(x) & pvr_RegMask])
+void rt_bind_sampler(GLint wrapS, GLint wrapT, GLint minF, GLint magF, float aniso);
+
+thread_local PipelineShader* CurrentShader;
+extern thread_local u32 gcflip;
+thread_local GLuint vmuTextureId[4]={0,0,0,0};
+thread_local GLuint lightgunTextureId[4]={0,0,0,0};
 
 void SetCull(u32 CullMode)
 {
@@ -271,6 +278,31 @@ __forceinline
 	else
 		glcache.BindTexture(GL_TEXTURE_2D, gp->texid == (u64)-1 ? 0 : (GLuint)gp->texid);
 
+	if (t_rtWorker)
+	{
+		// Render threads (4.131): filtro/wrap sao estado do objeto de textura,
+		// compartilhado com a outra thread de render; aqui vai num sampler desta
+		// thread (mesmo resultado, sem mexer no objeto).
+		const GLint ws = gp->tsp.ClampU ? GL_CLAMP_TO_EDGE : gp->tsp.FlipU ? GL_MIRRORED_REPEAT : GL_REPEAT;
+		const GLint wt = gp->tsp.ClampV ? GL_CLAMP_TO_EDGE : gp->tsp.FlipV ? GL_MIRRORED_REPEAT : GL_REPEAT;
+		GLint minF = GL_NEAREST, magF = GL_NEAREST;
+		float aniso = 1.f;
+		if (!(gp->tsp.FilterMode == 0 || palette))
+		{
+			const bool mipmapped = gp->tcw.MipMapped != 0 && gp->tcw.ScanOrder == 0 && settings.rend.UseMipmaps;
+			minF = mipmapped ? GL_LINEAR_MIPMAP_NEAREST : GL_LINEAR;
+			magF = GL_LINEAR;
+			if (gl.max_anisotropy > 1.f && settings.rend.AnisotropicFiltering > 1)
+			{
+				aniso = std::min((f32)settings.rend.AnisotropicFiltering, gl.max_anisotropy);
+				if (mipmapped)
+					minF = GL_LINEAR_MIPMAP_LINEAR;
+			}
+		}
+		rt_bind_sampler(ws, wt, minF, magF, aniso);
+	}
+	else
+	{
 	SetTextureRepeatMode(GL_TEXTURE_WRAP_S, gp->tsp.ClampU, gp->tsp.FlipU);
 	SetTextureRepeatMode(GL_TEXTURE_WRAP_T, gp->tsp.ClampV, gp->tsp.FlipV);
 
@@ -306,6 +338,7 @@ __forceinline
 				glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1.f);
 		}
 	}
+	}	// !t_rtWorker
 
 	// Apparently punch-through polys support blending, or at least some combinations
 	if (Type == ListType_Translucent || Type == ListType_Punch_Through)
@@ -408,7 +441,7 @@ static void DrawListP(PolyParam* params, int count)
 		// glsm's fixed capability set, so route straight to the real driver call.
 		(glEnable)(GL_PRIMITIVE_RESTART_FIXED_INDEX);
 
-	static std::vector<u32> batchIdx;
+	static thread_local std::vector<u32> batchIdx;
 	const u32 *idx_base = pvrrc.idx.head();
 
 	// Um unico upload de indices por lista (docs/tech_debits.md 4.35). Antes,
@@ -425,8 +458,8 @@ static void DrawListP(PolyParam* params, int count)
 	if (canBatch && oneUpload && gl.index_type == GL_UNSIGNED_INT)
 	{
 		struct Run { PolyParam* pp; u32 offset, count, lo, hi; };
-		static std::vector<Run> runs;
-		static std::vector<u32> allIdx;
+		static thread_local std::vector<Run> runs;
+		static thread_local std::vector<u32> allIdx;
 		runs.clear();
 		allIdx.clear();
 		PolyParam* end = params + count;
@@ -607,7 +640,7 @@ static void DrawListP(PolyParam* params, int count)
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs2);
 			if (gl.index_type == GL_UNSIGNED_SHORT)
 			{
-				static std::vector<u16> batchIdx16;
+				static thread_local std::vector<u16> batchIdx16;
 				batchIdx16.resize(batchIdx.size());
 				for (size_t i = 0; i < batchIdx.size(); i++)
 					batchIdx16[i] = (u16)batchIdx[i];
@@ -636,7 +669,7 @@ static void DrawListP(PolyParam* params, int count)
 		(glDisable)(GL_PRIMITIVE_RESTART_FIXED_INDEX); // see the glEnable comment above
 }
 
-static std::vector<SortTrigDrawParam> pidx_sort;
+static thread_local std::vector<SortTrigDrawParam> pidx_sort;
 // Sort hibrido como comportamento do modo per-strip; FC_SORT_HYBRID=0 desliga
 // (A/B), FC_SORT_HYBRID=<razao> troca o limiar de "strip profundo" (padrao 1.5).
 static float HybridSortRatio()
@@ -658,7 +691,7 @@ static float HybridSortRatio()
 // em indice par (mesmo sentido de giro) e apontam para o mesmo buffer de indices
 // (sem upload extra); pedacos seguidos com o mesmo estado voltam a ser
 // agrupados pelo primitive restart do DrawList.
-static std::vector<PolyParam> g_trSortList;
+static thread_local std::vector<PolyParam> g_trSortList;
 static void SortPParamsSplit(int first, int count, float deepRatio)
 {
 	g_trSortList.clear();
@@ -711,8 +744,8 @@ static void SortTriangles(int first, int count)
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl.vbo.idxs2); glCheck();
 		if (gl.index_type == GL_UNSIGNED_SHORT)
 		{
-			static bool overrun;
-			static List<u16> short_vidx;
+			static thread_local bool overrun;
+			static thread_local List<u16> short_vidx;
 			if (short_vidx.daty != NULL)
 				short_vidx.Free();
 			short_vidx.Init(vidx_sort.size(), &overrun, NULL);

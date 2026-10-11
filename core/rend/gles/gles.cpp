@@ -7,6 +7,9 @@
 
 #include "gles.h"
 #include <chrono>	// FC_TA_SPLIT timing
+#include <mutex>
+#include <vector>
+#include "deps/xxhash/xxhash.h"	// FC_RT_HASH
 
 #ifndef GL_RED
 #define GL_RED                            0x1903
@@ -45,12 +48,24 @@ static PFN_glInvalidateFramebuffer glInvalidateFramebuffer_;
 // the range it already knows instead. FC_NO_DRAW_RANGE=1 keeps glDrawElements.
 PFN_glDrawRangeElements_fc glDrawRangeElements_;
 
-GLCache glcache;
-gl_ctx gl;
+// Render threads (4.131): o codigo de desenho deste arquivo le os registradores do
+// PVR por este ponteiro. Na thread principal ele e o global; numa thread de render,
+// o snapshot tirado no fim do Process (a emulacao ja mudou os registradores para o
+// frame seguinte quando este frame e desenhado).
+thread_local u8 *t_rendRegs = pvr_regs;
+static thread_local u8 t_regSnapshot[pvr_RegSize];
+#undef PvrReg
+#define PvrReg(x,t) (*(t*)&t_rendRegs[(x) & pvr_RegMask])
 
-struct ShaderUniforms_t ShaderUniforms;
+thread_local GLCache glcache;
+thread_local gl_ctx gl;
+extern thread_local bool t_rtWorker;		// rt_render.cpp
+extern thread_local u32 t_rtFrameId;		// Renderer_if.cpp
+void rt_unbind_sampler();				// rt_render.cpp
 
-u32 gcflip;
+thread_local struct ShaderUniforms_t ShaderUniforms;
+
+thread_local u32 gcflip;
 
 // Speedhack v2 (settings.rend.FrameBudgetVblankMultiplier, opt-in/off by
 // default, see docs/tech_debits.md item 5.2 for the v1 postmortem this
@@ -511,10 +526,10 @@ void main()
 
 int screen_width  = 640;
 int screen_height = 480;
-GLuint fogTextureId;
-GLuint paletteTextureId;
+thread_local GLuint fogTextureId;
+thread_local GLuint paletteTextureId;
 
-glm::mat4 ViewportMatrix;
+thread_local glm::mat4 ViewportMatrix;
 
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
@@ -936,6 +951,59 @@ static bool gl_create_resources(void)
 	return true;
 }
 
+// Render threads (4.131, rt_render.cpp): cada thread de render cria, no seu
+// contexto, os recursos que nao se compartilham (VBOs, shaders -- uniforms moram
+// no programa --, texturas de fog/paleta/VMU).
+bool gl_rt_thread_init()
+{
+	if (!gl_create_resources())
+		return false;
+	// sem superficie, GL_STENCIL_BITS do framebuffer padrao e 0; o FBO da thread
+	// tem depth24/stencil8 (modifier volumes precisam do stencil)
+	gl.stencil_present = true;
+	glcache.EnableCache();
+	return true;
+}
+
+// Thread de render, no fim do Process (a emulacao ainda espera o re.Set): guarda
+// os registradores do PVR deste frame e sobe fog/paleta para as texturas desta
+// thread -- o desenho vem depois, quando a emulacao ja pode ter mudado tudo isso.
+void gl_rt_after_process()
+{
+	memcpy(t_regSnapshot, pvr_regs, sizeof(t_regSnapshot));
+	t_rendRegs = t_regSnapshot;
+	static thread_local u32 fogSeen = 0, palSeen = 0;
+	const u32 fv = g_fogVersion.load(std::memory_order_relaxed);
+	if (fv != fogSeen && settings.rend.Fog)
+	{
+		fogSeen = fv;
+		UpdateFogTexture((u8 *)FOG_TABLE, GL_TEXTURE1, gl.single_channel_format);
+	}
+	const u32 pv = g_palVersion.load(std::memory_order_relaxed);
+	if (pv != palSeen)
+	{
+		palSeen = pv;
+		UpdatePaletteTexture(GL_TEXTURE2);
+	}
+}
+
+void gl_rt_thread_term()
+{
+	glcache.DeleteTextures(ARRAY_SIZE(vmuTextureId), vmuTextureId);
+	memset(vmuTextureId, 0, sizeof(vmuTextureId));
+	glcache.DeleteTextures(ARRAY_SIZE(lightgunTextureId), lightgunTextureId);
+	memset(lightgunTextureId, 0, sizeof(lightgunTextureId));
+	glDeleteBuffers(1, &gl.vbo.geometry);
+	glDeleteBuffers(1, &gl.vbo.modvols);
+	glDeleteBuffers(1, &gl.vbo.idxs);
+	glDeleteBuffers(1, &gl.vbo.idxs2);
+	glDeleteTextures(1, &fogTextureId);
+	fogTextureId = 0;
+	glcache.DeleteTextures(1, &paletteTextureId);
+	paletteTextureId = 0;
+	gl_delete_shaders();
+}
+
 void UpdateFogTexture(u8 *fog_table, GLenum texture_slot, GLint fog_image_format)
 {
 	glActiveTexture(texture_slot);
@@ -1003,8 +1071,8 @@ static void upload_vertex_indices()
 {
 	if (gl.index_type == GL_UNSIGNED_SHORT)
 	{
-		static bool overrun;
-		static List<u16> short_idx;
+		static thread_local bool overrun;
+		static thread_local List<u16> short_idx;
 		if (short_idx.daty != NULL)
 			short_idx.Free();
 		short_idx.Init(pvrrc.idx.used(), &overrun, NULL);
@@ -1096,15 +1164,23 @@ static bool RenderFrame(void)
 	ShaderUniforms.fog_clamp_max[3] = ((pvrrc.fog_clamp_max >> 24) & 0xFF) / 255.0f;
 
 
-	if (fog_needs_update && settings.rend.Fog)
+	if (t_rtWorker)
 	{
-		fog_needs_update=false;
-		UpdateFogTexture((u8 *)FOG_TABLE, GL_TEXTURE1, gl.single_channel_format);
+		// Render threads (4.131): fog/paleta desta thread ja subiram no fim do
+		// Process (gl_rt_after_process), junto com o snapshot dos registradores.
 	}
-	if (palette_updated)
+	else
 	{
-		UpdatePaletteTexture(GL_TEXTURE2);
-		palette_updated = false;
+		if (fog_needs_update && settings.rend.Fog)
+		{
+			fog_needs_update=false;
+			UpdateFogTexture((u8 *)FOG_TABLE, GL_TEXTURE1, gl.single_channel_format);
+		}
+		if (palette_updated)
+		{
+			UpdatePaletteTexture(GL_TEXTURE2);
+			palette_updated = false;
+		}
 	}
 
 	glcache.UseProgram(gl.modvol_shader.program);
@@ -1279,6 +1355,8 @@ static bool RenderFrame(void)
 		}
 
 		DrawStrips();
+		if (t_rtWorker)
+			rt_unbind_sampler();	// VMU/mira usam os parametros da propria textura
 		rfT0 = g_rendSplitEnabled ? rf_now_us() : 0;
 		if (settings.rend.PowerVR2Filter && !is_rtt)
 			postProcessor.Render(hw_render.get_current_framebuffer());
@@ -1335,6 +1413,48 @@ static bool RenderFrame(void)
 			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		}
 		fc_dump_framebuffer();
+		// FC_RT_HASH=<arquivo> (validacao das render threads, 4.131): hash dos
+		// pixels de cada frame do jogo, pelo id do frame (pedidos de render desde a
+		// carga do savestate) -- compara o render antigo com o round robin.
+		{
+			static const char *rtHash = getenv("FC_RT_HASH");
+			if (rtHash != nullptr && screen_width > 0 && screen_height > 0)
+			{
+				static std::mutex hm;
+				static FILE *hf;
+				std::vector<u8> px((size_t)screen_width * screen_height * 4);
+				glPixelStorei(GL_PACK_ALIGNMENT, 1);
+				glReadPixels(0, 0, screen_width, screen_height, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+				const unsigned long long h = XXH64(px.data(), px.size(), 0);
+				// FC_RT_DUMP=<id inicial> FC_RT_DUMP_N=<quantos>: grava a imagem desses
+				// frames (PPM, ao lado do arquivo do hash) para ver onde difere
+				static const char *dumpE = getenv("FC_RT_DUMP");
+				static const u32 dumpFrom = dumpE != nullptr ? (u32)atoi(dumpE) : 0xFFFFFFFF;
+				static const u32 dumpN = getenv("FC_RT_DUMP_N") != nullptr ? (u32)atoi(getenv("FC_RT_DUMP_N")) : 4;
+				if (t_rtFrameId >= dumpFrom && t_rtFrameId < dumpFrom + dumpN)
+				{
+					char path[600];
+					snprintf(path, sizeof(path), "%s.%u.ppm", rtHash, t_rtFrameId);
+					FILE *pf = fopen(path, "wb");
+					if (pf != nullptr)
+					{
+						fprintf(pf, "P6\n%d %d\n255\n", screen_width, screen_height);
+						for (int y = screen_height - 1; y >= 0; y--)
+							for (int x = 0; x < screen_width; x++)
+								fwrite(&px[((size_t)y * screen_width + x) * 4], 1, 3, pf);
+						fclose(pf);
+					}
+				}
+				std::lock_guard<std::mutex> lk(hm);
+				if (hf == nullptr)
+					hf = fopen(rtHash, "w");
+				if (hf != nullptr)
+				{
+					fprintf(hf, "%u %016llx\n", t_rtFrameId, h);
+					fflush(hf);
+				}
+			}
+		}
 		// FC_CTRL_PORT: o socket pediu a tela (ctrl_socket.cpp)
 		if (ctrl_socket_shot_wanted() && screen_width > 0 && screen_height > 0)
 		{
@@ -1513,6 +1633,7 @@ bool ProcessFrame(TA_context* ctx)
 
 // Render threads (4.131): fundacao do 2o contexto EGL compartilhado (rt_proto.cpp).
 namespace rt_proto { void rt_init(); }
+void rt_stop();	// rt_render.cpp
 
 struct glesrend : Renderer
 {
@@ -1538,6 +1659,8 @@ struct glesrend : Renderer
 #endif
       fog_needs_update = true;
       palette_updated = true;
+      g_fogVersion.fetch_add(1, std::memory_order_relaxed);
+      g_palVersion.fetch_add(1, std::memory_order_relaxed);
       TexCache.Clear();
 
       if (settings.rend.PowerVR2Filter)
@@ -1552,6 +1675,7 @@ struct glesrend : Renderer
 	void Resize(int w, int h) override { screen_width=w; screen_height=h; }
 	void Term() override
    {
+		rt_stop();		// render threads (4.131): para as threads antes do contexto ir embora
 		postProcessor.Term();
 	   TexCache.Clear();
 

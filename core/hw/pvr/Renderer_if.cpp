@@ -101,7 +101,7 @@ u32 fb_watch_addr_start;
 u32 fb_watch_addr_end;
 bool fb_dirty;
 
-TA_context* _pvrrc;
+thread_local TA_context* _pvrrc;
 
 void rend_create_renderer()
 {
@@ -744,8 +744,166 @@ bool rend_frame(TA_context* ctx, bool draw_osd)
    return do_swp;
 }
 
+// ---------------------------------------------------------------- render threads
+// 4.131, docs/render_threads_plan.md: FC_RT=<N> (N >= 2) entrega os frames do jogo,
+// em round robin, a N threads de render com contextos GL compartilhados
+// (core/rend/gles/rt_render.cpp); esta thread so apresenta na ordem (blit). Frames
+// de RTT e de framebuffer seguem o caminho antigo aqui, depois que as threads
+// esvaziam.
+bool rt_requested() __attribute__((weak));
+bool rt_start() __attribute__((weak));
+bool rt_slot_owned() __attribute__((weak));
+int rt_rendering() __attribute__((weak));
+bool rt_has_unpresented() __attribute__((weak));
+bool rt_can_submit() __attribute__((weak));
+void rt_submit(TA_context *ctx, u32 frameId) __attribute__((weak));
+void rt_poll_completion() __attribute__((weak));
+int rt_try_present() __attribute__((weak));
+void rt_main_before_fallback() __attribute__((weak));
+void rt_main_after_fallback() __attribute__((weak));
+void rt_pin_emu_thread() __attribute__((weak));
+
+// Id do frame do jogo (pedidos de render desde a carga do savestate): chave do
+// FC_RT_HASH para comparar a imagem de um frame entre o render antigo e o novo.
+thread_local u32 t_rtFrameId;
+static std::mutex g_fidM;
+static std::vector<std::pair<TA_context *, u32>> g_fid;
+static u32 g_fidNext;
+// todo pedido de render conta (entrando ou nao na fila): os descartes variam entre
+// rodadas e nao podem deslocar os ids
+static u32 rend_next_frame_id()
+{
+	std::lock_guard<std::mutex> lk(g_fidM);
+	return g_fidNext++;
+}
+static void rend_set_frame_id(TA_context *ctx, u32 id)
+{
+	std::lock_guard<std::mutex> lk(g_fidM);
+	for (auto &p : g_fid)
+		if (p.first == ctx)
+		{
+			p.second = id;
+			return;
+		}
+	g_fid.emplace_back(ctx, id);
+}
+static u32 rend_frame_id(TA_context *ctx)
+{
+	std::lock_guard<std::mutex> lk(g_fidM);
+	for (auto &p : g_fid)
+		if (p.first == ctx)
+			return p.second;
+	return 0;
+}
+
+void rt_wake_main()
+{
+	rs.Set();
+}
+
+// Thread de render, depois do Process: libera a emu (VRAM ja lida), guarda as
+// listas no shadow da thread e devolve o slot da fila (o proximo frame ja pode
+// entrar e ir para a outra thread).
+void rt_release_after_process(TA_context *ctx, TA_context *shadow)
+{
+#if !defined(TARGET_NO_THREADS)
+	if (settings.rend.ThreadedRendering)
+	{
+		if (g_syncStats == 1)
+			sync_process_done();
+		re.Set();
+	}
+#endif
+	std::swap(shadow->rend, ctx->rend);
+	rend_fix_overrun_ptrs(shadow->rend);
+	rend_fix_overrun_ptrs(ctx->rend);
+	FinishRender(ctx);
+}
+
+static bool rt_mode()
+{
+	if (rt_requested == nullptr || !rt_requested())
+		return false;
+	return rt_start();
+}
+
+static bool rt_single_frame()
+{
+	u32 ema = g_gameFrameUsEma.load(std::memory_order_relaxed);
+	if (ema == 0)
+		ema = 20000;
+	const u64 deadline = rend_now_us() + std::min<u32>(std::max<u32>(ema * 2, 20000), 150000);
+	for (;;)
+	{
+		rt_poll_completion();
+		if (!rt_slot_owned())
+		{
+			TA_context *ctx = DequeueRender();
+			if (ctx != nullptr)
+			{
+				if (ctx->rend.isRTT || ctx->rend.isRenderFramebuffer)
+				{
+					// caminho antigo, nesta thread, sem frame das threads em voo
+					// (framebuffer apresenta direto: os anteriores saem antes)
+					if (rt_rendering() == 0 && (ctx->rend.isRTT || !rt_has_unpresented()))
+					{
+						note_new_frame();
+						if (g_syncStats == 1)
+							sync_frame_dequeued();
+						rt_main_before_fallback();
+						_pvrrc = ctx;
+						t_rtFrameId = rend_frame_id(ctx);
+						bool do_swp = rend_frame(ctx, true);
+						if (settings.rend.ThreadedRendering && ctx->rend.isRTT)
+							re.Set();
+						if (!rend_early_released)
+							FinishRender(ctx);
+						rend_early_released = false;
+						_pvrrc = nullptr;
+						rt_main_after_fallback();
+						if (do_swp)
+							return true;
+						continue;
+					}
+				}
+				else if (rt_can_submit())
+				{
+					note_new_frame();
+					if (g_syncStats == 1)
+						sync_frame_dequeued();
+					rt_submit(ctx, rend_frame_id(ctx));
+					continue;
+				}
+			}
+		}
+		int p = rt_try_present();
+		if (p > 0)
+			return true;
+		if (p < 0)
+			continue;
+		const u64 now = rend_now_us();
+		if (now >= deadline)
+			return false;
+		rs.Wait((u32)std::max<u64>(1, (deadline - now + 999) / 1000));
+	}
+}
+
 bool rend_single_frame(void)
 {
+	if (rt_requested != nullptr && rt_requested())
+	{
+		// o renderer (e o seu Term, que para as threads) vem antes das threads
+		if (renderer_changed || renderer == NULL)
+		{
+			renderer_changed = false;
+			if (renderer != NULL)
+				rend_term_renderer();
+			rend_create_renderer();
+			rend_init_renderer();
+		}
+		if (rt_mode())
+			return rt_single_frame();
+	}
 	while (true)
 	{
 		//wait render start only if no frame pending
@@ -858,6 +1016,7 @@ bool rend_single_frame(void)
 			return true;
 		}
 
+		t_rtFrameId = rend_frame_id(_pvrrc);	// FC_RT_HASH: id do frame tambem no caminho antigo
 		bool do_swp = rend_frame(_pvrrc, true);
 		swap_pending = do_swp && !_pvrrc->rend.isRenderFramebuffer && FB_R_SOF1 != FB_W_SOF1
 				 && settings.rend.ThreadedRendering && settings.rend.DelayFrameSwapping;
@@ -895,6 +1054,10 @@ void state_hash_mark_load()
       fflush(g_stateHashFile);
    }
    g_stateHashFrame = 0;
+   {
+      std::lock_guard<std::mutex> lk(g_fidM);
+      g_fidNext = 0;		// FC_RT_HASH: ids a partir da carga
+   }
    extern int g_fbDumpFrame;
    g_fbDumpFrame = 0;		// FC_FB_DUMP: frames contados a partir da carga
    extern void jit_trace_start();
@@ -925,6 +1088,8 @@ void rend_start_render(void)
       g_lastReqCycles = nowC;
    }
    TA_context* ctx = tactx_Pop(CORE_CURRENT_CTX);
+   if (rt_pin_emu_thread != nullptr)
+      rt_pin_emu_thread();		// render threads (4.131): emulacao no nucleo dela
 
    // FC_STATE_HASH=<arquivo> (diagnostico, 2026-09-25): hash por pedido de
    // render dos dados que o SH4 mandou ao TA no frame, e a cada 60 pedidos
@@ -1065,8 +1230,10 @@ void rend_start_render(void)
          max_mvo              = std::max(max_mvo,  ctx->rend.global_param_mvo.used());
          max_modt             = std::max(max_modt, ctx->rend.modtrig.used());
 
+         const u32 frameId = rend_next_frame_id();
          if (QueueRender(ctx))
          {
+            rend_set_frame_id(ctx, frameId);
             if (sync_stats_on())
                sync_frame_queued();
             palette_update();

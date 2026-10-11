@@ -92,7 +92,7 @@ void SortPParams(int first, int count)
 	std::stable_sort(pvrrc.global_param_tr.head() + first, pvrrc.global_param_tr.head() + first + count);
 }
 
-const static Vertex *vtx_sort_base;
+static thread_local const Vertex *vtx_sort_base;
 
 #if 0
 /*
@@ -224,7 +224,7 @@ void GenSorted(int first, int count, std::vector<SortTrigDrawParam>& pidx_sort, 
 
 	vtx_sort_base=vtx_base;
 
-	static u32 vtx_cnt;
+	static thread_local u32 vtx_cnt;
 
 	int vtx_count = pvrrc.verts.used() - idx_base[pp->first];
 	if ((u32)vtx_count > vtx_cnt)
@@ -238,7 +238,7 @@ void GenSorted(int first, int count, std::vector<SortTrigDrawParam>& pidx_sort, 
 		return;
 
 	//make lists of all triangles, with their pid and vid
-	static std::vector<IndexTrig> lst;
+	static thread_local std::vector<IndexTrig> lst;
 
 	lst.resize(vtx_count*4);
 

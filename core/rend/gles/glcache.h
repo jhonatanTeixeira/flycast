@@ -7,6 +7,13 @@ class GLCache {
 public:
 	GLCache() { Reset(); }
 
+	// Render threads (4.131): nomes de textura sao compartilhados entre contextos e
+	// reciclados por outra thread; esquece o que esta thread acha que esta ligado.
+	void InvalidateTextures() {
+		_texture = 0xFFFFFFFF;
+		_texture_params.clear();
+	}
+
 	void BindTexture(GLenum target,  GLuint texture) {
 		if (target == GL_TEXTURE_2D && !_disable_cache) {
 			if (texture != _texture) {
@@ -319,4 +326,5 @@ private:
 	bool _disable_cache;
 };
 
-extern GLCache glcache;
+// Por thread (render threads, 4.131): cada contexto GL tem o seu estado de cache.
+extern thread_local GLCache glcache;

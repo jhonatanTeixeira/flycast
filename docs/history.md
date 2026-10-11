@@ -459,3 +459,26 @@ apresentar. 4.131.
   Desenho: contextos compartilhados sem superfície (nunca pbuffer), programas por
   contexto, texturas versionadas, RTT/framebuffer serializados, apresentação em ordem.
   O 4.131 (teste de viabilidade) foi renumerado (colidia com o 4.130 do DOA2) e corrigido.
+
+## 2026-10-10 (noite) — Render threads (4.131): round robin implementado (`FC_RT=2`)
+
+Continuação da fundação do DeepSeek (`rt_proto.cpp`, `FC_RT=1`). `core/rend/gles/rt_render.cpp`:
+2 workers com contexto EGL compartilhado sem superfície, cada um com 2 FBOs de saída;
+estado do render `thread_local` (`_pvrrc`, `glsm`, `glcache`, sorter, programas por
+worker); funções GLES3 por `dlsym`. Process em ordem numa cadeia de fences, render em
+paralelo; texturas versionadas (nome novo no `UploadToGPU` quando um frame em voo ainda
+lê a antiga); sampler objects por worker; paleta/fog/registradores copiados por frame;
+RTT e framebuffer na thread principal; apresentação do frame pronto mais novo;
+afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de frame
+(`FC_RT_HASH`, `tools/rt_hash_compare.py`): **MvC2 952/952 e DOA2 546/546 idênticos**.
+- Bugs no caminho: estado do `glsm` zerado no worker (SIGSEGV no `BindTexture`,
+  `glsm_thread_state_init`); `stencil_present` falso sem superfície; textura subida num
+  contexto invisível no outro (cadeia de fences); **HUD do MvC2 preto**: versionar antes
+  do `Update` criava nome novo vazio quando o `Update` pulava o upload (bytes iguais,
+  `FC_TEX_SKIP_UNCHANGED`) — versionar só no upload de verdade.
+- **MvC2:** VEL 100 → 100,2%, fps novos 38,8 → 53,4, descartes 34% → 0, core p50/p95/p99
+  19,4/44,5/51,0 → 13,7/29,7/33,3 ms; underruns 1 → 13.
+- **DOA2:** fps novos 27 → 33,2, mas VEL 90,6 → 73,5%: com todo frame processado, a
+  emulação espera mais o Process (`g_emuWaitRe`). Sem a espera 83,5%, com afinidade
+  87,8%. Próximo: snapshot da VRAM no lugar da espera.
+

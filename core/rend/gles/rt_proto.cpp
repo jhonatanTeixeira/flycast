@@ -53,7 +53,7 @@ template <typename T> static bool sym(void *h, T &fn, const char *name)
 bool rt_enabled()
 {
 	if (en < 0)
-		en = getenv("FC_RT") != nullptr && atoi(getenv("FC_RT")) != 0 ? 1 : 0;
+		en = getenv("FC_RT") != nullptr && atoi(getenv("FC_RT")) == 1 ? 1 : 0;	// FC_RT>=2 = rt_render.cpp
 	return en == 1;
 }
 

@@ -41,8 +41,8 @@ extern PFN_glDrawRangeElements_fc glDrawRangeElements_;
 #define glCheck()
 
 //vertex types
-extern u32 gcflip;
-extern glm::mat4 ViewportMatrix;
+extern thread_local u32 gcflip;
+extern thread_local glm::mat4 ViewportMatrix;
 
 // Speedhack v2 (opt-in, settings.rend.FrameBudgetVblankMultiplier): decided
 // at the end of the PREVIOUS RenderFrame() call against an ABSOLUTE
@@ -133,7 +133,7 @@ struct gl_ctx
 	size_t get_index_size() { return index_type == GL_UNSIGNED_INT ? sizeof(u32) : sizeof(u16); }
 };
 
-extern gl_ctx gl;
+extern thread_local gl_ctx gl;	// por thread: cada contexto GL tem shaders/VBOs/FBO proprios (4.131)
 extern GLuint fbTextureId;
 extern float fb_scale_x, fb_scale_y;
 
@@ -186,11 +186,11 @@ GLuint gl_CompileAndLink(const char* VertexShader, const char* FragmentShader);
 bool CompilePipelineShader(PipelineShader* s);
 void vertex_buffer_unmap();
 
-extern GLuint vmuTextureId[4];
-extern GLuint lightgunTextureId[4];
+extern thread_local GLuint vmuTextureId[4];
+extern thread_local GLuint lightgunTextureId[4];
 void UpdateVmuTexture(int vmu_screen_number);
 
-extern struct ShaderUniforms_t
+extern thread_local struct ShaderUniforms_t
 {
 	float PT_ALPHA;
 	float depth_coefs[4];
@@ -250,6 +250,8 @@ public:
 	// glTexSubImage2D em vez de realocar tudo com glTexImage2D. Zerado quando
 	// o texID e recriado. Ver FC_TEX_SUBIMAGE em gltex.cpp.
 	GLuint gl_w = 0, gl_h = 0, gl_comps = 0, gl_type = 0;
+	// Render threads (4.131): ultimo frame (seq) que referenciou este texID.
+	u64 rtLastUse = 0;
 	virtual std::string GetId() override { return std::to_string(texID); }
 	virtual void UploadToGPU(int width, int height, u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded = false) override;
 	virtual bool Delete() override;

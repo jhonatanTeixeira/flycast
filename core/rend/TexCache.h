@@ -18,6 +18,10 @@ extern u32 pal_hash_256[4];
 extern u32 pal_hash_16[64];
 extern bool KillTex;
 extern bool palette_updated;
+// Render threads (4.131): versoes de fog/paleta. Os flags acima sao consumidos
+// (zerados) por quem atualiza a textura; com varias threads de render cada uma
+// guarda a ultima versao que subiu para a sua propria textura.
+extern std::atomic<u32> g_fogVersion, g_palVersion;
 // protege palette32_ram/palette16_ram entre a emu thread (palette_update) e a
 // main thread (UpdatePaletteTexture) -- ver TexCache.cpp.
 extern std::mutex g_palMutex;
