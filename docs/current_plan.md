@@ -70,7 +70,7 @@ e kofxi (Atomiswave). Commit `tier2` (2026-10-10).
 
 | # | Item | Jogos | Peso | Status |
 |---|------|-------|------|--------|
-| B1 | **Rotina de T&L da biblioteca dos jogos de luta**, despacho por r8 no +000: `r8 == 0` strips com luz difusa (`strips_com_luz_difusa`), r8 ímpar strips sem luz e r8 com luzes direcional/pontual e triângulos (`strips_transformados_e_iluminados`), r8 par ≠ 0 clamp (já nativo). Variantes: Power Stone (PCW de fim de strip), Shenmue II (2ª luz por callback). | DOA2, MvC2, CvS2, Power Stone, Project Justice, Shenmue II | Shenmue II 6,0%, DOA2 6,3% + 2,6%, MvC2 2,5% | pendente |
+| B1 | **Rotina de T&L da biblioteca dos jogos de luta**, despacho por r8 no +000: `r8 == 0` strips com luz difusa (`strips_com_luz_difusa`), r8 ímpar strips sem luz e r8 com luzes direcional/pontual e triângulos (`strips_transformados_e_iluminados`), r8 par ≠ 0 clamp (já nativo). Variantes: Power Stone (PCW de fim de strip), Shenmue II (2ª luz por callback). | DOA2, MvC2, CvS2, Power Stone, Project Justice, Shenmue II | Shenmue II 6,0%, DOA2 6,3% + 2,6%, MvC2 2,5% | **`r8 == 0` (luz difusa) done 2026-10-10** — bit-exato DOA2 (916 quadros) + Shenmue II (355), layout DOA2; falta o `r8` ímpar (grupo 004) e as variantes Power Stone/callback |
 | B2 | Vértices com cor ARGB (`vertices_com_cor_argb`: strips e triângulos) | MvC2, DOA2, CvS2 | MvC2 6,1% | pendente |
 | B3 | Lista de malhas com culling (`lista_de_malhas_com_culling`): chama os laços do B1 por `bsr`; variantes Shenmue II (cópia alternativa + 2ª luz) e Power Stone | 6 jogos de luta + Shenmue II | DOA2 2,1%, Shenmue II 1,6%, MvC2 1,3% | pendente |
 | B4 | Cabeçalho de polígono da Kamui2 (`cabecalho_de_poligono`): ~230 ciclos em 44 blocos curtos → 1 chamada | 13 jogos | EGG 4,2% | pendente |

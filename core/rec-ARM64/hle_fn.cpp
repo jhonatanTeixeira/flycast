@@ -55,7 +55,10 @@ int hleLog()
 	return e;
 }
 
-struct Span { u32 addr; u32 count; const u16 *ops; };
+// ops: bytes na base canonica. mask (opcional, nullptr = exato): por halfword,
+// (op & mask) == (mem & mask) -- para os mov.l @(disp,PC) cujo deslocamento muda
+// com a posicao do literal pool (layout).
+struct Span { u32 addr; u32 count; const u16 *ops; const u16 *mask; };
 
 // Funcao nativa de biblioteca, casavel em QUALQUER endereco (4.125): os Span
 // guardam os bytes na base canonica (canonBase, do jogo de referencia) e o
@@ -78,8 +81,22 @@ static bool func_matches(const HleFunc &f, u32 base)
 	{
 		const Span &s = f.spans[i];
 		const u8 *mem = GetMemPtr(base + (s.addr - f.canonBase), s.count * 2);
-		if (mem == nullptr || memcmp(mem, s.ops, s.count * 2) != 0)
+		if (mem == nullptr)
 			return false;
+		if (s.mask == nullptr)
+		{
+			if (memcmp(mem, s.ops, s.count * 2) != 0)
+				return false;
+		}
+		else
+		{
+			for (u32 j = 0; j < s.count; j++)
+			{
+				const u16 v = mem[j * 2] | (mem[j * 2 + 1] << 8);
+				if ((v & s.mask[j]) != (s.ops[j] & s.mask[j]))
+					return false;
+			}
+		}
 	}
 	return true;
 }
@@ -1366,6 +1383,297 @@ u64 ocbp_run(s32 c, u32 entry, u32 vaddr)
 	return (1ull << 32) | (u32)c;
 }
 
+// ---------------------------------------------------------------------------
+// B1: strips com luz difusa (modo r8 == 0) da rotina de T&L da biblioteca dos
+// jogos de luta/AM2 (grupo 005 do sdk_find; Shenmue II 8C1D8A80 ~6% da emu).
+// Pseudo bit-exato: docs/sdk_find/pseudo/strips_com_luz_difusa_pseudo.cpp. O
+// modo r8 impar (sem luz, grupo 004) e o par (clamp, doa2_run) ficam como estao;
+// aqui so o r8 == 0. Layout DOA2 (DOA2, MvC2, CvS2, Shenmue II 8C1D8A80).
+const u16 stripluz_s_entry[] = { 0x2888, 0x6083, 0x8B00, 0xA094, 0xC801, 0x8B01, 0xA13B, 0x0009 };
+const u16 stripluz_s_headA[] = { 0x6046, 0x4310, 0xFF1D, 0xF79D, 0xF743, 0x6146, 0x8D65, 0xF3ED };
+const u16 stripluz_s_headB[] = { 0xC801, 0x3E4C, 0x8D03, 0xF20D };
+const Span stripluz_sig[] = {
+	{ 0x8C101920, sizeof(stripluz_s_entry) / 2, stripluz_s_entry, nullptr },
+	{ 0x8C101A7A, sizeof(stripluz_s_headA) / 2, stripluz_s_headA, nullptr },
+	{ 0x8C101ADE, sizeof(stripluz_s_headB) / 2, stripluz_s_headB, nullptr },
+};
+// entradas (offset relativo a 8C101920): 0 = funcao, 1 = cabeca A, 2 = cabeca B
+static const u32 stripluz_eo[] = { 0x000, 0x15A, 0x1BE };
+
+struct SlCosts { u8 entry2, pro, pro0, pro1, headA, postA, a_tst, a_f1, a_f0, a_body, a_post,
+		headB, b_f1, b_f0, b_body, b24, b2e, b34, b3e, b48, b80, b54, b5e, b64, b6e, b78, tail, callee; };
+struct SlVariant { bool cb, eosAll1; u16 headA, headB; SlCosts c; };
+//                                     e2 pro p0 p1 hA pA  at f1 f0 ab ap  hB f1 f0 bb  b24 2e 34 3e 48 80  b54 5e 64 6e 78  tl ce
+static const SlVariant SL_DOA2 = { false, false, 0x15A, 0x1BE,
+	{ 2, 7, 8, 5,  4, 0,  3, 5, 2, 11, 0,  3, 5, 2, 8,  4, 3, 5, 4, 4, 1,  4, 3, 5, 4, 5,  6, 0 } };
+
+struct SlScaled { s32 entry2, pro, pro0, pro1, headA, postA, a_tst, a_f1, a_f0, a_body, a_post,
+		headB, b_f1, b_f0, b_body, b24, b2e, b34, b3e, b48, b80, b54, b5e, b64, b6e, b78, tail, callee,
+		unitA, unitB, entry; };
+static SlScaled sl_scale(const SlVariant &V, float clk)
+{
+	auto S = [clk](u8 n) -> s32 { return n == 0 ? 0 : (s32)std::max(1.f, n * clk); };
+	SlScaled C;
+	C.entry2 = S(V.c.entry2); C.pro = S(V.c.pro); C.pro0 = S(V.c.pro0); C.pro1 = S(V.c.pro1);
+	C.headA = S(V.c.headA); C.postA = S(V.c.postA); C.a_tst = S(V.c.a_tst); C.a_f1 = S(V.c.a_f1);
+	C.a_f0 = S(V.c.a_f0); C.a_body = S(V.c.a_body); C.a_post = S(V.c.a_post); C.headB = S(V.c.headB);
+	C.b_f1 = S(V.c.b_f1); C.b_f0 = S(V.c.b_f0); C.b_body = S(V.c.b_body); C.b24 = S(V.c.b24);
+	C.b2e = S(V.c.b2e); C.b34 = S(V.c.b34); C.b3e = S(V.c.b3e); C.b48 = S(V.c.b48); C.b80 = S(V.c.b80);
+	C.b54 = S(V.c.b54); C.b5e = S(V.c.b5e); C.b64 = S(V.c.b64); C.b6e = S(V.c.b6e); C.b78 = S(V.c.b78);
+	C.tail = S(V.c.tail); C.callee = S(V.c.callee);
+	const s32 cabA = C.headA + (V.cb ? C.callee + C.postA : 0);
+	const s32 corpoA = std::max(C.a_tst + C.a_f1 + C.a_body,
+			C.b54 + C.b5e + C.b64 + C.b6e + C.a_f0 + C.a_body) + (V.cb ? C.callee + C.a_post : 0);
+	const s32 desvB = C.b24 + C.b2e + C.b34 + C.b3e + C.b_f0 + C.b_body;
+	C.unitA = cabA + corpoA + desvB;
+	C.unitB = C.headB + std::max(C.b_f1, C.b_f0) + C.b_body;
+	C.entry = C.entry2 + C.pro + std::max(C.pro0, C.pro1) + (V.cb ? C.callee + C.postA : 0)
+			+ C.unitA - cabA;
+	return C;
+}
+
+// entry 0: +000 (entrada); 1: +15A (cabeca A); 2: +1BE (cabeca B)
+u64 stripluz_run(s32 c, u32 entry, u32 vaddr)
+{
+	const SlVariant &V = SL_DOA2;
+	const SlScaled C = sl_scale(V, g_lutSh4Clock > 0.f ? g_lutSh4Clock : settings.dreamcast.sh4clock);
+	const u32 base = vaddr - stripluz_eo[entry];
+	const u32 here = vaddr;
+
+	// Pre-condicoes. Recusar (bail no proprio bloco) e sempre exato: o JIT segue.
+	if (entry == 0 && r[8] != 0)
+		return 0;					// modos r8 != 0: grupo 004 / clamp
+	if (fpscr.PR || fpscr.SZ != (entry == 0 ? 0u : 1u))
+		return 0;
+	if (!is_ram(r[4]) || (r[6] >> 26) != 0x38)
+		return 0;					// stream fora da RAM / destino fora da SQ
+	const s32 need = entry == 0 ? C.entry : entry == 1 ? C.unitA - C.headA : C.unitB - C.headB;
+	if (c < need)
+		return 0;
+
+	const u8 *ram = mem_b.data;
+	const u32 ramMask = RAM_MASK;
+	u8 *sq = (u8 *)p_sh4rcb->sq_buffer;
+#define RD32(a) ({ u32 v_; memcpy(&v_, ram + ((a) & ramMask), 4); v_; })
+#define RDF(a) ({ f32 v_; memcpy(&v_, ram + ((a) & ramMask), 4); v_; })
+#define SQW(a, v) do { u32 v_ = (v); memcpy(sq + ((a) & 0x3C), &v_, 4); } while (0)
+#define FLUSHSQ(a) do { \
+		sqw_fp *fn_ = do_sqw_nommu; \
+		if ((void *)fn_ == ta_sq_stub) fn_ = (sqw_fp *)&TAWriteSQ; \
+		fn_((a), sq); \
+	} while (0)
+
+	u32 r0, r1, r2, r3, r4, r5, r6, r14, fpulv, T, szbit;
+	f32 f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11;
+	u32 next = 0;
+	float32x4_t m0, m1, m2, m3, Lv;
+#define RELOAD() do { \
+		r0 = r[0]; r1 = r[1]; r2 = r[2]; r3 = r[3]; r4 = r[4]; r5 = r[5]; r6 = r[6]; r14 = r[14]; \
+		f0 = fr[0]; f1 = fr[1]; f2 = fr[2]; f3 = fr[3]; f4 = fr[4]; f5 = fr[5]; f6 = fr[6]; f7 = fr[7]; \
+		f8 = fr[8]; f9 = fr[9]; f10 = fr[10]; f11 = fr[11]; fpulv = fpul; T = sr.T; szbit = fpscr.SZ; \
+		m0 = vld1q_f32(&xf[0]); m1 = vld1q_f32(&xf[4]); m2 = vld1q_f32(&xf[8]); m3 = vld1q_f32(&xf[12]); \
+		Lv = vld1q_f32(&fr[12]); \
+	} while (0)
+#define FLUSH_SZ(sz) do { \
+		r[0] = r0; r[1] = r1; r[2] = r2; r[3] = r3; r[4] = r4; r[5] = r5; r[6] = r6; r[14] = r14; \
+		fr[0] = f0; fr[1] = f1; fr[2] = f2; fr[3] = f3; fr[4] = f4; fr[5] = f5; fr[6] = f6; fr[7] = f7; \
+		fr[8] = f8; fr[9] = f9; fr[10] = f10; fr[11] = f11; fpul = fpulv; sr.T = T; fpscr.SZ = (sz); \
+	} while (0)
+	// ftrv / fipr como o JIT
+#define TR(a, b, cc, d) do { \
+		float32x4_t acc_ = vmulq_n_f32(m0, a); \
+		acc_ = vfmaq_n_f32(acc_, m1, b); acc_ = vfmaq_n_f32(acc_, m2, cc); acc_ = vfmaq_n_f32(acc_, m3, d); \
+		a = vgetq_lane_f32(acc_, 0); b = vgetq_lane_f32(acc_, 1); cc = vgetq_lane_f32(acc_, 2); d = vgetq_lane_f32(acc_, 3); \
+	} while (0)
+#define FIPR0() do { \
+		const float32x4_t va_ = { f0, f1, f2, f3 }; \
+		const float32x4_t pr_ = vmulq_f32(va_, Lv); \
+		const float32x4_t s_ = vpaddq_f32(pr_, pr_); \
+		f3 = vpadds_f32(vget_low_f32(s_)); \
+	} while (0)
+#define PAIR(a, lo, hi) do { lo = RDF(a); hi = RDF(a + 4); } while (0)
+#define SQP(lo, hi) do { r6 -= 8; SQW(r6, f2u(lo)); SQW(r6 + 4, f2u(hi)); } while (0)
+
+	RELOAD();
+	const u32 amb = f2u(fr[15]);
+	auto eos = [&]() -> u32 { return (u32)((s32)r6 >> 1); };
+
+	if (entry == 1) goto headA_body;
+	if (entry == 2) goto headB_body;
+
+	// +000 (pago pelo JIT): tst r8,r8 ; mov r8,r0 ; bf (nao salta: r8 == 0)
+	r0 = 0;
+	c -= C.entry2;					// +006: bra +132 ; slot tst #1,r0
+	T = 1;
+	c -= C.pro;						// +132
+	r3 = RD32(r4); r4 += 4;
+	r6 += 32;						// fschg: SZ 0 -> 1
+	r0 = RD32(r4); r14 = r4; f2 = 0.f;
+	T = !(r0 & 1); r4 += 32;
+	if (T) { c -= C.pro0; r14 = RD32(r14 + 4); r4 -= 24; r14 += r4; }
+	else   { c -= C.pro1; }
+	PAIR(r14, f4, f5); r14 += 8;
+	r2 = r6;
+	PAIR(r14, f6, f7); r14 += 8;
+	f2 = f2 + f7;
+	f7 = 1.f; f3 = 0.f;
+	PAIR(r14, f0, f1); r14 += 8;
+	TR(f4, f5, f6, f7);
+	goto headA_body;
+
+headA:
+	if (c < C.unitA) { FLUSH_SZ(1); next_pc = base + V.headA; return (1ull << 32) | (u32)c; }
+	c -= C.headA;
+headA_body:
+	r0 = RD32(r4); r4 += 4;
+	T = --r3 == 0;
+	fpulv = amb;
+	f7 = 1.f; f7 = f7 / f4;
+	r1 = RD32(r4); r4 += 4;
+	FIPR0();
+	if (T) goto endA;
+	c -= C.a_tst;
+	T = !(r0 & 1); r1 += r4; f2 = u2f(fpulv);
+	if (!T) { c -= C.a_f1; r1 = r4; r4 += 24; r1 -= 8; }
+	else    { c -= C.a_f0; }
+bodyA:
+	f0 = 0.f; T = f3 > f0;
+	PAIR(r14, f0, f1);
+	r4 += 32;
+	PAIR(r1, f8, f9); r1 += 8;
+	if (T) f2 = f2 + f3;
+	c -= C.a_body;
+	f3 = 0.f;
+	T = --r3 == 0;
+	SQP(f2, f3);
+	f2 = f2 - f2;
+	r4 -= 32;
+	PAIR(r1, f10, f11); r1 += 8;
+	f6 = f6 * f7;
+	SQP(f0, f1);
+	f2 = f2 + f11;
+	f11 = 1.f;
+	f5 = f5 * f7;
+	PAIR(r1, f0, f1); r1 += 8;
+	r5 += 32;
+	SQP(f6, f7);
+	TR(f8, f9, f10, f11);
+	SQP(f4, f5);
+	SQW(r6, r2);
+	r2 = r6;
+	FLUSHSQ(r6);
+	r6 += 64;
+	r0 = RD32(r4); r4 += 4;
+	r14 = RD32(r4); r4 += 4;
+	fpulv = amb;
+	FIPR0();
+	f11 = 1.f; f11 = f11 / f8;
+	if (T) goto endB;
+	goto headB;
+
+headB:
+	if (c < C.unitB) { FLUSH_SZ(1); next_pc = base + V.headB; return (1ull << 32) | (u32)c; }
+	c -= C.headB;
+headB_body:
+	T = !(r0 & 1); r14 += r4; f2 = u2f(fpulv);
+	if (!T) { c -= C.b_f1; r14 = r4; r4 += 24; r14 -= 8; }
+	else    { c -= C.b_f0; }
+bodyB:
+	f0 = 0.f; T = f3 > f0;
+	PAIR(r1, f0, f1);
+	r4 += 32;
+	PAIR(r14, f4, f5); r14 += 8;
+	if (T) f2 = f2 + f3;
+	c -= C.b_body;
+	f3 = 0.f;
+	SQP(f2, f3);
+	f2 = f2 - f2;
+	r4 -= 32;
+	PAIR(r14, f6, f7); r14 += 8;
+	f10 = f10 * f11;
+	SQP(f0, f1);
+	f2 = f2 + f7;
+	f7 = 1.f;
+	f9 = f9 * f11;
+	PAIR(r14, f0, f1); r14 += 8;
+	r5 += 32;
+	SQP(f10, f11);
+	TR(f4, f5, f6, f7);
+	SQP(f8, f9);
+	SQW(r6, r2); r2 = r6; FLUSHSQ(r6);
+	r6 += 64;
+	goto headA;
+
+endA:
+	c -= C.b54;
+	T = (s32)r0 > 0; f2 = u2f(fpulv); r2 = eos();
+	if (T) {
+		c -= C.b5e;
+		T = !(r0 & 0x80); r3 = r1;
+		if (!T) {
+			c -= C.b64;
+			r0 = RD32(r4); r4 += 4; T = !(r0 & 1);
+			r1 = RD32(r4); r4 += 4; r1 += r4;
+			if (!T) { c -= C.b6e; r1 = r4; r4 += 24; r1 -= 8; }
+			c -= C.a_f0;
+			goto bodyA;
+		}
+	}
+	c -= C.b78;
+	r1 = r14;
+	goto tail;
+
+endB:
+	c -= C.b24;
+	T = (s32)r0 > 0; f2 = u2f(fpulv); r2 = eos();
+	if (T) {
+		c -= C.b2e;
+		T = !(r0 & 0x80); r3 = r14;
+		if (!T) {
+			c -= C.b34;
+			r0 = RD32(r4); r4 += 4; T = !(r0 & 1);
+			r14 = RD32(r4); r4 += 4; r14 += r4;
+			if (!T) { c -= C.b3e; r14 = r4; r4 += 24; r14 -= 8; }
+			c -= C.b_f0;
+			goto bodyB;
+		}
+	}
+	c -= C.b48 + C.b80;
+	f4 = f8; f5 = f9;
+	f6 = f10; f7 = f11;
+
+tail:
+	f0 = 0.f; T = f3 > f0;
+	PAIR(r1, f10, f11);
+	if (T) f2 = f2 + f3;
+	c -= C.tail;
+	f3 = 0.f;
+	f6 = f6 * f7;
+	SQP(f2, f3);
+	f5 = f5 * f7;
+	SQP(f10, f11);
+	r4 -= 8;
+	SQP(f6, f7);
+	r5 += 32;
+	SQP(f4, f5);
+	SQW(r6, r2);
+	FLUSHSQ(r6);
+	r6 += 32;
+	FLUSH_SZ(0);
+	next_pc = pr;
+	return (1ull << 32) | (u32)c;
+#undef RD32
+#undef RDF
+#undef SQW
+#undef FLUSHSQ
+#undef RELOAD
+#undef FLUSH_SZ
+#undef TR
+#undef FIPR0
+#undef PAIR
+#undef SQP
+}
+
 } // namespace
 
 // Chamado pelo JIT na compilacao do bloco: esta funcao e conhecida aqui?
@@ -1411,6 +1719,8 @@ bool hle_fn_lookup(u32 vaddr, u32 *id)
 			strip_eo, sizeof(strip_eo) / sizeof(strip_eo[0]) },
 		{ "doa2", 4, 0x8C101BC2, doa2_sig, sizeof(doa2_sig) / sizeof(doa2_sig[0]),
 			doa2_eo, sizeof(doa2_eo) / sizeof(doa2_eo[0]) },
+		{ "stripluz", 6, 0x8C101920, stripluz_sig, sizeof(stripluz_sig) / sizeof(stripluz_sig[0]),
+			stripluz_eo, sizeof(stripluz_eo) / sizeof(stripluz_eo[0]) },
 	};
 	for (const HleFunc &f : funcs)
 	{
@@ -1442,6 +1752,7 @@ extern "C" u64 hle_fn_run(s32 cycles, u32 id, u32 vaddr)
 	case 2: return memset_run(cycles, id & 0xFF, vaddr);
 	case 3: return ocbp_run(cycles, id & 0xFF, vaddr);
 	case 4: return doa2_run(cycles, id & 0xFF, vaddr);
+	case 6: return stripluz_run(cycles, id & 0xFF, vaddr);
 	default: return 0;
 	}
 }

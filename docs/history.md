@@ -419,6 +419,20 @@ II** (savestate) com o laço do DOA2 na base `8C1D8D22`: HLE on × off **idênti
 (283 quadros) — o Shenmue II agora usa o nativo. MvC2 e Evolution 1 têm os bytes
 idênticos (confirmado no dump), mas o savestate não executa a função (falta cena).
 Falta A/B de 2 rodadas no Shenmue II e ligar as demais cenas (4.125).
+
+## 2026-10-10 — Etapa B1 (parcial): strips com luz difusa (r8 == 0) nativos
+
+Modo `r8 == 0` da rotina de T&L da biblioteca dos jogos de luta/AM2 (grupo 005 do
+`sdk_find`; pseudo `docs/sdk_find/pseudo/strips_com_luz_difusa_pseudo.cpp`) nativizado
+no `hle_fn.cpp` (`stripluz_run`, layout DOA2 = DOA2/MvC2/CvS2/Shenmue II 8C1D8A80).
+Reconhecido por bytes (entrada `8C101920` + cabeças A/B); o `Span` ganhou máscara
+opcional. `r8 != 0` recusa (o 004 e o clamp seguem no JIT / `doa2_run`).
+
+**Validado** (`FC_STATE_HASH`+`FC_RTC_FIXED`+`FC_INPUT_NEUTRAL`, savestate): HLE on ×
+off **idênticos** — DOA2 916 quadros, Shenmue II 355. `stripluz` instala nos dois.
+Shenmue II no B1 levemente melhor (VEL 70,7 → 71,8, p99 88 → 78 ms); DOA2 confundido
+(cenas divergem). Falta o `r8` ímpar (grupo 004) e as variantes Power Stone/callback.
+Item 4.125.
 - **Teste de 2 renderers na Mali (4.131 — saiu como 4.130 no commit, número já usado pelo DOA2; `tools/gl_two_threads.c`):** 1 thread 88,8
   frames/s → 2 threads com contextos compartilhados 155,2 (1,75×), custo por draw igual;
   o driver não serializa. A 1ª versão do teste usava pbuffer no GBM e deu oops no kernel
