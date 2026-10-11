@@ -423,3 +423,8 @@ Falta A/B de 2 rodadas no Shenmue II e ligar as demais cenas (4.125).
   frames/s → 2 threads com contextos compartilhados 155,2 (1,75×), custo por draw igual;
   o driver não serializa. A 1ª versão do teste usava pbuffer no GBM e deu oops no kernel
   (GPU travada até o reboot); com janela GBM, todos os modos limpos.
+- **Shenmue II, ocupação da GPU (savestate pesado, cfg oficial + auto_load):** GPU
+  18-37% (média ~30%) a 520 MHz, render 6,2 + 21,6 ms de ~60 ms, VEL 54,5%, 15,2 fps
+  novos → o limite é a emulação, não a GPU (a afirmação "Shenmue é GPU-bound" vinha do
+  Shenmue 1 em 09/2026). ARM7 da AICA ~23 ms/frame (4.122). Dados em
+  `/roms2/dcbat/gpu_shenmue2/`.
