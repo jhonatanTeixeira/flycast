@@ -686,4 +686,13 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   FC_AICA_DUAL_CPU=${FC_AICA_DUAL_CPU:--1}` (backup `rr_capture.sh.bak-pre-dualcore-20261011`);
   dá para desligar por jogo com `FC_AICA_DUAL=0`. Smoke com o core oficial + env (MvC2):
   dual ativo (30.295 quanta), sem crash nem watchdog.
+- **Instrumentação desligada do caminho do ES (2026-10-11, pedido do usuário):** os três
+  launch scripts (`dreamcast.sh`/`naomi.sh`/`atomiswave.sh`, branch `retrorun3`) chamavam
+  `rr_capture.sh`, que liga `FC_JIT_DUMP`/`FC_JIT_DUMP_LITE`/`FC_PERF_MAP`/`FC_SYNC_STATS`,
+  roda `--benchmark 40` e um `perf record` **em todo boot** (criava uma pasta em
+  `/roms2/dcbat/`). Agora chamam **`/usr/local/bin/retrorun3` direto**, só com os env de
+  apresentação + `FC_AICA_DUAL` (backups `.bak-pre-instr-off-20261011`). `retrorun_auto_load =
+  false` já estava na config oficial. Smoke pelo caminho novo: nenhuma pasta de captura criada,
+  sem benchmark no log, jogo sobe. `rr_capture.sh` fica só como ferramenta (não é mais chamado
+  pelo ES).
 
