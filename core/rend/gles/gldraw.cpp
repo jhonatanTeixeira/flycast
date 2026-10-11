@@ -408,6 +408,53 @@ static inline bool PP_SameGPUState(const PolyParam* pp0, const PolyParam* pp1)
 template <u32 Type, bool SortingEnabled>
 static void DrawListP(PolyParam* params, int count);
 
+// Opacos agrupados por estado (4.134). O DOA2 desenha os opacos alternando texturas e o
+// lote de vizinhas iguais quase nunca pega (511 de 650 draws com 1 strip so). Nos
+// opacos quem decide o que fica na frente e o teste de profundidade, nao a ordem: os
+// trechos de strips com Z GREATER/GEQUAL e escrita de Z ligada sao reordenados por
+// estado (estavel) para as iguais ficarem juntas e virarem um draw. Strip com outro modo
+// (ALWAYS, EQUAL, LESS..., ou sem escrita de Z) e barreira e fica no lugar. So muda
+// pixel em empate exato de profundidade. FC_OP_SORT=0 desliga (A/B).
+static bool op_sort_enabled()
+{
+	static const bool en = getenv("FC_OP_SORT") == nullptr || atoi(getenv("FC_OP_SORT")) != 0;
+	return en;
+}
+
+static inline bool op_reorderable(const PolyParam *p)
+{
+	return !p->isp.ZWriteDis && (p->isp.DepthMode == 4 || p->isp.DepthMode == 6);
+}
+
+static inline bool op_state_less(const PolyParam *a, const PolyParam *b)
+{
+	if (a->tcw.full != b->tcw.full) return a->tcw.full < b->tcw.full;
+	if (a->tsp.full != b->tsp.full) return a->tsp.full < b->tsp.full;
+	if (a->isp.full != b->isp.full) return a->isp.full < b->isp.full;
+	const u32 pa = a->pcw.full & PCW_DRAW_MASK, pb = b->pcw.full & PCW_DRAW_MASK;
+	if (pa != pb) return pa < pb;
+	return a->tileclip < b->tileclip;
+}
+
+static void op_sort_segments(std::vector<PolyParam *> &seq)
+{
+	size_t i = 0;
+	while (i < seq.size())
+	{
+		if (!op_reorderable(seq[i]))
+		{
+			i++;
+			continue;
+		}
+		size_t j = i + 1;
+		while (j < seq.size() && op_reorderable(seq[j]))
+			j++;
+		if (j - i > 1)
+			std::stable_sort(seq.begin() + i, seq.begin() + j, op_state_less);
+		i = j;
+	}
+}
+
 template <u32 Type, bool SortingEnabled>
 static void DrawList(const List<PolyParam>& gply, int first, int count)
 {
@@ -460,24 +507,27 @@ static void DrawListP(PolyParam* params, int count)
 		struct Run { PolyParam* pp; u32 offset, count, lo, hi; };
 		static thread_local std::vector<Run> runs;
 		static thread_local std::vector<u32> allIdx;
+		static thread_local std::vector<PolyParam*> seq;	// strips desenhaveis, na ordem de desenho
 		runs.clear();
 		allIdx.clear();
-		PolyParam* end = params + count;
-		PolyParam* p0 = params;
-		while (p0 < end)
+		seq.clear();
+		for (PolyParam* p = params; p < params + count; p++)
+			if (p->count > 2)	/* strips de 1-2 indices: acontece em alguns jogos, nao desenha */
+				seq.push_back(p);
+		if (Type == ListType_Opaque && op_sort_enabled())
+			op_sort_segments(seq);
+		size_t si = 0;
+		while (si < seq.size())
 		{
-			if (p0->count <= 2)
-			{
-				p0++;
-				continue;
-			}
-			PolyParam* runEnd = p0 + 1;
-			while (runEnd < end && runEnd->count > 2 && PP_SameGPUState(runEnd, p0))
-				runEnd++;
+			PolyParam* p0 = seq[si];
+			size_t sj = si + 1;
+			while (sj < seq.size() && PP_SameGPUState(seq[sj], p0))
+				sj++;
+			PolyParam* runEnd = sj < seq.size() ? seq[sj] : nullptr;	// proxima strip (quebra do lote)
 			if (g_rendSplitEnabled)
 			{
 				g_opaqueRuns++;
-				if (runEnd < end && runEnd->count > 2)
+				if (runEnd != nullptr)
 				{
 					g_batchBreakTotal++;
 					if ((p0->pcw.full & PCW_DRAW_MASK) != (runEnd->pcw.full & PCW_DRAW_MASK)) g_batchBreakPcw++;
@@ -486,8 +536,8 @@ static void DrawListP(PolyParam* params, int count)
 					if (p0->tsp.full != runEnd->tsp.full) g_batchBreakTsp++;
 					if (p0->tileclip != runEnd->tileclip) g_batchBreakTileclip++;
 				}
-				if (runEnd - p0 == 1) g_rsSingleDraws++; else g_rsBatchDraws++;
-				if (runEnd < end && runEnd->count > 2 && p0->tcw.full != runEnd->tcw.full)
+				if (sj - si == 1) g_rsSingleDraws++; else g_rsBatchDraws++;
+				if (runEnd != nullptr && p0->tcw.full != runEnd->tcw.full)
 				{
 					const bool restSame = (p0->pcw.full & PCW_DRAW_MASK) == (runEnd->pcw.full & PCW_DRAW_MASK)
 							&& p0->isp.full == runEnd->isp.full && p0->tsp.full == runEnd->tsp.full
@@ -501,8 +551,9 @@ static void DrawListP(PolyParam* params, int count)
 				}
 			}
 			Run r = { p0, (u32)allIdx.size(), 0, 0xFFFFFFFF, 0 };
-			for (PolyParam* p = p0; p < runEnd; p++)
+			for (size_t k = si; k < sj; k++)
 			{
+				const PolyParam* p = seq[k];
 				const u32 *src = idx_base + p->first;
 				for (u32 i = 0; i < p->count; i++)
 				{
@@ -511,12 +562,12 @@ static void DrawListP(PolyParam* params, int count)
 					r.hi = std::max(r.hi, v);
 					allIdx.push_back(v);
 				}
-				if (p + 1 < runEnd)
+				if (k + 1 < sj)
 					allIdx.push_back(0xFFFFFFFF);
 			}
 			r.count = (u32)allIdx.size() - r.offset;
 			runs.push_back(r);
-			p0 = runEnd;
+			si = sj;
 		}
 		if (!runs.empty())
 		{

@@ -524,3 +524,18 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
 - `FC_SYNC_STATS`: a janela de VEL recomeça na carga do savestate (o relógio emulado
   saltava e dava 313%).
 
+## 2026-10-11 — Opacos agrupados por estado: menos draws (4.134)
+
+- `FC_REND_SPLIT` no DOA2: 643 draws/frame, 497 com uma strip só, 359 trocas de textura;
+  lotes quebrados por textura (184/frame), `tsp` (168), `isp` (114). O jogo alterna texturas
+  nos opacos e a fusão de vizinhas iguais não pega.
+- Os opacos com Z `GREATER`/`GEQUAL` e escrita de Z são ordenados por estado antes do lote
+  (estável; outros modos ficam como barreira). DOA2: draws 643 → 406, opacos 9,9 → 5,9 ms,
+  render 16,7 → 12,7 ms de CPU por frame; imagem ≤1 pixel diferente (16/19 frames iguais).
+- Com as threads: fps novos 45,5 iguais, frame p95/p99 34,9/43,5 → 32,1/42,4 ms, **VEL igual
+  (85,0 → 84,4%, ruído)**. Corrige o que foi dito antes: a perda de VEL do rt (base 90,6%)
+  não é a CPU do render. A emulação fica mais lenta quando o jogo desenha mais frames;
+  hipótese aberta: memória compartilhada (4.132).
+- `FC_REND_SPLIT` derruba a VEL (DOA2 ~54%): os números de render dele valem para comparar,
+  a VEL não.
+
