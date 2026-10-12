@@ -54,6 +54,8 @@ extern thread_local glm::mat4 ViewportMatrix;
 // shrinks. Opaque/Punch-Through/Modifier-Volumes are never affected.
 extern bool render_reduce_translucent_this_frame;
 extern float render_translucent_draw_fraction;
+// Mudancas de GL recentes desligadas por sistema (Naomi/Atomiswave) -- gles.cpp
+bool gl_legacy();
 
 void DrawStrips(void);
 

@@ -417,6 +417,8 @@ static void DrawListP(PolyParam* params, int count);
 // pixel em empate exato de profundidade. FC_OP_SORT=0 desliga (A/B).
 static bool op_sort_enabled()
 {
+	if (gl_legacy())	// Naomi/Atomiswave: render antigo (4.134 fora)
+		return false;
 	static const bool en = getenv("FC_OP_SORT") == nullptr || atoi(getenv("FC_OP_SORT")) != 0;
 	return en;
 }

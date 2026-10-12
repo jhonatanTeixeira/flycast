@@ -86,9 +86,24 @@ float fb_scale_x, fb_scale_y;
 
 //Fragment and vertex shaders code
 
+// Mudancas recentes de GL desligadas por sistema (pedido do usuario): Naomi e
+// Atomiswave rodam com o render antigo -- 4.133 (profundidade no vertice, sem
+// gl_FragDepth) e 4.134 (opacos ordenados por estado). O Dreamcast mantem as duas.
+// FC_GL_LEGACY=1/0 forca ligado/desligado em qualquer sistema. Nao afeta o RT (4.131).
+bool gl_legacy()
+{
+	const char *e = getenv("FC_GL_LEGACY");
+	if (e != nullptr)
+		return atoi(e) != 0;
+	return settings.System != 0;	// != DC_PLATFORM_DREAMCAST
+}
+
 static const char* VertexShaderSource = R"(%s
 #define TARGET_GL %s
 #define pp_Gouraud %d
+#ifndef VERTEX_DEPTH
+#define VERTEX_DEPTH 1
+#endif
 
 #define GLES2 0
 #define GLES3 1
@@ -144,11 +159,20 @@ void main()
 #if TARGET_GL == GLES2
    fog_depth = vpos.z * sp_FOG_DENSITY;
 #endif
+#if VERTEX_DEPTH
    // Profundidade no vertice, linear no 1/w do Dreamcast com escala por frame (exata
    // na interpolacao). Nada de gl_FragDepth: escrever profundidade no shader de pixel
    // desliga o descarte antecipado de pixel escondido da Mali (DOA2: 16,6 -> 7,2 ms de
    // GPU por frame, 4.133).
    vpos.z=depth_scale.x+depth_scale.y*vpos.w; 
+#else
+   // Render antigo (Naomi/Atomiswave): profundidade no fragment shader (gl_FragDepth).
+#if TARGET_GL != GLES2
+   vpos.z = vpos.w;
+#else
+   vpos.z=depth_scale.x+depth_scale.y*vpos.w; 
+#endif
+#endif
 	vpos.xy *= vpos.w;
 	gl_Position = vpos;
 }
@@ -157,6 +181,9 @@ void main()
 const char* PixelPipelineShader =
 R"(%s
 #define TARGET_GL %s
+#ifndef VERTEX_DEPTH
+#define VERTEX_DEPTH 1
+#endif
 
 #define cp_AlphaTest %d
 #define pp_ClipInside %d
@@ -486,6 +513,10 @@ void main()
 		color.a=1.0;
 	#endif 
 	//color.rgb=vec3(gl_FragCoord.w * sp_FOG_DENSITY / 128.0);
+#if !VERTEX_DEPTH && TARGET_GL != GLES2
+	highp float w = gl_FragCoord.w * 100000.0;
+	gl_FragDepth = log2(1.0 + w) / 34.0;
+#endif
 	gl_FragColor =color;
 }
 )";
@@ -493,6 +524,9 @@ void main()
 static const char* ModifierVolumeShader = 
 R"(%s
 #define TARGET_GL %s
+#ifndef VERTEX_DEPTH
+#define VERTEX_DEPTH 1
+#endif
 
 #define GLES2 0
 #define GLES3 1
@@ -513,6 +547,10 @@ uniform lowp float sp_ShaderColor;
 /* Vertex input*/
 void main()
 {
+#if !VERTEX_DEPTH && TARGET_GL != GLES2
+   highp float w = gl_FragCoord.w * 100000.0;
+   gl_FragDepth = log2(1.0 + w) / 34.0;
+#endif
    gl_FragColor=vec4(0.0, 0.0, 0.0, sp_ShaderColor);
 }
 )";
@@ -658,6 +696,13 @@ void findGLVersion()
 			gl.single_channel_format = GL_ALPHA;
 			gl.single_channel_internal_format = GL_ALPHA;
 		}
+	}
+	if (gl_legacy())
+	{
+		// Naomi/Atomiswave: render antigo -- o shader usa gl_FragDepth (VERTEX_DEPTH 0).
+		static char legacyVersion[64];
+		snprintf(legacyVersion, sizeof(legacyVersion), "%s\n#define VERTEX_DEPTH 0", gl.gl_version);
+		gl.gl_version = legacyVersion;
 	}
 	gl.max_anisotropy = 1.f;
 #ifndef HAVE_OPENGLES2
