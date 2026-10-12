@@ -708,3 +708,30 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   savestates), os cfgs/scripts do `/home/ark` e `dcbat_tools`. `/` 7,1 → 6,5 GB usados; `/roms2`
   ~1,5 GB liberados.
 
+## 2026-10-11 — Regressões do deploy: RT causa glitches; crash no stub da SQ
+
+- **Relato do usuário (jogando com o deploy novo):** crashes aleatórios em Daytona USA, EGG,
+  MvC2 (após um tempo) e SA2; glitches visuais em Napple Tale e Crazy Taxi (canto da tela no
+  menu de pause) e no Shenmue (Ryo e o caderno); Sega Rally (WinCE) não boota.
+- **Os dumps de captura guardaram os crashes** (`/roms2/dcbat/20261011-*`): EGG, Daytona,
+  MvC2 e SA2 com `exit 133`/SIGSEGV/DEBUGBREAK. **Todos o mesmo:** a instrução que falta é
+  `stp x2,x3,[x13]` (`A9000DA2`) dentro do `ta_sq_stub` ("SQ->TA direto", 4.36), com
+  `acc=ctx.x0=0xe0000000` (a Store Queue) e o destino `ta_tad.thd_data` fora de qualquer mapa
+  -> o `thd_data`/`thd_root` da TA ficou inválido antes. `ngen_Rewrite` só reescreve `ldr/str`
+  de fastmem; não reconhece `stp` -> fault genuíno -> `die()`. **O stub é vítima; não é o HLE**
+  (o HLE evita esse stub, usa `TAWriteSQ`). Item 4.135.
+- **Bissecção (pedido do usuário, via env no `rr_capture.sh` do ES):**
+  - `FC_HLE=0` (HLE off) + `FC_RT=0` (render threads off) -> o usuário testou;
+  - `FC_RT=2` (RT on) de volta -> **os glitches voltaram** -> **o RT é a causa dos glitches**
+    (usuário). Item 4.131 atualizado.
+- **Estado final do ES:** `FC_AICA_DUAL=32` (dual core do som LIGADO), `FC_HLE=1` (HLE ligado),
+  `FC_RT=0` (render threads DESLIGADO). Backups do `rr_capture.sh` a cada passo
+  (`.bak-pre-hleoff-20261011`, `.bak-pre-rt-off-20261011`, `.bak-pre-rt-on-20261011`,
+  `.bak-pre-hleon-rtoff-20261011`).
+- **Achado do dual core no cold boot:** com `FC_AICA_DUAL=32`, a BIOS/driver lê a ARAM
+  ~170.000x/s no boot (no gameplay era 192x/s) e cada leitura drena -> 1,95 M drenagens em
+  15 s (8,2 s de espera; VEL 88,6% no MvC2 cold boot). Custo do dual core na inicialização
+  dos jogos com esse padrão; `FC_AICA_DUAL=0` no boot se incomodar.
+- **Pendente:** os crashes (4.135) — com `FC_RT=0` ainda não confirmado se somem; e o Sega
+  Rally (WinCE/MMU, provavelmente pré-existente).
+
