@@ -734,4 +734,13 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   dos jogos com esse padrão; `FC_AICA_DUAL=0` no boot se incomodar.
 - **Pendente:** os crashes (4.135) — com `FC_RT=0` ainda não confirmado se somem; e o Sega
   Rally (WinCE/MMU, provavelmente pré-existente).
+- **Shenmue: o glitch (Ryo, caderno de notas) é do HLE, não do RT** (usuário, 2026-10-11).
+  O HLE é relocável (casa por bytes) e instala no Shenmue; a validação por hash
+  (Napple/DOA2/Shenmue II) **não cobriu essa cena**. O usuário lembra que uma sessão anterior
+  **já tinha percebido algo errado com o HLE, mas ele pediu para seguir** — fica registrado que
+  a ressalva existia e foi adiada a pedido; a causa apareceu no Shenmue. Item 4.125.
+- **Split por sistema (pedido do usuário):** Naomi e Atomiswave rodam com
+  `FC_HLE=0 FC_RT=0 FC_AICA_DUAL=0` (o `env` do `naomi.sh`/`atomiswave.sh`); o Dreamcast
+  segue com `FC_AICA_DUAL=32 FC_HLE=1 FC_RT=0` (defaults do `rr_capture.sh`). Smoke (Naomi,
+  `capsnk`): AICA off (0 quanta), HLE off (0 instalações), sem crash.
 
