@@ -83,7 +83,8 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   os trechos com Z `GREATER`/`GEQUAL` e escrita de Z são ordenados por estado (estável);
   strip com outro modo é barreira. DOA2: **draws 643 → 406, CPU dos opacos 9,9 → 5,9 ms,
   render 16,7 → 12,7 ms por frame**; frame p95 34,9 → 32,1 ms; imagem ≤1 pixel diferente.
-  `FC_OP_SORT=0` volta à ordem original (A/B).
+  `FC_OP_SORT=0` volta à ordem original (A/B). **Desligado por sistema no Naomi/Atomiswave
+  (2026-10-11, `gl_legacy()`).**
 
 - **`gl_FragDepth` desligava o descarte antecipado da Mali (4.133, 2026-10-11).** O caminho
   GLES3 escrevia `gl_FragDepth = log2(1 + 1e5·w)/34` em todo pixel (e no modifier volume):
@@ -96,7 +97,9 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
   que já existia): **16,6 → 7,2 ms** (-57%), GPU 45 → 20% no mesmo fps. Imagem: ≤3 pixels
   diferentes por frame no DOA2, ~13 no MvC2, igual a olho nu no Shenmue II (o usuário
   aceita: mudou a técnica, muda pixel). O `flyinghead/flycast` atual também escreve
-  `gl_FragDepth` no GLES.
+  `gl_FragDepth` no GLES. **Desligado por sistema no Naomi/Atomiswave (2026-10-11,
+  `gl_legacy()`): nesses sistemas o shader volta ao `gl_FragDepth` (`FC_GL_LEGACY`); o
+  Dreamcast mantém a profundidade no vértice.**
 
 ### Método e medição
 - Medir antes de otimizar: SQ inline em todo store (+6% pior), `timeslice` 4x, skip de

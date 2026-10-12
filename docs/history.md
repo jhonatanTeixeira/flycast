@@ -744,3 +744,21 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   segue com `FC_AICA_DUAL=32 FC_HLE=1 FC_RT=0` (defaults do `rr_capture.sh`). Smoke (Naomi,
   `capsnk`): AICA off (0 quanta), HLE off (0 instalações), sem crash.
 
+## 2026-10-11 — GL por sistema: Naomi/Atomiswave no render antigo
+
+- **Contexto:** o usuário reportou que o **RT quebrou tudo** (precisa de reparo) e pediu para
+  **desligar as mudanças de GL só no Naomi/Atomiswave** (o Dreamcast mantém). O split anterior
+  por `env` (HLE/AICA off no Naomi/Atomis) foi **revertido** — quebrou o MBAA; a lista
+  Naomi+Atomis estava perfeita com `FC_HLE=1 FC_AICA_DUAL=32`.
+- **Feito (código, `gl_legacy()` em `gles.cpp`):** true quando `settings.System !=
+  DC_PLATFORM_DREAMCAST` (ou `FC_GL_LEGACY=1/0` para forçar). Gateia duas mudanças recentes:
+  - **4.133** (profundidade no vertex shader, sem `gl_FragDepth`): no legacy, o shader volta a
+    `vpos.z = vpos.w` (vertex) + `gl_FragDepth = log2(1+w)/34` (fragment), via
+    `#define VERTEX_DEPTH 0` injetado em `findGLVersion`.
+  - **4.134** (opacos ordenados por estado): `op_sort_enabled()` devolve false no legacy.
+  - **Não toca o RT** (4.131), a pedido.
+- **Deploy:** core oficial `f3851b68`; backup `flycast2026_libretro.so.bak-pre-gllegacy-20261011`.
+  Smoke (MBAA Naomi e MvC2 DC): sem crash, sem erro de shader.
+- **Pendente:** validar com o usuário jogando (Naomi/Atomis) que os glitches/crashes somem;
+  e o RT (reparos).
+
