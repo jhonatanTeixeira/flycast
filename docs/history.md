@@ -815,3 +815,27 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
 - **Pendente:** o usuário validar na tela pelo ES (menu Emulador/Core); comparar VEL com a
   linha de `game_status.md`; reintroduzir o `rr_capture.sh`/benchmark no caminho do ES se
   for medir sério.
+
+
+## 2026-10-22 — ROCKNIX: menu do retrorun, auditoria do cfg e BIOS do Atomiswave
+
+- **Menu do retrorun:** `retrorun_alternative_input_mode = true` no
+  `/storage/.config/retrorun/retrorun.cfg` (backup `.bak-pre-altinput-20261022-195219`).
+  Com isso o menu é **Select+X** (Select+Y é toggle de FPS; Select+A pausa;
+  Select+B screenshot; Select+Start sai; Select+R1/L1 save/load state).
+  **Pendente:** o usuário confirmar na tela.
+- **Auditoria do bloco `flycast2026_*`:** era cópia do template genérico RK3326 (todos os
+  valores iguais ao default do core). Corrigidos os valores inválidos
+  `anisotropic_filtering = off` → `disabled` e `texupscale = off` → `disabled`;
+  adicionado `frameskip_budget = 33` explícito. Nenhum opt-in do projeto além do `FC_RT`.
+- **kofxi (Atomiswave) "crashava" no boot:** o wrapper `es-launcher.sh` passava
+  `-d /storage/.config/retrorun/system`, cujo `dc/` não tem BIOS. O core abortava com
+  `hw/naomi/naomi_cart.cpp:243 Error: cannot load BIOS. Exiting` e
+  `Cannot load kofxi.zip: error 2` (ENOENT do `awbios.zip`). Os BIOS estavam em
+  `/storage/roms/bios/dc/` (`awbios.zip`, `naomi.zip`, `naomi2.zip`). **Fix:**
+  `SYSTEM_DIR="/storage/roms/bios"` no wrapper (o core appenda `/dc`); backup em
+  `es-launcher.sh.bak-bios-20261022-201658`.
+  - **Validado:** kofxi pelo wrapper rodou 30 s sem erro de BIOS, áudio ratio 1.016
+    (~30 fps, velocidade cheia); Napple Tale (DC) 20 s, 640x480@30, ratio 1.004, sem novo
+    OOM do Mali. O `nothing to save in srm file!` no shutdown é normal no Atomiswave
+    (usa `.nvmem` na pasta da ROM).
