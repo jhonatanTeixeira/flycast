@@ -797,6 +797,13 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   15 s com o ES ainda renderizando atrás deu core 20,4 ms, VEL 81% (não serve como A/B —
   falta medir com o ES oculto). Wrapper testado ponta a ponta (dispatch para
   `retrorun2026`). Logs em `/storage/test_rr_ggxx.*`, `/storage/test_wrapper.log`.
+- **Memory card por jogo (pedido do usuário):** `flycast2026_per_content_vmus = VMU A1`
+  no `retrorun.cfg` (backup `.bak-pre-vmu-*`). O retrorun entrega o cfg via
+  `RETRO_ENVIRONMENT_GET_VARIABLE`, e o core grava `<jogo>.A1.bin` no **save dir** do
+  frontend (`/storage/.config/retrorun/saves/`) — confirmado com Crazy Taxi: criou
+  `Crazy Taxi (USA).A1.bin` (128 KiB). Também posto no
+  `retroarch-core-options.cfg` (`flycast2026_per_content_vmus = "VMU A1"`) para o caminho
+  do RetroArch ficar igual. `VMU A1` = 1 card por jogo; `All VMUs` = 4 (A1/B1/C1/D1).
 - **Pendente:** o usuário validar na tela pelo ES (menu Emulador/Core); comparar VEL com a
   linha de `game_status.md`; reintroduzir o `rr_capture.sh`/benchmark no caminho do ES se
   for medir sério.
