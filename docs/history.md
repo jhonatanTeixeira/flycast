@@ -800,10 +800,18 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
 - **Memory card por jogo (pedido do usuário):** `flycast2026_per_content_vmus = VMU A1`
   no `retrorun.cfg` (backup `.bak-pre-vmu-*`). O retrorun entrega o cfg via
   `RETRO_ENVIRONMENT_GET_VARIABLE`, e o core grava `<jogo>.A1.bin` no **save dir** do
-  frontend (`/storage/.config/retrorun/saves/`) — confirmado com Crazy Taxi: criou
-  `Crazy Taxi (USA).A1.bin` (128 KiB). Também posto no
-  `retroarch-core-options.cfg` (`flycast2026_per_content_vmus = "VMU A1"`) para o caminho
-  do RetroArch ficar igual. `VMU A1` = 1 card por jogo; `All VMUs` = 4 (A1/B1/C1/D1).
+  frontend. `VMU A1` = 1 card por jogo; `All VMUs` = 4 (A1/B1/C1/D1).
+  Também posto no `retroarch-core-options.cfg` (`flycast2026_per_content_vmus = "VMU A1"`).
+- **Save tem que ficar na pasta da ROM (pedido do usuário, layout do ArkOS):** o `-s` do
+  retrorun é o que vira `GET_SAVE_DIRECTORY` do core (VMU per-game, `.srm` e savestates).
+  O wrapper passava `/storage/.config/retrorun/saves`, então o Napple Tale "perdeu" o save:
+  o core **não apagou nada** — o card antigo continuava em
+  `/storage/roms/dreamcast/<jogo>.A1.bin` (md5 `e31fa77b…`, 18/10) e ele criou um card
+  novo/vazio no diretório novo. **Fix:** `es-launcher.sh` passa `-s "$(dirname "$ROM")"`.
+  Provado escondendo o card e vendo o core criar um novo **na pasta da ROM**; card antigo
+  restaurado (md5 idêntico). As cópias que eu tinha feito em
+  `/storage/.config/retrorun/saves/` foram removidas (não pode ter save em dois lugares).
+  `retroarch.cfg` já tem `savefiles_in_content_dir = "true"` para os outros sistemas.
 - **Pendente:** o usuário validar na tela pelo ES (menu Emulador/Core); comparar VEL com a
   linha de `game_status.md`; reintroduzir o `rr_capture.sh`/benchmark no caminho do ES se
   for medir sério.
