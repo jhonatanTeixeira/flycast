@@ -826,8 +826,9 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   **Pendente:** o usuário confirmar na tela.
 - **Auditoria do bloco `flycast2026_*`:** era cópia do template genérico RK3326 (todos os
   valores iguais ao default do core). Corrigidos os valores inválidos
-  `anisotropic_filtering = off` → `disabled` e `texupscale = off` → `disabled`;
-  adicionado `frameskip_budget = 33` explícito. Nenhum opt-in do projeto além do `FC_RT`.
+  `anisotropic_filtering = off` → `disabled` e `texupscale = off` → `disabled`.
+  O `frameskip_budget = 33` chegou a ser adicionado e foi **removido em seguida** a pedido
+  do usuário (o core volta ao default). Nenhum opt-in do projeto além do `FC_RT`.
 - **kofxi (Atomiswave) "crashava" no boot:** o wrapper `es-launcher.sh` passava
   `-d /storage/.config/retrorun/system`, cujo `dc/` não tem BIOS. O core abortava com
   `hw/naomi/naomi_cart.cpp:243 Error: cannot load BIOS. Exiting` e
