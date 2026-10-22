@@ -762,3 +762,41 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
 - **Pendente:** validar com o usuário jogando (Naomi/Atomis) que os glitches/crashes somem;
   e o RT (reparos).
 
+
+## 2026-10-21 — Deploy no ROCKNIX (device novo): core flycast2026 + retrorun do projeto
+
+- **Device reflashado para ROCKNIX official 20260901** (`root@192.168.0.14`, senha `rock`).
+  Muda tudo em relação ao ArkOS: `/` é **squashfs ro**, só `/storage` é gravável; os cores
+  do RetroArch vêm do overlay **`/storage/cores` → `/tmp/cores`**; o ES (serviço
+  `essway.service`) usa `runemu.sh` e o `start_retrorun.sh` da imagem, com binário
+  `/usr/bin/retrorun-sdl2` e core `/usr/lib/libretro/flycast2021_libretro.so` fixos
+  (não dá para sobrescrever).
+- **Deploy feito:**
+  - core do projeto em `/storage/cores/flycast2026_libretro.so` (+ `.info`, aparece em
+    `/tmp/cores` e no RetroArch);
+  - nosso retrorun em `/storage/bin/retrorun-sdl2`;
+  - wrapper `/storage/.config/retrorun/es-launcher.sh`: o `<command>` de
+    dreamcast/naomi/atomiswave passou a chamá-lo; ele roteia `--core=retrorun2026` para
+    o nosso retrorun + core e **delega todo o resto ao `/usr/bin/runemu.sh`** original;
+  - `es_systems.cfg`: `flycast2026` adicionado como core do RetroArch e emulador
+    `retrorun: flycast2026` (`core retrorun2026`) nos 3 sistemas (backup
+    `.bak-pre-flycast2026-20261021-231335`);
+  - `retrorun.cfg`: bloco `flycast2026_*` (o cfg da imagem só tinha `flycast_*`/
+    `flycast2021_*`, que o nosso core não lê) e o wrapper exporta o estado validado
+    `FC_RT=0 FC_HLE=1 FC_AICA_DUAL=32` (history 2026-10-11).
+- **Build do retrorun para o ROCKNIX:** a imagem **não tem headers de dev**. Sysroot novo
+  montado com headers de SDL2/curl de `.deb` (amd64; são portáveis) + png/zlib/GLES locais
+  e libs aarch64 copiadas do device; `_real_SDL_config.h` do Debian x86_64 tem
+  `HAVE_IMMINTRIN_H` e quebra o build aarch64 (remover). **O `libGLESv2.so.2` do Rocknix é
+  só o shim `libmali-hook` e não exporta símbolo nenhum**; linkar com
+  `--unresolved-symbols=ignore-all` faz o ld resolver os `gl*` como ABS e gera PLT
+  `*ABS*@plt` — o binário crasha na primeira chamada GL (SIGSEGV determinístico em
+  `retrorun-sdl2+0x10fb0`, "was not in vram"). Solução: linkar `-l:libmali.so.1`
+  (o blob real, presente no device) — DT_NEEDED `libmali.so.1`.
+- **Smoke:** `ggxx` (Naomi) boota e roda com nosso retrorun+core, sem crash; rodada de
+  15 s com o ES ainda renderizando atrás deu core 20,4 ms, VEL 81% (não serve como A/B —
+  falta medir com o ES oculto). Wrapper testado ponta a ponta (dispatch para
+  `retrorun2026`). Logs em `/storage/test_rr_ggxx.*`, `/storage/test_wrapper.log`.
+- **Pendente:** o usuário validar na tela pelo ES (menu Emulador/Core); comparar VEL com a
+  linha de `game_status.md`; reintroduzir o `rr_capture.sh`/benchmark no caminho do ES se
+  for medir sério.

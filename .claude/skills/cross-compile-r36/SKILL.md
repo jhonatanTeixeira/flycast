@@ -18,6 +18,31 @@ binário pronto. Todo build para o R36 é cross-compile na máquina local (x86_6
   linkado com 2.39 roda no 2.41 — **mas o contrário não**. Não precisa copiar o glibc do
   device.
 
+## Device atual: ROCKNIX (desde 2026-10-21)
+
+O device foi reflashado para **ROCKNIX official** — `sshpass -p rock ssh root@192.168.0.14`.
+Muda o sysroot e o deploy (o resto do processo é igual):
+
+- **A imagem não tem headers de dev** (`/usr/include` vazio), e `/` é squashfs **ro**.
+  Pegue SDL2 e curl de `.deb` (`apt-get download libsdl2-dev libcurl4-openssl-dev` +
+  `dpkg -x`; headers são portáveis entre arquiteturas) e png/zlib/EGL/GLES do
+  `/usr/include` local. O `_real_SDL_config.h` de x86_64 define `HAVE_IMMINTRIN_H`, que
+  quebra o build aarch64 (`immintrin.h: No such file`) — remova essa linha do header
+  copiado.
+- **O `libGLESv2.so.2`/`libEGL.so.1` do Rocknix são só shims `libmali-hook` e não exportam
+  símbolo nenhum.** Linke o blob real: copie `/usr/lib/libmali.so.1` do device para o
+  sysroot e use `-l:libmali.so.1` (DT_NEEDED `libmali.so.1`, que existe no device).
+  **Nunca** resolva os `gl*` com `-Wl,--unresolved-symbols=ignore-all`: o ld os transforma
+  em `*ABS*@plt` e o binário crasha na primeira chamada GL (SIGSEGV fixo em
+  `retrorun-sdl2+0x10fb0`, "was not in vram").
+- **Deploy:** cores novos em `/storage/cores/<nome>_libretro.so` (+ `.info`), que é o
+  upperdir do overlay montado em `/tmp/cores` (o RetroArch/ES enxerga na hora). Binários
+  em `/storage/bin`. Nada em `/usr/bin` ou `/usr/lib/libretro` (ro).
+- **ES (serviço `essway.service`)**: o `<command>` é por sistema, então para um core
+  "não-oficial" (ex.: `retrorun2026`) use um wrapper em `/storage` que roteia pelo
+  `--core=` e delega o resto ao `/usr/bin/runemu.sh`. Exemplo em
+  `/storage/.config/retrorun/es-launcher.sh` no device.
+
 ## Passo 1 — montar o sysroot (uma vez; refaça se trocar de device/firmware)
 
 O sysroot é só **headers de terceiros + as `.so` que vamos linkar**. **Nunca** copie o

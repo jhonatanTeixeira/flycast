@@ -281,6 +281,18 @@ conversão de textura por texel (4.7) · upload de VBO/IBO todo frame (4.8).
 - DC memory card por jogo (`per_content_vmus`).
 
 ### Infra de device
+- **ROCKNIX (device reflashado em 2026-10-21):** `/` é squashfs ro; cores novos vão em
+  `/storage/cores` (overlay para `/tmp/cores`) e binários em `/storage/bin`. O ES tem
+  **um `<command>` por sistema** — para usar um frontend/core diferente sem tocar em
+  `/usr`, trocar o command por um wrapper que roteia pelo `--core=` e delega o resto ao
+  `/usr/bin/runemu.sh`.
+- **Cross-compile contra o ROCKNIX:** a imagem não tem headers de dev (buscar SDL2/curl
+  em `.deb` — headers são portáveis — e o `_real_SDL_config.h` precisa perder o
+  `HAVE_IMMINTRIN_H`). O `libGLESv2.so.2`/`libEGL.so.1` do Rocknix são só shims
+  `libmali-hook` **sem símbolos exportados**: linkar `-l:libmali.so.1` (blob real).
+  `--unresolved-symbols=ignore-all` "funciona" no link mas os `gl*` viram `*ABS*@plt` e o
+  binário crasha na primeira chamada GL (SIGSEGV fixo em `retrorun-sdl2+0x10fb0`,
+  "was not in vram").
 - O disco `/` do device enche (dumps, `~/.debug` do perf); mandar tudo para `/roms2`.
 - `cp` sobre core com hardlink altera todos os nomes: `cp` temporário + `mv`.
 - Toolchain `*-13` e `make clean` com os mesmos argumentos; objetos de outro
