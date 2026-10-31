@@ -94,7 +94,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | Skies of Arcadia (Disc 1) | 2026-10-07 | 99,6 | 29,8 | **30 cravados, rodando muito bem** |
 | Skies of Arcadia (Disc 2) | 2026-10-07 | — | — | **não boota** (exit 133, SIGSEGV; suspeita CHD) |
 | Soulcalibur | 2026-10-07 | 89 | 53,5 | 60 cravados; no ES do zero congelou no boot (4.30, não reconferido) |
-| TR Chronicles | 2026-10-31 | 18-24 | 1,5 | **tela preta, travado — não é só lentidão (4.121).** Cold boot: WinCE sobe e gira no kernel/biblioteca (malloc/lock em `8C01734C..6D2`, `8C02CC40..6E`, `01E42E34`); 1,5 quadros novos/s, tela preta; VEL 18,5-23,8% em 3 rodadas (outras 4 rodadas do mesmo core deram 2-7% — o boot é sensível ao tempo de execução). 56% da CPU do emulador é despacho+tradução de endereço (só 27% dos despachos precisam traduzir). O core oficial não roda sem `dc_boot.bin` (device não tem); o nosso usa reios |
+| TR Chronicles | 2026-10-31 | ~19 | FMV ~12 | **Boota com `FC_FPSCR_BLOCKEND=1`: FMV da Eidos (~12 fps, o 2021 base não mostra) e chega no PRESS START** (visto pelo usuário). Sem a chave para em 124 quadros (tela preta): causa é a guarda do FPSCR do commit `8e8b3c80c` (4.121b), correção definitiva pendente |
 
 ## Padrões observados (resumo do que explica a tabela)
 

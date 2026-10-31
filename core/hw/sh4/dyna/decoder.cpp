@@ -573,7 +573,8 @@ sh4dec(i0100_nnnn_0000_1110)
 //path where PR/SZ really did change. Same shape as redream's ir_assert_eq
 //guard; see docs/fpscr_native_translation_plan.md for the measurements.
 //
-//rs1 = the PR|SZ value this block was compiled for, rs2 = where to resume
+//rs1 = the PR|SZ|RM value this block was compiled for (FPSCR_BLOCK_CFG_MASK
+//in decoder.h), rs2 = where to resume
 //if the guard fails. In a delay slot we can't bail out mid-instruction, so
 //fall back to the old unconditional block end there (it's rare, and the
 //branch that owns the delay slot ends the block anyway).
@@ -586,15 +587,33 @@ static void dec_write_fpscr()
 		Emit(shop_sync_fpscr);
 		return;
 	}
-	if (!state.ngen.FpscrGuard)
+	// DIAG temporario (TR, 4.121b): FC_FPSCR_BLOCKEND=lo-hi forca o fim de bloco
+	// nos blocos com vaddr nessa faixa.
+	static u32 beLo = 1, beHi = 0;
+	static bool beInit = false;
+	if (!beInit)
+	{
+		beInit = true;
+		if (const char *e = getenv("FC_FPSCR_BLOCKEND"))
+			if (sscanf(e, "%x-%x", &beLo, &beHi) != 2)
+				beLo = 0, beHi = 0xFFFFFFFF;
+	}
+	const bool blockEnd = blk->vaddr >= beLo && blk->vaddr <= beHi;
+	if (!state.ngen.FpscrGuard || blockEnd)
 	{
 		// Backend without the guard: keep the old unconditional block end.
 		Emit(shop_sync_fpscr);
 		dec_End(state.cpu.rpc+2,BET_StaticJump,false);
 		return;
 	}
-	u32 expected_pr_sz = (state.cpu.FSZ64 ? (1 << 20) : 0) | (state.cpu.FPR64 ? (1 << 19) : 0);
-	Emit(shop_sync_fpscr, shil_param(), mk_imm(expected_pr_sz), mk_imm(state.cpu.rpc + 2));
+	// O RM tambem e decidido na compilacao (state.cpu.RoundToZero escolhe o
+	// shop_cvt_i2f_z/_n). A guarda so de PR/SZ deixava o bloco seguir depois de
+	// um `lds FPSCR` que trocava o RM, com o `float FPUL` compilado para o modo
+	// antigo -- o TR Chronicles (WinCE) parava no quadro 124 (tech_debits 4.121b).
+	// Nenhuma op do bloco muda o RM fora daqui, entao o esperado e o do inicio.
+	u32 expected_cfg = (state.cpu.FSZ64 ? (1 << 20) : 0) | (state.cpu.FPR64 ? (1 << 19) : 0)
+			| (blk->fpu_cfg.full & 3);
+	Emit(shop_sync_fpscr, shil_param(), mk_imm(expected_cfg), mk_imm(state.cpu.rpc + 2));
 }
 
 //tas.b @<REG_N>

@@ -1203,7 +1203,8 @@ public:
 					{
 						Label prsz_ok;
 						Ldr(w9, sh4_context_mem_operand(&fpscr.full));
-						And(w9, w9, (1 << 20) | (1 << 19));		// SZ | PR
+						Mov(w10, FPSCR_BLOCK_CFG_MASK);
+						And(w9, w9, w10);			// SZ | PR | RM (decoder.h)
 						Cmp(w9, op.rs1._imm);
 						B(eq, &prsz_ok);
 						if (FpscrStatsEnabled())

@@ -1358,7 +1358,8 @@ void Armv8AAssembler::Compile(RuntimeBlockInfo *blk, bool force_checks, bool, bo
 			{
 				Label prsz_ok;
 				Ldr(w9, Ctx(&fpscr.full));
-				And(w9, w9, (1 << 20) | (1 << 19));	// SZ | PR
+				Mov(w10, FPSCR_BLOCK_CFG_MASK);
+				And(w9, w9, w10);			// SZ | PR | RM (decoder.h)
 				Cmp(w9, op.rs1._imm);
 				B(&prsz_ok, eq);
 				Mov(w29, op.rs2._imm);

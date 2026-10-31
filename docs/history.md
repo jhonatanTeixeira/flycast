@@ -1015,3 +1015,27 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   imprime **nome de API e método** de cada syscall WinCE (nosso fork só tem o `#ifdef`
   `TRACE_WINCE_SYSCALLS` vazio). Com ele se vê qual chamada antecede o parque. Em paralelo,
   `FC_WATCH_ADDR=8C131564` para pegar a transição exata.
+
+## 2026-10-31 (noite, 5) — TR Chronicles: causa por bissecção = guarda do FPSCR (commit 13); boota com fim de bloco
+
+- **Device novo de teste: `ark@192.168.0.11`** (dArkOS RE, mesmos scripts em `/home/ark`).
+- **Revisão do `012d949d8` (despacho inline P1/P2/P4):** semântica igual ao `mmu_instruction_translation`
+  do `FAST_MMU` — correto, mas não muda o boot (é CPU, não o defeito).
+- **Critério objetivo:** o 2021 base produz quadros sempre (988 apresentados/105 s, VEL 28,5%); o nosso
+  faz 124 quadros novos e para. Desligar todas as chaves `FC_*` (HLE, dyn link, compact, stubs, skips,
+  cold, FMV clock, codepage, SMC, AICA dual) **não** muda: defeito em código sem chave. As opções do
+  cfg (`flycast2026_*` × `flycast2021_*`) são equivalentes.
+- **Bissecção** (worktree `flycast-wt-2ea`, build ~40 s): 101/35/15/14 param em 123 apresentados;
+  **11 e 12 bootam** (666/683, VEL 26%). Culpado: **`8e8b3c80c`** — guarda PR/SZ do FPSCR (o bloco
+  deixa de terminar após `lds FPSCR`).
+- **No HEAD, `FC_FPSCR_BLOCKEND=1`** (diag: fim de bloco após escrita de FPSCR): 363 quadros novos em
+  85 s e o usuário viu **a FMV da Eidos (~12 fps) e a tela de PRESS START** — o 2021 base não mostra
+  essa FMV.
+- **Guarda com RM:** o decoder também fixa o RM (`RoundToZero` escolhe `cvt_i2f_z/_n`), e a guarda só
+  olhava PR/SZ. Agora compara `FPSCR_BLOCK_CFG_MASK` (SZ|PR|RM) nos dois backends — correto, mas o TR
+  segue em 124 com ela: não é a causa.
+- Regalloc conferido: `shop_sync_fpscr` faz flush duro de fr/xf (não sobra float velho em registrador).
+- **Próximo:** `FC_FPSCR_BLOCKEND=lo-hi` para separar kernel (`8C…`, troca de contexto de FPU
+  `8C01282C`/`8C012894`) de usuário (libm `0009DACE`/`000961C8`) e ler o ARM64 do bloco culpado;
+  depois testar o Sega Rally 2 (também WinCE).
+

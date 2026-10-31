@@ -47,6 +47,13 @@ struct ngen_features
 	                          //leave this false keep the old always-end-the-block behaviour, which is always
 	                          //correct, just slower. See dec_write_fpscr() in decoder.cpp.
 };
+
+// Bits do FPSCR que o decoder fixa na compilacao do bloco (state_Setup):
+// SZ (bit 20) e PR (bit 19) decidem a forma das ops de FPU, e o RM (bits 0-1)
+// decide o arredondamento do `float FPUL` (RoundToZero). A guarda do
+// shop_sync_fpscr compara o FPSCR novo com o do bloco nestes bits; o FR (troca
+// de banco) e o DN sao tratados em tempo de execucao pelo UpdateFPSCR.
+#define FPSCR_BLOCK_CFG_MASK ((1u << 20) | (1u << 19) | 3u)
 struct RuntimeBlockInfo;
 bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles);
 
