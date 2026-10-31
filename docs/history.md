@@ -874,11 +874,12 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
     é consistente consigo mesma; só comparar com a tabela de páginas do WinCE na RAM
     pegaria).
   - **No estado saudável (20%), o TR não está "saturado" pelo despacho**: 78% das
-    amostras de PC caem num único endereço de biblioteca (8C024704, o retorno de um
-    callback do "system library"), o jogo **nunca lê o controle** (o socket de
-    controle nunca subiu) e **nunca escreve na VRAM** — ele gira no kernel/biblioteca
-    do WinCE (malloc/lock: `8C01734C..8C0176D2`, `8C02CC40..6E`, `01E42E34`) e faz
-    1,5 quadros novos/s, tela preta.
+    amostras de PC caem num único endereço de biblioteca (`8C024704`, o retorno de um
+    callback do "system library") — ele gira no kernel/biblioteca do WinCE
+    (malloc/lock: `8C01734C..8C0176D2`, `8C02CC40..6E`, `01E42E34`) e faz 1,5 quadros
+    novos/s, tela preta. O socket de controle (que só subia em `UpdateInputState`)
+    nunca apareceu, indício de que o jogo não chega a ler o controle. O `FC_FB_DUMP`
+    não serve de prova do que está na tela (também sai preto no Napple, que funciona).
   - O TR precisa do **BIOS real** (`dc_boot.bin`) para comparar com o core oficial
     (o oficial sai com "Unable to find bios"; nosso fork usa reios/HLE). **O device não
     tem `dc_boot.bin` em lugar nenhum.**
