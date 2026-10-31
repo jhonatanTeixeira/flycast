@@ -73,6 +73,10 @@ static bool BlockProfEnabled()
 // FC_JIT_COLD=0 volta ao layout antigo (A/B).
 static bool ColdTailEnabled()
 {
+	// Hard gate (pedido do usuario): a cauda fria e do Dreamcast; no Naomi/Atomiswave
+	// fica o layout antigo (FC_JIT_COLD nao liga neles).
+	if (!system_is_dreamcast())
+		return false;
 	static const bool en = getenv("FC_JIT_COLD") == nullptr || atoi(getenv("FC_JIT_COLD")) != 0;
 	return en;
 }
@@ -2407,6 +2411,30 @@ public:
 		}
 		else
 		{
+			// Despacho com MMU ligada (jogos WinCE, tech_debits 4.121): todo fim
+			// de bloco sai por bm_GetCodeByVAddr, uma chamada C que custa ~130
+			// ciclos + a traducao. Mas a maioria dos despachos cai em P1/P2/P4
+			// (fast_reg_lut[va>>29] != 0), onde a traducao e a IDENTIDADE:
+			// paddr = vaddr. Esse caso da para fazer inline, exatamente igual ao
+			// que o C faz (mesma ordem: endereco impar = syscall WinCE -> vai
+			// para o caminho C; faixa P -> fpcb[(va>>1) & FPCB_MASK]).
+			// Medido no TR Chronicles: 73% dos despachos sao desse tipo e o
+			// caminho C gastava 28% da thread de emulacao (perf + jit dump).
+			Label mmu_slow;
+			Tst(w29, 1);
+			B(&mmu_slow, ne);					// impar: syscall/erro, caminho C
+			Ubfx(w1, w29, 29, 3);				// faixa de endereco
+			Mov(x2, reinterpret_cast<uintptr_t>(&fast_reg_lut[0]));
+			Ldr(w1, MemOperand(x2, x1, LSL, 2));
+			Cbz(w1, &mmu_slow);					// P0/U0/P3: precisa traduzir
+			Sub(x2, x28, offsetof(Sh4RCB, cntx));
+			if (RAM_SIZE_MAX == 33554432)
+				Ubfx(w1, w29, 1, 24);			// 24+1 bits: 32 MB
+			else
+				Ubfx(w1, w29, 1, 23);			// 23+1 bits: 16 MB
+			Ldr(x0, MemOperand(x2, x1, LSL, 3));	// fpcb[(va>>1) & FPCB_MASK]
+			Br(x0);
+			Bind(&mmu_slow);
 			Mov(w0, w29);
 			GenCallRuntime(bm_GetCodeByVAddr);
 		}

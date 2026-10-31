@@ -930,3 +930,39 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   `AWCartridge::decrypt`, ou a cadeia de apresentação). Ferramenta pronta para isso:
   `FC_TINYPROF` + `tools/tinyprof.py` (falta atribuir por thread: hoje o `SIGPROF` cai
   em qualquer thread, e thread bloqueada em `svc` também é amostrada).
+
+## 2026-10-31 (noite, 2) — método do projeto: perf + dump do JIT no TR; despacho inline P1/P2/P4
+
+- **`perf` de volta no device** (não havia nos repos: instalado do cache do apt,
+  `linux-perf 6.12.107` + `libopencsd1` + `libdebuginfod1t64` + `libbabeltrace1` +
+  `libtraceevent1` + `libjson-c5`; com PATH completo o `dpkg` funciona).
+- **Pipeline (método do projeto)**: `FC_JIT_DUMP_LITE=1` + `perf record -F 299 -k mono -p <pid>`
+  → `jit_lite_report.py <dump> <samples> --tcb-off 0x38ea48` resolve amostra→bloco (o perf
+  só vê o blob `SH4_TCB`). Ferramenta nova: `tools/jit_hot_functions.py` agrupa os blocos
+  em **funções** (entrada = alvo de `bsr` / bloco sem fall-through) e soma o tempo por função.
+- **TR Chronicles, thread de emulação (131 s, 38,7 mil amostras, 99% de um núcleo):**
+  `codigo do JIT` só **31,8%**; fora do JIT **65,8%**, dos quais
+  **`bm_GetCodeByVAddr` 28,0% + `mmu_full_lookup` 22,4% = 50,4% em despacho+tradução**.
+  O bloco mais caro é 0,49% e os 30 maiores somam 6,5% — **não existe "função quente" para
+  nativizar**: o custo é o despacho, 16 M por segundo emulado (laço minúsculo do kernel WinCE).
+- **`vmem32` está ligado** (fastmem com MMU): o acesso a *dados* já é load direto, então os
+  22,4% de `mmu_full_lookup` são **tradução de fetch de instrução** (27% dos despachos; os
+  outros 73% caem em P1/P2/P4, onde a tradução é identidade).
+- **Fix medido (seguro, sem mudar semântica): despacho inline no `no_update` do JIT** —
+  para `va` par e `fast_reg_lut[va>>29] != 0` o JIT faz `fpcb[(va>>1)&FPCB_MASK]` inline
+  (mesma ordem do C: ímpar → syscall/caminho C). Resultado no mesmo perfil:
+  **`bm_GetCodeByVAddr` 28,0% → 13,6%**, total despacho+tradução **50,5% → 41,1%**
+  (o resto migra para o despachante inline, que aparece como "JIT sem bloco").
+  VEL do TR 18,3-19,9% (era 18,5-23,8% — o ganho é de CPU, não de VEL nesta cena travada).
+- **Bug achado na cache de tradução (`FC_ITLB`, desligada):** ela devolvia
+  `*tlb_entry_ret = <ponteiro do TLB_Entry>` e o `wince_resolve_address` **reusa
+  `UTLB[CCN_MMUCR.URC]`** a cada resolução; o `vmem32_map_mmu` lê `SZ/PPN` desse ponteiro,
+  então mapeava a página errada. Corrigido guardando **cópia** do `TLB_Entry` (fica).
+  Mesmo com a correção a cache **não compensa**: 59 M lookups com 99,58% de acerto e VEL
+  10,2% (× 19,9% sem ela) — o caminho do jogo muda e fica mais lento. **Fica desligada.**
+- **Conclusão para o TR:** o gargalo é a taxa de despacho (blocos minúsculos do kernel do
+  WinCE em laço). Próximos passos com o dump: (a) HLE por assinatura do laço
+  `8C01734C..8C0176D2` (heap/validação, ~20 blocos por volta) e `8C02CC40..6E`
+  (`free`/bins) — é o que transforma ~20 despachos em 1 chamada nativa; (b) o
+  `01E42E34` (xor/xor/or/tst, 6,3 M voltas, função pura) é HLE trivial; (c) o
+  `000B87E6` (aritmética 64 bits com `subc`).

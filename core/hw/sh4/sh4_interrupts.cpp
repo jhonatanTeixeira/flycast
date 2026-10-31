@@ -181,8 +181,15 @@ bool Do_Exception(u32 epc, u32 expEvn, u32 CallVect)
 	// (salvar o contexto) -- o stub de entrada da BIOS salva f0-f14. Se FD
 	// continuar 1, esses acessos disparam a excecao de novo (tempestade).
 	// Limpa FD ao entrar no handler de FPU.
-	if (expEvn == 0x800)
-		sr.FD = 0;
+	// FC_NO_FDCLEAR=1 desliga (A/B: o base 2021 nao limpava, e o WinCE usa a
+	// excecao de FPU desabilitada para troca de contexto preguicosa de FPU).
+	{
+		static int noFdClear = -1;
+		if (noFdClear == -1)
+			noFdClear = getenv("FC_NO_FDCLEAR") != nullptr ? 1 : 0;
+		if (expEvn == 0x800 && !noFdClear)
+			sr.FD = 0;
+	}
 	UpdateSR();
 
 	// FC_EXC_LOG: começa o JIT trace NA excecao (FC_JIT_TRACE, sem

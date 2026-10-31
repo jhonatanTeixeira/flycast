@@ -112,7 +112,10 @@ struct FcTlbEntry
 	u32 pa_base;		// rv & mask
 	u32 mask;			// mascara da pagina (mmu_mask[sz])
 	u32 asid;			// 0xFFFFFFFF = entrada compartilhada (SH=1)
-	const TLB_Entry *entry;
+	TLB_Entry entry;	// COPIA, nao ponteiro: o chamador (vmem32_map_mmu) le
+						// SZ/PPN daqui e o slot UTLB[URC] e reescrito por
+						// todo wince_resolve_address (bug de 2026-10-31:
+						// devolver o ponteiro mapeava a pagina errada)
 	u32 gen;
 };
 static FcTlbEntry fc_tlb[FC_TLB_ENTRIES];
@@ -145,7 +148,7 @@ static inline bool fc_tlb_hit(u32 va, u32& rv, const TLB_Entry** entry_ret)
 	if (e.asid != 0xFFFFFFFF && e.asid != CCN_PTEH.ASID)
 		return false;
 	rv = e.pa_base | (va & ~e.mask);
-	*entry_ret = e.entry;
+	*entry_ret = &e.entry;
 	return true;
 }
 
@@ -156,7 +159,7 @@ static inline void fc_tlb_fill(u32 va, u32 rv, const TLB_Entry *entry, u32 mask)
 	e.pa_base = rv & mask;
 	e.mask = mask;
 	e.asid = entry->Data.SH == 1 ? 0xFFFFFFFF : CCN_PTEH.ASID;
-	e.entry = entry;
+	e.entry = *entry;
 	e.gen = fc_tlb_gen;
 }
 
@@ -330,11 +333,21 @@ void ITLB_Sync(u32 entry)
 }
 
 //Do a full lookup on the UTLB entry's
-// (sem a cache de traducao; `diag_path` leva o caminho para o FC_MMU_DIAG)
 template<bool internal>
-static u32 mmu_full_lookup_slow(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv, int *diag_path_ptr)
+u32 mmu_full_lookup(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv)
 {
-	int &diag_path = *diag_path_ptr;
+	int diag_path = 0;
+	MmuDiagScope diag(&diag_path);
+	// cache de traducao (FC_ITLB, padrao desligado -- ver comentario acima)
+	if (g_itlbOn && fc_tlb_hit(va, rv, tlb_entry_ret))
+	{
+		if (g_mmuDiagOn)
+			g_itlbHit++;
+		diag_path = 5;
+		return MMU_ERROR_NONE;
+	}
+	if (g_itlbOn && g_mmuDiagOn)
+		g_itlbMiss++;
 	if (lru_entry != NULL)
 	{
 		if (/*lru_entry->Data.V == 1 && */
@@ -398,36 +411,6 @@ static u32 mmu_full_lookup_slow(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv
 	return MMU_ERROR_TLB_MISS;
 }
 
-template<bool internal>
-u32 mmu_full_lookup(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv)
-{
-	int diag_path = 0;
-	MmuDiagScope diag(&diag_path);
-	if (g_itlbOn && fc_tlb_hit(va, rv, tlb_entry_ret))
-	{
-		if (g_mmuDiagOn)
-			g_itlbHit++;
-		if (g_itlbVerify)
-		{
-			u32 rv2 = 0;
-			const TLB_Entry *e2 = nullptr;
-			int p2 = 0;
-			u32 rc2 = mmu_full_lookup_slow<internal>(va, &e2, rv2, &p2);
-			if (rc2 != MMU_ERROR_NONE || rv2 != rv)
-			{
-				g_itlbMismatch++;
-				if (g_itlbMismatch <= 8)
-					fprintf(stderr, "itlb MISMATCH va=%08X cache=%08X real=%08X rc=%u caminho=%d asid=%u\n",
-							va, rv, rv2, rc2, p2, (u32)CCN_PTEH.ASID);
-			}
-		}
-		diag_path = 5;
-		return MMU_ERROR_NONE;
-	}
-	if (g_itlbOn && g_mmuDiagOn)
-		g_itlbMiss++;
-	return mmu_full_lookup_slow<internal>(va, tlb_entry_ret, rv, &diag_path);
-}
 template u32 mmu_full_lookup<false>(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv);
 
 template<u32 translation_type>
