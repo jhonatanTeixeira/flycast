@@ -910,7 +910,11 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   | `internal_resolution = 320x240` | 33,5 | — |
 
   O `FC_IDLE_FF=0` é o único que **melhora** (e elimina os descartes): o idle skip faz a
-  emulação correr à frente da apresentação e o frame é descartado.
+  emulação correr à frente da apresentação e o frame é descartado. **Ressalva:**
+  o build instrumentado desta sessão deu 32,7-34,7 fps (2 × 80 s) na mesma cena, então
+  parte da diferença entre linhas da tabela pode ser variação de cena — o que é
+  mecanístico (não depende de cena) é a contagem de descartes e o formato da
+  distribuição (p50 16,6 ms / p95 43-45 ms).
 - **Perfil de CPU do host (`FC_TINYPROF=300`, processo inteiro, 12,8 k amostras):**
   core 51,8% (JIT `SH4_TCB` 27,0%, `AWCartridge::decrypt` 1,7%, `SRdecode` 1,5%,
   `ReadMem_area0` 1,0%, resto espalhado em <1%), **driver Mali 23,8%**, **libc 19,2%**
