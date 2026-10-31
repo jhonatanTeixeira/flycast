@@ -993,3 +993,25 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
 - **Próximo passo (instrumento já existe):** `FC_WATCH_ADDR=8C131564` (amostra por quadro) e/ou
   watch nas duas palavras para provar que ninguém escreve; depois achar (estaticamente, no dump)
   o código que deveria escrever e por que ele não roda (thread/interrupção não escalonada).
+
+## 2026-10-31 (noite, 4) — TR Chronicles: boot parqueado após 124 quadros; o laço progride (7↔3)
+
+- **Os dois cores bootam igual:** log em DEBUG mostra `Did not load bios, using reios` +
+  `Enabling Full MMU ... for Windows CE game` + `Enabling Full MMU support` **no nosso e no
+  2021**. Não é diferença de BIOS/MMU.
+- **Nosso core para em exatamente 124 quadros novos** (todas as rodadas: 124) — é o fim do
+  splash/primeira fase do WinCE; depois fica no laço de 29 blocos (4.121b).
+- **O laço NÃO é deadlock:** `FC_WATCH_ADDR=8C131560` (amostra por quadro) mostra o contador
+  da fila oscilando **7↔3, ~4 mudanças/s** (47 em 750 quadros) enquanto o laço roda ~33 mil
+  voltas/s — ou seja, o emulador gasta o orçamento inteiro *observando* um estado que outra
+  thread muda devagar.
+- O `8C02CC40` calcula `((*(8C133BA0)=312500 − tick) * 5) >> 16` (tempo restante) contra o
+  relógio de ms `*(8C129888)`, que anda certo (1000 × VEL). 312500 ms = **312 s de tempo
+  emulado** de espera → a VEL 20% são ~26 min de parede. É por isso que "parece travado" e
+  por que o core 2021 (uns 30% mais rápido na apresentação) chega na tela.
+- `FC_NO_FDCLEAR=1` (única diferença semântica achada no caminho de exceção de FPU vs o base
+  2021) **não muda**: 124 quadros, VEL 22,0% (× 18,3-24% de ruído).
+- **Próximo passo (ferramenta a portar):** `print_wince_syscall` do `wince.h` do upstream —
+  imprime **nome de API e método** de cada syscall WinCE (nosso fork só tem o `#ifdef`
+  `TRACE_WINCE_SYSCALLS` vazio). Com ele se vê qual chamada antecede o parque. Em paralelo,
+  `FC_WATCH_ADDR=8C131564` para pegar a transição exata.
