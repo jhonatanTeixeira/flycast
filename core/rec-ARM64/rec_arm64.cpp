@@ -436,8 +436,48 @@ bool jit_trace_enabled() { return JitTraceEnabled(); }
 // Chamado no load do savestate: so traca a partir dai (o boot antes da carga
 // varia e nao interessa).
 void jit_trace_start() { if (JitTraceEnabled()) jitTraceActive = true; }
+
+// FC_JIT_TRACE_RING=1: em vez do arquivo sequencial (que enche logo), mantem um
+// ring buffer com as ULTIMAS 4096 execucoes de bloco e reescreve o arquivo a
+// cada volta completa. Serve para ver o laco em que o jogo travou (o arquivo
+// normal comeca no boot e o travamento fica de fora).
+static u32 jitTraceRingBuf[4096];
+static u32 jitTraceRingN;
+static void jit_trace_ring_flush()
+{
+	if (jitTraceFile == nullptr)
+		return;
+	fseek(jitTraceFile, 0, SEEK_SET);
+	u32 n = jitTraceRingN < 4096 ? jitTraceRingN : 4096;
+	fprintf(jitTraceFile, "# ring %u\n", n);
+	for (u32 i = 0; i < n; i++)
+		fprintf(jitTraceFile, "%08X\n", jitTraceRingBuf[(jitTraceRingN + i) % 4096]);
+	fflush(jitTraceFile);
+}
 void DYNACALL jit_trace_block(u32 vaddr, u32 phase)
 {
+	{
+		static int ring = -1;
+		if (ring == -1)
+			ring = getenv("FC_JIT_TRACE_RING") != nullptr ? 1 : 0;
+		if (ring)
+		{
+			if (!JitTraceEnabled())
+				return;
+			if (phase != 0)		// so a entrada do bloco
+				return;
+			if (jitTraceFile == nullptr)
+			{
+				jitTraceFile = fopen(getenv("FC_JIT_TRACE"), "w");
+				if (jitTraceFile == nullptr)
+					return;
+			}
+			jitTraceRingBuf[jitTraceRingN++ & 4095] = vaddr;
+			if ((jitTraceRingN & 4095) == 0)
+				jit_trace_ring_flush();
+			return;
+		}
+	}
 	static bool bootInit;
 	if (!bootInit)
 	{

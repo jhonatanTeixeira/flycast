@@ -966,3 +966,30 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
   (`free`/bins) — é o que transforma ~20 despachos em 1 chamada nativa; (b) o
   `01E42E34` (xor/xor/or/tst, 6,3 M voltas, função pura) é HLE trivial; (c) o
   `000B87E6` (aritmética 64 bits com `subc`).
+
+## 2026-10-31 (noite, 3) — TR Chronicles: o laço exato onde ele não passa (ring trace + leitura de RAM)
+
+- **Ferramenta nova:** `FC_JIT_TRACE_RING=1` (ring buffer das últimas 4096 execuções de bloco,
+  reescrito a cada volta) — o trace normal começa no boot e o travamento fica de fora.
+  `tools/jit_ring_loop.py` acha o **período do laço** e desmonta o ciclo (com o dump).
+- **Resultado (TR, cena travada, 1,5 quadro/s):** laço de **29 blocos**, repetindo sem saída:
+  `8C017544 → 8C01755E → 8C0175BC → 8C017604 → 8C01761C → 8C02CC40 (seqlock) →
+   8C017628 → 8C01764C/6B2/6C2 → 8C01238E..8C01245E (7 blocos de 2-4 instr) → 8C017544`.
+  Dentro dele há uma chamada para **código de usuário em `00005BC0`**
+  (`r0 = *r4; *r4 = r5; rts` = troca atômica) — o kernel chamando o processo.
+- **Estado lido da RAM (via `mem` no socket de controle), congelado × avançando:**
+  - **congelados:** `*(8C129D14) = 7` (contador), `*(8C131560) = 7` + `*(8C131564) = 8C897248`
+    (cabeça + ponteiro de uma fila/tabela de 7 entradas), `*(8C133BA0) = 0x4C4B4 = 312500`,
+    `*(8C133BA4) = 5` (escala);
+  - **avançando:** `*(8C129888)` = contador de **ms emulados** a **1000 × VEL** (medido: 28400 →
+    29525 → 30525 em 5 s, com VEL ~22%).
+  - `8C02CC40` lê esses dois (seqlock: `if (a == tick)` / `if (*r4 == escala)`) e calcula
+    `((312500 - tick) * 5) >> 16` — ou seja, é **aritmética de prazo/tempo restante**.
+- **Leitura:** o laço espera uma mudança de estado (`*(8C131564)`/contador 7 — o "dreno" da
+  fila) que **outra thread ou interrupção** deveria provocar; no nosso emulador isso não
+  acontece. Só o relógio de ms anda. `312500` ms = **312,5 s de tempo emulado** de prazo — a
+  VEL 20% isso é ~26 min de parede (e explica por que "parece travado" e por que o 2021, mais
+  rápido, chega na tela de apresentação).
+- **Próximo passo (instrumento já existe):** `FC_WATCH_ADDR=8C131564` (amostra por quadro) e/ou
+  watch nas duas palavras para provar que ninguém escreve; depois achar (estaticamente, no dump)
+  o código que deveria escrever e por que ele não roda (thread/interrupção não escalonada).
