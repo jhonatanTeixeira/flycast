@@ -1607,6 +1607,22 @@ void retro_run (void)
       }
    }
 
+   // FC_TINYPROF=<Hz> (opt-in, 2026-10-31): amostrador de PC do host por
+   // SIGPROF, para achar quem gasta a CPU do emulador quando nao ha `perf` no
+   // device. Grava amostras cruas (PC - base do .so) em /tmp/tinyprof-<pid>.txt
+   // a cada 150 quadros; o arquivo e reescrito a cada janela. Simbolizar:
+   //   python3 tools/tinyprof.py flycast_libretro.so /tmp/tinyprof-<pid>.txt
+   extern void fc_tinyprof_tick();
+   fc_tinyprof_tick();
+
+   // FC_CTRL_PORT: sobe o socket de controle tambem no retro_run (antes so era
+   // criado em UpdateInputState, entao jogo que nao le o controle -- TR
+   // Chronicles travado no kernel do WinCE -- nunca subia o socket).
+   {
+      extern void ctrl_socket_init();
+      ctrl_socket_init();
+   }
+
    // FC_BLOCK_PROF (opt-in, see blockmanager.cpp / rec_arm64.cpp): periodically
    // dump the hottest JIT blocks ranked by host instructions executed. This is
    // what answers "which generated code is eating the frame" -- perf only ever
@@ -4238,3 +4254,100 @@ static bool read_m3u(const char *file)
    fclose(f);
    return (disk_index != 0);
 }
+
+// ---- FC_TINYPROF (opt-in, 2026-10-31) -------------------------------------
+// Amostrador de PC do host: o device de teste nao tem `perf`, e o gargalo dos
+// jogos WinCE (TR Chronicles, 4.121) e do NGBC esta em codigo C++ do core, que
+// o FC_BLOCK_PROF nao ve (ele so mede o codigo gerado pelo JIT). Um SIGPROF
+// periodico guarda o PC interrompido (relativo a base do .so) e o `retro_run`
+// reescreve /tmp/tinyprof-<pid>.txt a cada 150 quadros. Simbolizar com
+// tools/tinyprof.py (offline, no .so do mesmo build).
+#ifdef __aarch64__
+#include <signal.h>
+#include <sys/time.h>
+#include <ucontext.h>
+#include <dlfcn.h>
+
+#define TINYPROF_MAX 65536
+static u64 g_profSamples[TINYPROF_MAX];
+static volatile u32 g_profCount;
+static u64 g_profBase;
+static u32 g_profOn;
+
+static void tinyprof_handler(int sig, siginfo_t *, void *ucv)
+{
+	(void)sig;
+	ucontext_t *uc = (ucontext_t *)ucv;
+	u64 pc = uc->uc_mcontext.pc;
+	u32 n = g_profCount;
+	if (n < TINYPROF_MAX)
+	{
+		g_profSamples[n] = pc;	// PC cru: /proc/self/maps no dump separa os modulos
+		g_profCount = n + 1;
+	}
+}
+
+void fc_tinyprof_tick()
+{
+	static int inited = 0;
+	if (!inited)
+	{
+		inited = 1;
+		const char *e = getenv("FC_TINYPROF");
+		if (e == nullptr || atoi(e) <= 0)
+			return;
+		g_profOn = atoi(e);
+		Dl_info info;
+		g_profBase = 0;
+		if (dladdr((void *)&tinyprof_handler, &info) != 0)
+			g_profBase = (u64)info.dli_fbase;
+		struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_sigaction = tinyprof_handler;
+		sa.sa_flags = SA_SIGINFO | SA_RESTART;
+		sigaction(SIGPROF, &sa, nullptr);
+		struct itimerval it;
+		it.it_interval.tv_sec = 0;
+		it.it_interval.tv_usec = 1000000 / g_profOn;
+		it.it_value = it.it_interval;
+		setitimer(ITIMER_PROF, &it, nullptr);
+		fprintf(stderr, "tinyprof: %u Hz, base %llx\n", g_profOn, (unsigned long long)g_profBase);
+		return;
+	}
+	if (!g_profOn)
+		return;
+	static int counter = 0;
+	if (++counter < 150)
+		return;
+	counter = 0;
+	char path[64];
+	snprintf(path, sizeof(path), "/tmp/tinyprof-%d.txt", (int)getpid());
+	FILE *f = fopen(path, "w");
+	if (f == nullptr)
+		return;
+	u32 n = g_profCount;
+	fprintf(f, "# tinyprof %u Hz base %llx amostras %u\n", g_profOn, (unsigned long long)g_profBase, n);
+	// Mapa de modulos carregados (para separar .so do core de libc/libmali/JIT)
+	{
+		FILE *m = fopen("/proc/self/maps", "r");
+		if (m != nullptr)
+		{
+			char line[512];
+			while (fgets(line, sizeof(line), m) != nullptr)
+			{
+				if (strstr(line, "r-xp") == nullptr && strstr(line, "rwxp") == nullptr)
+					continue;
+				line[strcspn(line, "\n")] = 0;
+				fprintf(f, "#map %s\n", line);
+			}
+			fclose(m);
+		}
+	}
+	for (u32 i = 0; i < n; i++)
+		fprintf(f, "%llx\n", (unsigned long long)g_profSamples[i]);
+	fclose(f);
+	// Acumula: o arquivo sempre tem a amostragem desde o inicio da sessao.
+}
+#else
+void fc_tinyprof_tick() {}
+#endif

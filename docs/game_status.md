@@ -65,7 +65,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | kofnw | 2026-09-26 | 99 | 54 | quase lá; cauda ainda incomoda (hicups). Perda de 2-3% do acesso compacto aceita |
 | kofxi | 2026-10-06 | 100 | 58,9 | **60 fps constantes**, sem hicup, ~1% dupes |
 | mslug6 | 2026-09-26 | 83 | 22 | 30 fps na maior parte; **~20 em boss** (partículas); VEL oscila 66↔100% entre rodadas; render pesado |
-| ngbc | 2026-09-26 | 100 | 55 | ok |
+| ngbc | 2026-10-31 | 99 (inflada pelo idle skip) | 39-43 | **40-45 dos 60 fps do jogo (savestate do usuário).** Não é CPU (processo usa ~66% de um núcleo; só 26% do clock do SH4 é executado). É a **cauda**: p50 16,7 ms mas p95 43-45 ms / p99 46-49 (~25% dos quadros custam ~2,5 quadros). `FC_IDLE_FF=0` melhora: **43,2 fps com 1 descarte** (era 39,5 com 834). Perfil: JIT 27%, driver Mali 24%, libc 19%. Ver 5.9 |
 | samsptk | 2026-09-26 | 100 | 43-59 | **full speed** após shader de paleta bilinear (20→59 fps); aguarda validação visual |
 
 ## Dreamcast
@@ -94,7 +94,7 @@ condição de quando foram medidas); funções nativas por assinatura (`hle_fn`)
 | Skies of Arcadia (Disc 1) | 2026-10-07 | 99,6 | 29,8 | **30 cravados, rodando muito bem** |
 | Skies of Arcadia (Disc 2) | 2026-10-07 | — | — | **não boota** (exit 133, SIGSEGV; suspeita CHD) |
 | Soulcalibur | 2026-10-07 | 89 | 53,5 | 60 cravados; no ES do zero congelou no boot (4.30, não reconferido) |
-| TR Chronicles | 2026-10-07 | — | 9 | BIOS Windows CE demora; **tela preta / teto ~147 ms/frame** (4.115), não é tier2 |
+| TR Chronicles | 2026-10-31 | 18-24 | 1,5 | **tela preta, travado — não é só lentidão (4.121).** Cold boot: WinCE sobe e gira no kernel/biblioteca (malloc/lock em `8C01734C..6D2`, `8C02CC40..6E`, `01E42E34`); **nunca lê o controle e nunca escreve na VRAM**; VEL 18,5-23,8% em 3 rodadas (4ª roda deu 2-7% com o mesmo core). 56% da CPU do emulador é despacho+tradução de endereço (só 27% dos despachos precisam traduzir). O core oficial não roda sem `dc_boot.bin` (device não tem); o nosso usa reios |
 
 ## Padrões observados (resumo do que explica a tabela)
 

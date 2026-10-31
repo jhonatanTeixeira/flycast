@@ -840,3 +840,88 @@ afinidade (emu núcleo 3, workers 1-2). Validação por hash de pixels por id de
     (~30 fps, velocidade cheia); Napple Tale (DC) 20 s, 640x480@30, ratio 1.004, sem novo
     OOM do Mali. O `nothing to save in srm file!` no shutdown é normal no Atomiswave
     (usa `.nvmem` na pasta da ROM).
+
+## 2026-10-31 (tarde) — MMU/despacho (4.121): instrumentação, caches e o que o TR Chronicles realmente faz
+
+- **Instrumentação nova (tudo opt-in, custo zero desligado):**
+  - `FC_MMU_DIAG=1`: reparte o custo da tradução MMU (caminho LRU / hash / WinCE /
+    miss), ciclos por caminho, e conta chamadas do despacho com MMU + quantas caem na
+    faixa física direta (P1/P2/P4). Sai no `FC_SYNC_STATS` como `mmu_diag` e
+    `dispatch_diag`.
+  - `skip_diag` no `FC_SYNC_STATS`: ciclos pulados por cada truque (`idle_ff`,
+    `delay`, `scan`, `dt`) — é o que mostra que a VEL% pode estar inflada.
+  - `FC_INITPROF`/`FC_TINYPROF=<Hz>`: amostrador de PC do host por `SIGPROF` (o device
+    não tem `perf`). Grava PCs crus + `/proc/self/maps` em `/tmp/tinyprof-<pid>.txt`;
+    `tools/tinyprof.py <core.so> <arquivo> [--so-dir DIR]` separa por módulo (core,
+    libc, driver Mali) e simboliza (com os `.so` copiados do device).
+  - `memv ADDR LEN` no socket de controle: lê a RAM por endereço **virtual** (os jogos
+    WinCE moram em 0x00xxxxxx e o `mem` só via P1).
+  - `ctrl_socket_init()` também no `retro_run` (antes só em `UpdateInputState`, então
+    jogo que não lê o controle — TR — nunca subia o socket).
+- **Cache de tradução multi-entrada (`FC_ITLB`, padrão ligado) e cache de despacho
+  vaddr→código (`FC_VDISP`, padrão ligado)** em `fastmmu.cpp`/`blockmanager.cpp`:
+  512 e 4096 entradas diretas, com geração invalidada em flush da MMU, `LDTLB`
+  (`UTLB_Sync`), troca de ASID, `bm_Reset`, `bm_ResetCache`, `bm_ResetTempCache` e
+  `bm_DiscardBlock`. **Meta alcançada em taxa de acerto:** iTLB 99,97% (7,59 M
+  lookups), cache de despacho 93,3%.
+- **Mas o TR Chronicles não melhorou — e o diagnóstico do 4.121 muda:**
+  - Com os caches ligados o TR **trava mais cedo**: VEL 1,8-2,1% (reproduzível, 3
+    rodadas, 1 quadro novo, 7.166 despachos de bloco mas 7,55 M traduções de dados);
+    com `FC_ITLB=0 FC_VDISP=0` volta a VEL 20,4%, igual ao core do device
+    (21,4 / 23,75 / 18,5%). Ou seja: **os caches mudam o comportamento do jogo** —
+    não é só taxa de acerto, tem invalidação faltando (o `FC_ITLB_VERIFY` não pega:
+    a busca "completa" consulta as mesmas tabelas UTLB/hash, então uma entrada velha
+    é consistente consigo mesma; só comparar com a tabela de páginas do WinCE na RAM
+    pegaria).
+  - **No estado saudável (20%), o TR não está "saturado" pelo despacho**: 78% das
+    amostras de PC caem num único endereço de biblioteca (8C024704, o retorno de um
+    callback do "system library"), o jogo **nunca lê o controle** (o socket de
+    controle nunca subiu) e **nunca escreve na VRAM** — ele gira no kernel/biblioteca
+    do WinCE (malloc/lock: `8C01734C..8C0176D2`, `8C02CC40..6E`, `01E42E34`) e faz
+    1,5 quadros novos/s, tela preta.
+  - O TR precisa do **BIOS real** (`dc_boot.bin`) para comparar com o core oficial
+    (o oficial sai com "Unable to find bios"; nosso fork usa reios/HLE). **O device não
+    tem `dc_boot.bin` em lugar nenhum.**
+
+## 2026-10-31 (noite) — NGBC (Atomiswave) a 40-45/60: medido, não é CPU; 25% dos quadros estala ~40 ms
+
+- **Cena:** savestate do usuário (`ngbc.fc2021-rrstate.auto`), ES/cfg oficial, `perfmax`.
+  Baselines (rodadas de 60-130 s, `FC_SYNC_STATS`): `new_fps` 39,5 / **44,8** (a rodada de
+  26/10), VEL 97,8-99,4%, `vblank` 59,9/s, descartes de apresentação 834/4443.
+- **O processo NÃO está saturado de CPU** (por thread, `ps -L`): emulação ~40% de um
+  núcleo, frontend ~15%, áudio ~3%, Mali backend ~2% — ~66% de um núcleo no total. E os
+  ciclos de bloco executados são **52 M/s emulados** (26% do clock de 200 MHz): os outros
+  ~98 M/s de relógio emulado são **pulo do idle fast-forward** (`skip_diag`:
+  `idle_ff_cycles` 5,10 G em 51,6 s emulados). Ou seja: a VEL% do NGBC é inflada pelo
+  skip; o jogo trabalha 1/4 do tempo.
+- **A distribuição de intervalo entre quadros novos é o problema:**
+  `p50 = 16,68 ms` (exatamente 1 quadro), `p95 = 43-45 ms`, `p99 = 46-49 ms`
+  (no benchmark: core p50 9,8 ms, p95 39,5, p99 45). ~25% dos quadros custam ~2,5 quadros
+  de tempo — é a cauda, não a média.
+- **A/B de configuração de apresentação/ciclo (mesma cena):**
+
+  | config | new_fps | descartes |
+  |---|---|---|
+  | ES (threaded present + mailbox, vsync) | 39,5 | 834 |
+  | + `FC_IDLE_FF=0` (sem idle skip) | **43,2** | **1** |
+  | apresentação bloqueante (`RETRORUN_SDL_THREADED_PRESENT=0`) | 34,3 | 915 |
+  | sem vsync e sem threaded present | 26,6 | — |
+  | `internal_resolution = 320x240` | 33,5 | — |
+
+  O `FC_IDLE_FF=0` é o único que **melhora** (e elimina os descartes): o idle skip faz a
+  emulação correr à frente da apresentação e o frame é descartado.
+- **Perfil de CPU do host (`FC_TINYPROF=300`, processo inteiro, 12,8 k amostras):**
+  core 51,8% (JIT `SH4_TCB` 27,0%, `AWCartridge::decrypt` 1,7%, `SRdecode` 1,5%,
+  `ReadMem_area0` 1,0%, resto espalhado em <1%), **driver Mali 23,8%**, **libc 19,2%**
+  (as amostras caem no `svc`/`ioctl` e em futex — parte é artefato de entrega do sinal a
+  threads bloqueadas). No código gerado, os 4 blocos mais quentes são dois pares de
+  laços minúsculos (`8C025C48/6A` e `8C052CFA/D24`, 4 instruções, 30-36 instruções host
+  por volta, 30,8 M e 22,9 M voltas na sessão) = **32% do trabalho host do JIT**; e a
+  divisão 64 bits do runtime (`div0u` + 32 × `rotcl/div1`, `8C1238FE`/`8C123ABC`) é
+  **21% dos ciclos emulados executados**.
+- **Conclusão:** o NGBC não está limitado pela emulação do SH4 (26% do clock), nem pela
+  GPU (24% do processo). O que falta é achar o **estalo de ~40 ms em ~25% dos quadros**
+  (candidatos: upload de textura/VRAM, DMA G2 do AICA, leitura do cartucho com
+  `AWCartridge::decrypt`, ou a cadeia de apresentação). Ferramenta pronta para isso:
+  `FC_TINYPROF` + `tools/tinyprof.py` (falta atribuir por thread: hoje o `SIGPROF` cai
+  em qualquer thread, e thread bloqueada em `svc` também é amostrada).

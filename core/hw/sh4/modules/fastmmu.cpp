@@ -22,6 +22,9 @@
 #include "hw/sh4/sh4_core.h"
 #include "types.h"
 
+#include <string.h>
+#include <stdlib.h>
+
 #ifdef FAST_MMU
 
 #include "hw/mem/_vmem.h"
@@ -36,9 +39,126 @@ extern u32 sq_remap[64];
 
 #include "wince.h"
 
+// blockmanager.cpp: cache de despacho vaddr->codigo (FC_VDISP, tech_debits 4.121)
+void bm_InvalidateVAddrCode();
+
 const TLB_Entry *lru_entry = NULL;
 static u32 lru_mask;
 static u32 lru_address;
+
+// ---- FC_MMU_DIAG (opt-in, tech_debits 4.121) ------------------------------
+// Reparte o custo da traducao de endereco com a MMU ligada (jogos WinCE).
+// Ligado por FC_MMU_DIAG=1; desligado sobra um teste de flag por chamada.
+u32 g_mmuDiagOn;
+u64 g_mmuDiagLookups, g_mmuDiagLru, g_mmuDiagFind, g_mmuDiagWince, g_mmuDiagMiss, g_mmuDiagITlb;
+u64 g_mmuDiagCyc, g_mmuDiagSync, g_mmuDiagFlush;
+
+#if defined(__aarch64__) || defined(__ARM_ARCH)
+static inline u64 mmu_diag_now()
+{
+	u64 v;
+	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+	return v;
+}
+#elif defined(__x86_64__)
+static inline u64 mmu_diag_now()
+{
+	unsigned lo, hi;
+	__asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+	return ((u64)hi << 32) | lo;
+}
+#else
+static inline u64 mmu_diag_now() { return 0; }
+#endif
+
+// Conta a traducao inteira e classifica o caminho (setado no corpo).
+struct MmuDiagScope
+{
+	int *path;
+	u64 t0;
+	explicit MmuDiagScope(int *p) : path(p)
+	{
+		t0 = g_mmuDiagOn ? mmu_diag_now() : 0;
+	}
+	~MmuDiagScope()
+	{
+		if (!g_mmuDiagOn)
+			return;
+		g_mmuDiagCyc += mmu_diag_now() - t0;
+		g_mmuDiagLookups++;
+		switch (*path)
+		{
+		case 1: g_mmuDiagLru++; break;
+		case 2: g_mmuDiagFind++; break;
+		case 3: g_mmuDiagWince++; break;
+		case 5: g_mmuDiagITlb++; break;
+		default: g_mmuDiagMiss++; break;
+		}
+	}
+};
+
+// ---- cache de traducao multi-entrada (FC_ITLB, tech_debits 4.121) ----------
+// A MMU do SH4 e usada pelos jogos WinCE. Hoje a traducao tem UMA entrada de
+// LRU (lru_entry) + a tabela hash (find_entry); o laco do kernel do WinCE
+// alterna entre 4-5 paginas de codigo/dados a cada iteracao, entao o LRU erra
+// quase sempre e cada despacho paga o hash (e as vezes o passeio da tabela de
+// paginas do wince_resolve_address). Esta cache direta de N entradas resolve
+// (va->pa) por pagina, com geracao para invalidar (flush da MMU / LDTLB).
+// FC_ITLB=0 desliga (A/B).
+#define FC_TLB_ENTRIES 512
+struct FcTlbEntry
+{
+	u32 tag;			// va & mask
+	u32 pa_base;		// rv & mask
+	u32 mask;			// mascara da pagina (mmu_mask[sz])
+	u32 asid;			// 0xFFFFFFFF = entrada compartilhada (SH=1)
+	const TLB_Entry *entry;
+	u32 gen;
+};
+static FcTlbEntry fc_tlb[FC_TLB_ENTRIES];
+static u32 fc_tlb_gen = 1;
+u32 g_itlbOn;
+u64 g_itlbHit, g_itlbMiss;
+u32 g_itlbVerify;			// FC_ITLB_VERIFY=1: confere cada acerto contra a busca completa
+u64 g_itlbMismatch;
+// Padrao DESLIGADO (2026-10-31): a taxa de acerto e otima (99,97%) mas o TR
+// Chronicles muda de comportamento com a cache ligada -- falta invalidacao em
+// alguma troca de mapeamento. FC_ITLB=1 liga (A/B).
+static const int g_itlbInit = (g_itlbOn = getenv("FC_ITLB") != nullptr && atoi(getenv("FC_ITLB")) != 0);
+static const int g_itlbVerifyInit = (g_itlbVerify = getenv("FC_ITLB_VERIFY") != nullptr ? 1 : 0);
+
+static inline void fc_tlb_invalidate()
+{
+	fc_tlb_gen++;
+	if (fc_tlb_gen == 0)
+	{
+		memset(fc_tlb, 0, sizeof(fc_tlb));
+		fc_tlb_gen = 1;
+	}
+}
+
+static inline bool fc_tlb_hit(u32 va, u32& rv, const TLB_Entry** entry_ret)
+{
+	const FcTlbEntry& e = fc_tlb[(va >> 12) & (FC_TLB_ENTRIES - 1)];
+	if (e.gen != fc_tlb_gen || (va & e.mask) != e.tag)
+		return false;
+	if (e.asid != 0xFFFFFFFF && e.asid != CCN_PTEH.ASID)
+		return false;
+	rv = e.pa_base | (va & ~e.mask);
+	*entry_ret = e.entry;
+	return true;
+}
+
+static inline void fc_tlb_fill(u32 va, u32 rv, const TLB_Entry *entry, u32 mask)
+{
+	FcTlbEntry& e = fc_tlb[(va >> 12) & (FC_TLB_ENTRIES - 1)];
+	e.tag = va & mask;
+	e.pa_base = rv & mask;
+	e.mask = mask;
+	e.asid = entry->Data.SH == 1 ? 0xFFFFFFFF : CCN_PTEH.ASID;
+	e.entry = entry;
+	e.gen = fc_tlb_gen;
+}
 
 struct TLB_LinkedEntry {
 	TLB_Entry entry;
@@ -177,8 +297,15 @@ int main(int argc, char *argv[])
 }
 #endif
 
+static const int g_mmuDiagInit = (g_mmuDiagOn = getenv("FC_MMU_DIAG") != nullptr ? 1 : 0);
+
 bool UTLB_Sync(u32 entry)
 {
+	if (g_mmuDiagOn)
+		g_mmuDiagSync++;
+	if (g_itlbOn)
+		fc_tlb_invalidate();
+	bm_InvalidateVAddrCode();
 	TLB_Entry& tlb_entry = UTLB[entry];
 	u32 sz = tlb_entry.Data.SZ1 * 2 + tlb_entry.Data.SZ0;
 
@@ -203,9 +330,11 @@ void ITLB_Sync(u32 entry)
 }
 
 //Do a full lookup on the UTLB entry's
+// (sem a cache de traducao; `diag_path` leva o caminho para o FC_MMU_DIAG)
 template<bool internal>
-u32 mmu_full_lookup(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv)
+static u32 mmu_full_lookup_slow(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv, int *diag_path_ptr)
 {
+	int &diag_path = *diag_path_ptr;
 	if (lru_entry != NULL)
 	{
 		if (/*lru_entry->Data.V == 1 && */
@@ -218,6 +347,7 @@ u32 mmu_full_lookup(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv)
 			// TODO mask off PPN when updating TLB to avoid doing it at look up time
 			rv = ((lru_entry->Data.PPN << 10) & lru_mask) | (va & (~lru_mask));
 			*tlb_entry_ret = lru_entry;
+			diag_path = 1;
 
 			return MMU_ERROR_NONE;
 		}
@@ -230,6 +360,9 @@ u32 mmu_full_lookup(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv)
 		lru_entry = *tlb_entry_ret;
 		lru_mask = mask;
 		lru_address = ((*tlb_entry_ret)->Address.VPN << 10);
+		if (g_itlbOn)
+			fc_tlb_fill(va, rv, *tlb_entry_ret, mask);
+		diag_path = 2;
 		return MMU_ERROR_NONE;
 	}
 
@@ -253,12 +386,47 @@ u32 mmu_full_lookup(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv)
 		rv = ((lru_entry->Data.PPN << 10) & lru_mask) | (va & (~lru_mask));
 
 		cache_entry(*lru_entry);
+		if (g_itlbOn)
+			fc_tlb_fill(va, rv, lru_entry, lru_mask);
+		diag_path = 3;
 
 		return MMU_ERROR_NONE;
 	}
 #endif
 
+	diag_path = 4;
 	return MMU_ERROR_TLB_MISS;
+}
+
+template<bool internal>
+u32 mmu_full_lookup(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv)
+{
+	int diag_path = 0;
+	MmuDiagScope diag(&diag_path);
+	if (g_itlbOn && fc_tlb_hit(va, rv, tlb_entry_ret))
+	{
+		if (g_mmuDiagOn)
+			g_itlbHit++;
+		if (g_itlbVerify)
+		{
+			u32 rv2 = 0;
+			const TLB_Entry *e2 = nullptr;
+			int p2 = 0;
+			u32 rc2 = mmu_full_lookup_slow<internal>(va, &e2, rv2, &p2);
+			if (rc2 != MMU_ERROR_NONE || rv2 != rv)
+			{
+				g_itlbMismatch++;
+				if (g_itlbMismatch <= 8)
+					fprintf(stderr, "itlb MISMATCH va=%08X cache=%08X real=%08X rc=%u caminho=%d asid=%u\n",
+							va, rv, rv2, rc2, p2, (u32)CCN_PTEH.ASID);
+			}
+		}
+		diag_path = 5;
+		return MMU_ERROR_NONE;
+	}
+	if (g_itlbOn && g_mmuDiagOn)
+		g_itlbMiss++;
+	return mmu_full_lookup_slow<internal>(va, tlb_entry_ret, rv, &diag_path);
 }
 template u32 mmu_full_lookup<false>(u32 va, const TLB_Entry** tlb_entry_ret, u32& rv);
 
@@ -340,6 +508,11 @@ template u32 mmu_data_translation<MMU_TT_DWRITE, u64>(u32 va, u32& rv);
 
 void mmu_flush_table()
 {
+	if (g_mmuDiagOn)
+		g_mmuDiagFlush++;
+	if (g_itlbOn)
+		fc_tlb_invalidate();
+	bm_InvalidateVAddrCode();
 	lru_entry = NULL;
 	flush_cache();
 }

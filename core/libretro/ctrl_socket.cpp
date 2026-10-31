@@ -667,6 +667,20 @@ bool handle(int fd, const char *line)
 		snprintf(h, sizeof(h), "BIN %u\n", len);
 		return reply(fd, h) && sendAll(fd, copy.data(), copy.size());
 	}
+	// memv ADDR LEN: igual ao mem, mas passa pela traducao da MMU (jogos WinCE),
+	// onde o codigo do jogo mora em endereco virtual baixo (0x00xxxxxx).
+	if (!strcmp(cmd, "memv"))
+	{
+		unsigned addr = 0, len = 0;
+		if (sscanf(line, "%*s %x %x", &addr, &len) < 2 || len == 0 || len > 65536)
+			return reply(fd, "ERR memv ADDR LEN (hex, LEN ate 10000)\n");
+		std::vector<u8> copy(len);
+		for (unsigned i = 0; i < len; i++)
+			copy[i] = ReadMem8(addr + i);
+		char h[32];
+		snprintf(h, sizeof(h), "BIN %u\n", len);
+		return reply(fd, h) && sendAll(fd, copy.data(), copy.size());
+	}
 	return reply(fd, "ERR comandos: do mode step shot set status pc mem press hold release stick wait\n");
 }
 

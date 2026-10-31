@@ -717,6 +717,54 @@ void sync_dump_stats(const char *path)
 	sync_dist(f, "new_frame_interval", ni, 0.001, "ms");
 	sync_dist(f, "vram_pages_written_per_epoch", pw, 1, "pages");
 	sync_dist(f, "vram_pages_with_textures_per_epoch", pt, 1, "pages");
+	{
+		// Truques de ciclos (docs/tech_debits.md 4.38/4.40): quanto tempo emulado
+		// foi pulado por cada mecanismo. Contadores crus da sessao.
+		extern u64 g_idleFFCalls, g_idleFFCycles, g_idleFFSkippedHw;
+		extern u64 g_delaySkipCalls, g_delaySkipIters, g_scanSkipCalls, g_scanSkipIters;
+		extern u64 g_dtSkipCalls, g_dtSkipIters;
+		fprintf(f, "skip_diag\tidle_ff_calls\t%llu\tidle_ff_cycles\t%llu\tidle_ff_hw_rejeitados\t%llu\t"
+				"delay_calls\t%llu\tdelay_iters\t%llu\tscan_calls\t%llu\tscan_iters\t%llu\tdt_calls\t%llu\tdt_iters\t%llu\n",
+				(unsigned long long)g_idleFFCalls, (unsigned long long)g_idleFFCycles,
+				(unsigned long long)g_idleFFSkippedHw, (unsigned long long)g_delaySkipCalls,
+				(unsigned long long)g_delaySkipIters, (unsigned long long)g_scanSkipCalls,
+				(unsigned long long)g_scanSkipIters, (unsigned long long)g_dtSkipCalls,
+				(unsigned long long)g_dtSkipIters);
+	}
+	{
+		// FC_MMU_DIAG (tech_debits 4.121): custo da traducao MMU / despacho de bloco
+		extern u32 g_mmuDiagOn;
+		extern u64 g_mmuDiagLookups, g_mmuDiagLru, g_mmuDiagFind, g_mmuDiagWince, g_mmuDiagMiss, g_mmuDiagITlb;
+		extern u64 g_mmuDiagCyc, g_mmuDiagSync, g_mmuDiagFlush;
+		extern u64 g_itlbHit, g_itlbMiss;
+		extern u64 g_bmDiagCalls, g_bmDiagFast, g_bmDiagSys, g_bmDiagSigned;
+		extern u64 g_bmDiagCyc, g_bmDiagTransCyc;
+		if (g_mmuDiagOn)
+		{
+			fprintf(f, "mmu_diag\tlookups\t%llu\tlru\t%llu\tfind\t%llu\twince\t%llu\tmiss\t%llu\titlb_hit\t%llu\tsync\t%llu\tflush\t%llu\tcyc_us\t%llu\tus_por_lookup\t%.2f\n",
+					(unsigned long long)g_mmuDiagLookups, (unsigned long long)g_mmuDiagLru,
+					(unsigned long long)g_mmuDiagFind, (unsigned long long)g_mmuDiagWince,
+					(unsigned long long)g_mmuDiagMiss, (unsigned long long)g_mmuDiagITlb,
+					(unsigned long long)g_mmuDiagSync, (unsigned long long)g_mmuDiagFlush,
+					(unsigned long long)(g_mmuDiagCyc / 24),
+					g_mmuDiagLookups ? g_mmuDiagCyc / 24.0 / g_mmuDiagLookups : 0.0);
+			fprintf(f, "itlb_diag\thit\t%llu\tmiss\t%llu\thit_pct\t%.2f\n",
+					(unsigned long long)g_itlbHit, (unsigned long long)g_itlbMiss,
+					g_itlbHit + g_itlbMiss ? 100.0 * g_itlbHit / (g_itlbHit + g_itlbMiss) : 0.0);
+			{
+				extern u64 g_vdispHit, g_vdispMiss, g_vdispInv;
+				fprintf(f, "vdisp_diag\thit\t%llu\tmiss\t%llu\thit_pct\t%.2f\tinvalidacoes\t%llu\n",
+						(unsigned long long)g_vdispHit, (unsigned long long)g_vdispMiss,
+						g_vdispHit + g_vdispMiss ? 100.0 * g_vdispHit / (g_vdispHit + g_vdispMiss) : 0.0,
+						(unsigned long long)g_vdispInv);
+			}
+			fprintf(f, "dispatch_diag\tcalls\t%llu\tfast_reg\t%llu\tsigned\t%llu\tcyc_us\t%llu\ttrans_us\t%llu\tus_por_call\t%.2f\n",
+					(unsigned long long)g_bmDiagCalls, (unsigned long long)g_bmDiagFast,
+					(unsigned long long)g_bmDiagSigned, (unsigned long long)(g_bmDiagCyc / 24),
+					(unsigned long long)(g_bmDiagTransCyc / 24),
+					g_bmDiagCalls ? g_bmDiagCyc / 24.0 / g_bmDiagCalls : 0.0);
+		}
+	}
 	fclose(f);
 }
 

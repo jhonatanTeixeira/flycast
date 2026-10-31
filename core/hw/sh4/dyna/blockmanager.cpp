@@ -126,6 +126,65 @@ u32 unprotected_blocks;
 #define FPCA(x) ((DynarecCodeEntryPtr&)sh4rcb.fpcb[(x>>1)&FPCB_MASK])
 
 
+// ---- FC_MMU_DIAG (opt-in, tech_debits 4.121) ------------------------------
+// Custo do despacho de bloco com MMU ligada: o JIT sai de todo bloco por
+// bm_GetCodeByVAddr (rec_arm64.cpp, BET_* -> arm64_no_update). Conta chamadas,
+// quantas caem no caminho fisico direto (P1/P2/P4 = faixa sem traducao) e
+// quantas precisam de mmu_instruction_translation, com ciclos de cada parte.
+u64 g_bmDiagCalls, g_bmDiagFast, g_bmDiagSys, g_bmDiagSigned;
+u64 g_bmDiagCyc, g_bmDiagTransCyc;
+static u32 g_bmDiagOn;
+
+// ---- cache de despacho vaddr -> codigo (FC_VDISP, tech_debits 4.121) ------
+// Com a MMU ligada (jogos WinCE) todo fim de bloco sai por bm_GetCodeByVAddr:
+// traduz vaddr->paddr e depois busca o bloco na fpcb. Este cache resolve as
+// duas coisas de uma vez, indexado pelo vaddr (endereco de entrada do bloco).
+// Invalidado em toda mudanca de mapeamento (flush da MMU, LDTLB, troca de ASID)
+// e em todo descarte de bloco (o ponteiro de codigo deixa de valer).
+#define FC_VDISP_ENTRIES 4096
+struct FcVdispEntry
+{
+	u32 va;
+	u32 gen;
+	DynarecCodeEntryPtr code;
+};
+static FcVdispEntry fc_vdisp[FC_VDISP_ENTRIES];
+static u32 fc_vdisp_gen = 1;
+static u32 g_vdispOn;
+u64 g_vdispHit, g_vdispMiss, g_vdispInv;
+
+void bm_InvalidateVAddrCode()
+{
+	g_vdispInv++;
+	if (++fc_vdisp_gen == 0)
+	{
+		memset(fc_vdisp, 0, sizeof(fc_vdisp));
+		fc_vdisp_gen = 1;
+	}
+}
+
+#if defined(__aarch64__) || defined(__ARM_ARCH)
+static inline u64 bm_diag_now()
+{
+	u64 v;
+	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+	return v;
+}
+#elif defined(__x86_64__)
+static inline u64 bm_diag_now()
+{
+	unsigned lo, hi;
+	__asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+	return ((u64)hi << 32) | lo;
+}
+#else
+static inline u64 bm_diag_now() { return 0; }
+#endif
+
+static const int g_bmDiagInit = (g_bmDiagOn = getenv("FC_MMU_DIAG") != nullptr ? 1 : 0);
+// Padrao DESLIGADO junto com o FC_ITLB (ver fastmmu.cpp). FC_VDISP=1 liga.
+static const int g_vdispInit = (g_vdispOn = getenv("FC_VDISP") != nullptr && atoi(getenv("FC_VDISP")) != 0);
+
 // addr must be a physical address
 // This returns an executable address
 static DynarecCodeEntryPtr DYNACALL bm_GetCode(u32 addr)
@@ -135,21 +194,15 @@ static DynarecCodeEntryPtr DYNACALL bm_GetCode(u32 addr)
 	return rv;
 }
 
-// addr must be a virtual address
-// This returns an executable address
-DynarecCodeEntryPtr DYNACALL bm_GetCodeByVAddr(u32 addr)
+// Traducao vaddr->paddr do despacho (inclui as syscalls do WinCE hack).
+static u32 bm_TranslateVAddr(u32 addr)
 {
-#ifndef NO_MMU
-	if (!mmu_enabled())
-#endif
-		return bm_GetCode(addr);
-#ifndef NO_MMU
-	else
+	if (addr & 1)
 	{
-		if (addr & 1)
+		if (g_bmDiagOn)
+			g_bmDiagSigned++;
+		switch (addr)
 		{
-			switch (addr)
-			{
 #ifdef USE_WINCE_HACK
 			case 0xfffffde7: // GetTickCount
 				// This should make this syscall faster
@@ -189,7 +242,62 @@ DynarecCodeEntryPtr DYNACALL bm_GetCodeByVAddr(u32 addr)
 			mmu_instruction_translation(next_pc, paddr);
 		}
 
-		return bm_GetCode(paddr);
+		return paddr;
+}
+
+// addr must be a virtual address
+// This returns an executable address
+DynarecCodeEntryPtr DYNACALL bm_GetCodeByVAddr(u32 addr)
+{
+#ifndef NO_MMU
+	if (!mmu_enabled())
+#endif
+		return bm_GetCode(addr);
+#ifndef NO_MMU
+	else
+	{
+		if (g_vdispOn)
+		{
+			FcVdispEntry& e = fc_vdisp[(addr >> 1) & (FC_VDISP_ENTRIES - 1)];
+			if (e.gen == fc_vdisp_gen && e.va == addr)
+			{
+				if (g_bmDiagOn)
+					g_vdispHit++;
+				return e.code;
+			}
+			if (g_bmDiagOn)
+				g_vdispMiss++;
+		}
+		if (!g_bmDiagOn)
+		{
+			DynarecCodeEntryPtr rv = bm_GetCode(bm_TranslateVAddr(addr));
+			if (g_vdispOn)
+			{
+				FcVdispEntry& e = fc_vdisp[(addr >> 1) & (FC_VDISP_ENTRIES - 1)];
+				e.va = addr;
+				e.code = rv;
+				e.gen = fc_vdisp_gen;
+			}
+			return rv;
+		}
+
+		const u64 t0 = bm_diag_now();
+		if (fast_reg_lut[addr >> 29] != 0)
+			g_bmDiagFast++;
+		const u32 paddr = bm_TranslateVAddr(addr);
+		const u64 t1 = bm_diag_now();
+		DynarecCodeEntryPtr rv = bm_GetCode(paddr);
+		g_bmDiagCalls++;
+		g_bmDiagTransCyc += t1 - t0;
+		g_bmDiagCyc += bm_diag_now() - t0;
+		if (g_vdispOn)
+		{
+			FcVdispEntry& e = fc_vdisp[(addr >> 1) & (FC_VDISP_ENTRIES - 1)];
+			e.va = addr;
+			e.code = rv;
+			e.gen = fc_vdisp_gen;
+		}
+		return rv;
 	}
 #endif
 }
@@ -283,6 +391,8 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 
 void bm_DiscardBlock(RuntimeBlockInfo* block)
 {
+	if (g_vdispOn)
+		bm_InvalidateVAddrCode();
 	// Remove from block map
 	auto it = blkmap.find((void*)block->code);
 	verify(it != blkmap.end());
@@ -372,6 +482,7 @@ void bm_vmem_pagefill(void** ptr, u32 size_bytes)
 
 void bm_Reset()
 {
+	bm_InvalidateVAddrCode();
 	bm_CleanupDeletedBlocks();
 	protected_blocks = 0;
 	unprotected_blocks = 0;
@@ -449,6 +560,7 @@ static void bm_UnlockPage(u32 addr)
 
 void bm_ResetCache()
 {
+	bm_InvalidateVAddrCode();
 	ngen_ResetBlocks();
 	_vmem_bm_reset();
 
@@ -501,6 +613,7 @@ void bm_ResetCache()
 
 void bm_ResetTempCache(bool full)
 {
+	bm_InvalidateVAddrCode();
 	if (!full)
 	{
 		for (const auto& block : all_temp_blocks)
